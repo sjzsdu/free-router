@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      needed: ${{ steps.release.outputs.needed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: version
+        name: Read version
+        shell: bash
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "VERSION must be a semantic version, got: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+      - id: release
+        name: Check existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "$TAG already has a release; nothing to build"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    needs: prepare
+    if: needs.prepare.outputs.needed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check
+        run: make check
+      - name: Race test
+        run: make test-race
+
+  build:
+    needs: [prepare, test]
+    if: needs.prepare.outputs.needed == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build archive
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          mkdir -p build dist
+          binary="free-router"
+          if [[ "$GOOS" == "windows" ]]; then binary="free-router.exe"; fi
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "build/$binary" .
+          archive="free-router_${VERSION}_${GOOS}_${GOARCH}"
+          if [[ "$GOOS" == "windows" ]]; then
+            (cd build && zip -9 "../dist/${archive}.zip" "$binary")
+          else
+            tar -C build -czf "dist/${archive}.tar.gz" "$binary"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: free-router-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.needed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create checksums
+        run: sha256sum dist/* > dist/checksums.txt
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          gh release create "$TAG" dist/* \
+            --target "${GITHUB_SHA}" \
+            --title "free-router $VERSION" \
+            --generate-notes
