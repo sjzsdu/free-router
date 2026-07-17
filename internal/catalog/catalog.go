@@ -94,11 +94,13 @@ type modelsResponse struct {
 }
 
 type Store struct {
-	registry *provider.Registry
-	cache    string
-	client   *http.Client
-	mu       sync.RWMutex
-	models   []Model
+	registry  *provider.Registry
+	cache     string
+	client    *http.Client
+	refreshMu sync.Mutex
+	mu        sync.RWMutex
+	models    []Model
+	updated   time.Time
 }
 
 func New(registry *provider.Registry, cache string, client *http.Client) *Store {
@@ -106,23 +108,32 @@ func New(registry *provider.Registry, cache string, client *http.Client) *Store 
 }
 
 func (s *Store) Bootstrap(ctx context.Context) error {
-	if err := s.Refresh(ctx); err == nil {
+	if err := s.loadCache(); err == nil {
+		go func() {
+			if err := s.Refresh(ctx); err != nil {
+				slog.Warn("background model catalog refresh failed", "error", err)
+			}
+		}()
 		return nil
-	} else if cacheErr := s.loadCache(); cacheErr != nil {
-		return errors.Join(err, cacheErr)
 	}
-	slog.Warn("using cached model catalog because every provider refresh failed")
-	return nil
+	return s.Refresh(ctx)
 }
 
 // Refresh keeps successful providers fresh while retaining the last good models for failed providers.
 func (s *Store) Refresh(ctx context.Context) error {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+
 	type result struct {
 		provider string
 		models   []Model
 		err      error
 	}
 	providers := s.registry.All()
+	if len(providers) == 0 {
+		s.set(nil, time.Now())
+		return s.saveCache(nil)
+	}
 	results := make(chan result, len(providers))
 	for _, spec := range providers {
 		go func() {
@@ -134,7 +145,9 @@ func (s *Store) Refresh(ctx context.Context) error {
 	current := s.Models()
 	byProvider := make(map[string][]Model)
 	for _, model := range current {
-		byProvider[model.Provider] = append(byProvider[model.Provider], model)
+		if _, enabled := s.registry.Get(model.Provider); enabled {
+			byProvider[model.Provider] = append(byProvider[model.Provider], model)
+		}
 	}
 	successes := 0
 	var refreshErrors []error
@@ -148,7 +161,7 @@ func (s *Store) Refresh(ctx context.Context) error {
 		successes++
 		byProvider[result.provider] = result.models
 	}
-	if successes == 0 && len(current) == 0 {
+	if successes == 0 && len(byProvider) == 0 {
 		return errors.Join(refreshErrors...)
 	}
 
@@ -157,7 +170,7 @@ func (s *Store) Refresh(ctx context.Context) error {
 		merged = append(merged, models...)
 	}
 	sort.Slice(merged, func(i, j int) bool { return merged[i].ID < merged[j].ID })
-	s.set(merged)
+	s.set(merged, time.Now())
 	if err := s.saveCache(merged); err != nil {
 		slog.Warn("could not save model cache", "error", err)
 	}
@@ -256,7 +269,7 @@ func (s *Store) Start(ctx context.Context, interval time.Duration) {
 func (s *Store) Models() []Model {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return append([]Model(nil), s.models...)
+	return append([]Model{}, s.models...)
 }
 
 func (s *Store) Find(id string) (Model, bool) {
@@ -270,6 +283,23 @@ func (s *Store) Find(id string) (Model, bool) {
 		}
 	}
 	return Model{}, false
+}
+
+type Status struct {
+	Count     int        `json:"count"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+	CachePath string     `json:"cache_path"`
+}
+
+func (s *Store) Status() Status {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	status := Status{Count: len(s.models), CachePath: s.cache}
+	if !s.updated.IsZero() {
+		updated := s.updated
+		status.UpdatedAt = &updated
+	}
+	return status
 }
 
 func (model Model) IsTextChat() bool {
@@ -286,9 +316,10 @@ func (model Model) Supports(parameter string) bool {
 	return contains(model.SupportedParameters, parameter)
 }
 
-func (s *Store) set(models []Model) {
+func (s *Store) set(models []Model, updated time.Time) {
 	s.mu.Lock()
 	s.models = models
+	s.updated = updated
 	s.mu.Unlock()
 }
 
@@ -319,7 +350,11 @@ func (s *Store) loadCache() error {
 	if len(models) == 0 {
 		return errors.New("cache has no models for configured providers")
 	}
-	s.set(models)
+	updated := time.Now()
+	if info, err := os.Stat(s.cache); err == nil {
+		updated = info.ModTime()
+	}
+	s.set(models, updated)
 	return nil
 }
 

@@ -10,13 +10,16 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/sjzsdu/free-router/internal/admin"
 	"github.com/sjzsdu/free-router/internal/catalog"
 	"github.com/sjzsdu/free-router/internal/credentials"
 	"github.com/sjzsdu/free-router/internal/gateway"
 	"github.com/sjzsdu/free-router/internal/provider"
+	"github.com/sjzsdu/free-router/internal/routing"
 	"github.com/spf13/cobra"
 )
 
@@ -29,12 +32,14 @@ func SetVersion(value string) {
 }
 
 type options struct {
-	addr            string
-	providers       string
-	cache           string
-	credentials     string
-	refreshInterval time.Duration
-	maxAttempts     int
+	addr             string
+	providers        string
+	cache            string
+	config           string
+	credentials      string
+	adminAllowRemote bool
+	refreshInterval  time.Duration
+	maxAttempts      int
 }
 
 func Execute() error {
@@ -106,12 +111,14 @@ func defaultOptions() options {
 		configDir = cacheDir
 	}
 	return options{
-		addr:            envOr("FREE_ROUTER_ADDR", ":1314"),
-		providers:       os.Getenv("FREE_ROUTER_PROVIDERS"),
-		cache:           filepath.Join(cacheDir, "free-router", "models.json"),
-		credentials:     envOr("FREE_ROUTER_CREDENTIALS", filepath.Join(configDir, "free-router", "credentials.json")),
-		refreshInterval: time.Hour,
-		maxAttempts:     6,
+		addr:             envOr("FREE_ROUTER_ADDR", ":1314"),
+		providers:        os.Getenv("FREE_ROUTER_PROVIDERS"),
+		cache:            filepath.Join(cacheDir, "free-router", "models.json"),
+		config:           envOr("FREE_ROUTER_CONFIG", filepath.Join(configDir, "free-router", "config.json")),
+		credentials:      envOr("FREE_ROUTER_CREDENTIALS", filepath.Join(configDir, "free-router", "credentials.json")),
+		adminAllowRemote: envBool("FREE_ROUTER_ADMIN_ALLOW_REMOTE"),
+		refreshInterval:  time.Hour,
+		maxAttempts:      6,
 	}
 }
 
@@ -119,7 +126,9 @@ func bindFlags(command *cobra.Command, opts *options) {
 	command.PersistentFlags().StringVar(&opts.addr, "addr", opts.addr, "listen address")
 	command.PersistentFlags().StringVar(&opts.providers, "providers-json", opts.providers, "custom OpenAI-compatible free providers as JSON")
 	command.PersistentFlags().StringVar(&opts.cache, "cache", opts.cache, "model catalog cache file")
+	command.PersistentFlags().StringVar(&opts.config, "config", opts.config, "route configuration file")
 	command.PersistentFlags().StringVar(&opts.credentials, "credentials", opts.credentials, "saved provider credentials file")
+	command.PersistentFlags().BoolVar(&opts.adminAllowRemote, "admin-allow-remote", opts.adminAllowRemote, "allow the admin UI outside localhost")
 	command.PersistentFlags().DurationVar(&opts.refreshInterval, "refresh", opts.refreshInterval, "model catalog refresh interval")
 	command.PersistentFlags().IntVar(&opts.maxAttempts, "max-attempts", opts.maxAttempts, "maximum upstream attempts for model=auto")
 }
@@ -128,17 +137,29 @@ func runServer(ctx context.Context, opts options) error {
 	if opts.maxAttempts < 1 {
 		return errors.New("max-attempts must be at least 1")
 	}
-	registry, err := newRegistry(opts)
+	vault := credentials.New(opts.credentials)
+	registry, err := provider.NewRegistryAllowEmpty(opts.providers, vault.Get)
 	if err != nil {
 		return err
 	}
-	store := catalog.New(registry, opts.cache, catalogHTTPClient())
-	if err := store.Bootstrap(ctx); err != nil {
-		return fmt.Errorf("load free model catalog: %w", err)
+	routes, err := routing.New(opts.config)
+	if err != nil {
+		return fmt.Errorf("load route configuration: %w", err)
 	}
-	store.Start(ctx, opts.refreshInterval)
+	store := catalog.New(registry, opts.cache, catalogHTTPClient())
+	if len(registry.All()) > 0 {
+		if err := store.Bootstrap(ctx); err != nil {
+			return fmt.Errorf("load free model catalog: %w", err)
+		}
+	}
+	if len(registry.All()) > 0 {
+		store.Start(ctx, opts.refreshInterval)
+	}
 
-	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts}, http.DefaultClient)
+	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts, Routes: routes}, http.DefaultClient)
+	reloadProviders := func() error { return registry.Reload(opts.providers, vault.Get) }
+	handler.Handle("GET /admin", http.RedirectHandler("/admin/", http.StatusTemporaryRedirect))
+	handler.Handle("/admin/", admin.New(routes, store, vault, opts.adminAllowRemote, reloadProviders))
 	server := &http.Server{
 		Addr:              opts.addr,
 		Handler:           handler,
@@ -175,6 +196,11 @@ func envOr(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envBool(key string) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	return value == "1" || value == "true" || value == "yes" || value == "on"
 }
 
 func catalogHTTPClient() *http.Client {

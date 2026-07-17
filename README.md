@@ -1,6 +1,6 @@
 # free-router
 
-一个极简、OpenAI 兼容的多免费源模型路由器：自动发现模型，跨 provider 故障切换，不维护静态模型名。
+一个极简、OpenAI 兼容的多免费源模型路由器：自动发现并缓存模型，对外提供稳定的能力名称，跨 provider 按可配置顺序故障切换。
 
 ## 支持的免费源
 
@@ -64,6 +64,14 @@ free-router
 
 服务默认监听 `http://localhost:1314`。不带子命令等同于 `free-router serve`。
 
+启动后打开管理界面：
+
+```text
+http://localhost:1314/admin/
+```
+
+可以在网页中录入免费源 API Key、刷新缓存模型、按能力筛选模型，并拖动配置每条路由的 fallback 顺序。配置保存后立即生效；新增或删除凭据也会热加载，不需要重启。
+
 ```bash
 curl http://localhost:1314/healthz
 curl http://localhost:1314/v1/models
@@ -71,10 +79,21 @@ curl http://localhost:1314/v1/models
 curl http://localhost:1314/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "auto",
+    "model": "chat",
     "messages": [{"role": "user", "content": "hello"}],
     "stream": true
   }'
+
+curl http://localhost:1314/v1/embeddings \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "embedding",
+    "input": ["free-router 会使用配置好的 embedding fallback 链"]
+  }'
+
+curl http://localhost:1314/v1/audio/transcriptions \
+  -F 'model=audio' \
+  -F 'file=@speech.wav'
 ```
 
 OpenAI 客户端配置：
@@ -82,10 +101,37 @@ OpenAI 客户端配置：
 ```text
 OPENAI_BASE_URL=http://localhost:1314/v1
 OPENAI_API_KEY=任意非空字符串
-模型=auto
+模型=chat
 ```
 
-## 模型命名
+## 固定能力路由
+
+客户端只需要使用以下稳定字符串，不必跟随上游模型名称变化：
+
+| model | 能力 | OpenAI 兼容接口 |
+| --- | --- | --- |
+| `chat` | 普通聊天 | `/v1/chat/completions` |
+| `chat-tools` | 支持 tool call 的聊天 | `/v1/chat/completions` |
+| `embedding` | 向量嵌入 | `/v1/embeddings` |
+| `audio` | 语音合成、转录、翻译 | `/v1/audio/speech`、`/v1/audio/transcriptions`、`/v1/audio/translations` |
+| `image` | 图像生成 | `/v1/images/generations` |
+| `video` | 视频生成 | `/v1/videos/generations` |
+| `rerank` | 文本重排序 | `/v1/rerank` |
+| `moderation` | 内容审核 | `/v1/moderations` |
+
+`auto` 和 `free` 保持兼容：聊天请求会映射到 `chat`；请求带有 `tools` 时自动映射到 `chat-tools`。
+
+每个能力路由都有一个有序模型列表。例如 `chat-tools`：
+
+```text
+1. groq/openai/gpt-oss-120b
+2. openrouter/qwen/qwen3-coder:free
+3. siliconflow/Qwen/Qwen3-8B
+```
+
+第一个模型出现网络错误、限流、额度不足、模型下线或 5xx 时会尝试下一个。列表为空时，路由器根据缓存的类型和能力元数据自动选择。
+
+## 直接指定模型
 
 模型 ID 使用 `provider/upstream-model`，避免不同源的同名模型冲突：
 
@@ -96,7 +142,7 @@ github-models/openai/gpt-4.1
 openrouter/openai/gpt-oss-20b:free
 ```
 
-指定完整 ID 时固定使用该源；`auto` 或 `free` 才会跨源 fallback。响应头会返回实际选择：
+指定完整 ID 时固定使用该源且不 fallback。使用固定能力名称时按照管理界面中的顺序 fallback。响应头会返回实际选择：
 
 ```text
 X-Free-Router-Provider: groq
@@ -123,14 +169,44 @@ curl -s http://localhost:1314/v1/models | jq '.data[] | select(.id != "auto") | 
 }'
 ```
 
-## 自维护机制
+## 配置文件
 
-1. 启动时并发请求所有已配置 provider 的 `/models`。
-2. 每小时刷新；单个源失败时保留该源上一次成功的缓存，不影响其他源。
-3. 模型新增或下线不需要发布新版本。
-4. `auto` 每轮优先尝试不同 provider，避免在一个限流源中反复切模型。
-5. 网络错误、额度耗尽、401/402/403、模型不兼容、429 和 5xx 会切换下一个源。
-6. 带 `tools` 的请求优先使用声明支持工具调用的模型；缺少能力元数据时尝试调用并以实际响应为准。
+首次启动会在操作系统用户配置目录生成 `free-router/config.json`。API Key 不在这个文件中，仍单独存储在 Keychain 或安全凭据文件。
+
+```json
+{
+  "version": 1,
+  "routes": {
+    "chat": {
+      "type": "normal",
+      "models": [
+        "groq/openai/gpt-oss-120b",
+        "siliconflow/Qwen/Qwen3-8B"
+      ]
+    },
+    "chat-tools": {
+      "type": "normal",
+      "require_tool": true,
+      "models": []
+    },
+    "embedding": {
+      "type": "embedding",
+      "models": []
+    }
+  }
+}
+```
+
+缺少的内置路由会自动补全。推荐通过 Web 界面修改；也可以停止服务后手工编辑。路径可用 `--config` 或 `FREE_ROUTER_CONFIG` 覆盖。
+
+## 模型缓存与自维护
+
+1. 首次启动并发请求所有已配置 provider 的 `/models`，生成本地缓存。
+2. 后续启动优先加载缓存，服务立即可用，然后在后台刷新，不阻塞启动。
+3. 普通推理请求只读取内存目录，绝不会为了选择模型临时请求 provider 的 `/models`。
+4. 默认每小时刷新；单个源失败时保留该源上一次成功的缓存，不影响其他源。
+5. 模型新增或下线不需要发布新版本；也可以在 Web 界面手动刷新。
+6. 缓存保留类型、tool call、vision、context、输入输出模态等字段，用于能力匹配。
 
 ## 接入任意免费源
 
@@ -165,6 +241,8 @@ free-router auth list              # 只显示 provider 和存储后端
 free-router auth remove gemini     # 删除凭据
 free-router version
 ```
+
+管理界面默认只接受本机访问，避免局域网其他设备修改 API Key。确实需要从远程管理时显式使用 `--admin-allow-remote` 或 `FREE_ROUTER_ADMIN_ALLOW_REMOTE=true`，并自行通过防火墙或反向代理保护访问。
 
 凭据文件路径遵循操作系统的用户配置目录，可用 `--credentials` 或 `FREE_ROUTER_CREDENTIALS` 覆盖。程序不会自动注册第三方账号、读取邮箱验证码或绕过 CAPTCHA；账户申请仍由用户在 provider 官方网站完成一次。
 
@@ -215,4 +293,4 @@ checksums.txt
 
 也可以在 GitHub Actions 页面手动运行 `Release` 工作流，补建当前 `VERSION` 对应的 Release。
 
-项目借鉴 [OmniRoute](https://github.com/diegosouzapw/OmniRoute) 的动态目录和 fallback 思路，但刻意不包含 UI、数据库、账号池和付费路由。
+项目借鉴 [OmniRoute](https://github.com/diegosouzapw/OmniRoute) 的动态目录和 fallback 思路，但保持单二进制、本地配置，不引入数据库、账号池和付费路由。

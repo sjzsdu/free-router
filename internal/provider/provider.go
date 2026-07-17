@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 )
 
 type Filter string
@@ -47,6 +48,13 @@ func (spec Spec) ChatEndpoint() string {
 	return strings.TrimRight(spec.BaseURL, "/") + "/chat/completions"
 }
 
+func (spec Spec) APIEndpoint(path string) string {
+	if path == "/chat/completions" {
+		return spec.ChatEndpoint()
+	}
+	return strings.TrimRight(spec.BaseURL, "/") + "/" + strings.TrimLeft(path, "/")
+}
+
 func (spec Spec) ApplyAuth(headers map[string]string) {
 	if spec.APIKey == "" || spec.NoAuth {
 		return
@@ -63,12 +71,21 @@ func (spec Spec) ApplyAuth(headers map[string]string) {
 }
 
 type Registry struct {
+	mu        sync.RWMutex
 	providers map[string]Spec
 }
 
 type KeyResolver func(providerID string) (string, bool)
 
 func NewRegistry(customJSON string, resolvers ...KeyResolver) (*Registry, error) {
+	return newRegistry(customJSON, false, resolvers...)
+}
+
+func NewRegistryAllowEmpty(customJSON string, resolvers ...KeyResolver) (*Registry, error) {
+	return newRegistry(customJSON, true, resolvers...)
+}
+
+func newRegistry(customJSON string, allowEmpty bool, resolvers ...KeyResolver) (*Registry, error) {
 	registry := &Registry{providers: make(map[string]Spec)}
 	for _, spec := range builtins() {
 		registry.addIfConfigured(spec, resolvers)
@@ -89,29 +106,47 @@ func NewRegistry(customJSON string, resolvers ...KeyResolver) (*Registry, error)
 				spec.APIKey, _ = resolveKey(spec.ID, resolvers)
 			}
 			if spec.APIKey == "" && !spec.NoAuth {
+				if allowEmpty {
+					continue
+				}
 				return nil, fmt.Errorf("custom provider %q has no API key; set api_key_env or no_auth", spec.ID)
 			}
 			registry.addIfConfigured(spec, resolvers)
 		}
 	}
-	if len(registry.providers) == 0 {
+	if len(registry.providers) == 0 && !allowEmpty {
 		return nil, fmt.Errorf("no free provider configured; run free-router setup or set one of %s", strings.Join(SupportedKeyEnvs(), ", "))
 	}
 	return registry, nil
 }
 
 func (registry *Registry) Get(id string) (Spec, bool) {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
 	spec, ok := registry.providers[id]
 	return spec, ok
 }
 
 func (registry *Registry) All() []Spec {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
 	result := make([]Spec, 0, len(registry.providers))
 	for _, spec := range registry.providers {
 		result = append(result, spec)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result
+}
+
+func (registry *Registry) Reload(customJSON string, resolvers ...KeyResolver) error {
+	updated, err := newRegistry(customJSON, true, resolvers...)
+	if err != nil {
+		return err
+	}
+	registry.mu.Lock()
+	registry.providers = updated.providers
+	registry.mu.Unlock()
+	return nil
 }
 
 func (registry *Registry) addIfConfigured(spec Spec, resolvers []KeyResolver) {

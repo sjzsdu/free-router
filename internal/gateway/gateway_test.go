@@ -1,8 +1,11 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -12,6 +15,7 @@ import (
 
 	"github.com/sjzsdu/free-router/internal/catalog"
 	"github.com/sjzsdu/free-router/internal/provider"
+	"github.com/sjzsdu/free-router/internal/routing"
 )
 
 func TestAutoRetriesNextFreeModel(t *testing.T) {
@@ -69,6 +73,113 @@ func TestAutoRetriesNextFreeModel(t *testing.T) {
 	}
 	if len(list.Data) < 2 || list.Data[1]["type"] != "normal" || list.Data[1]["capabilities"] == nil {
 		t.Fatalf("model metadata is missing: %#v", list.Data)
+	}
+}
+
+func TestNamedRouteUsesConfiguredFallbackOrder(t *testing.T) {
+	clearBuiltinKeys(t)
+	var calls []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"first"},{"id":"second"}]}`))
+		case "/chat/completions":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			model, _ := body["model"].(string)
+			calls = append(calls, model)
+			if model == "first" {
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"model": model})
+		}
+	}))
+	defer upstream.Close()
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","api_key":"test"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	if err := store.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	routes, err := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := routes.Config()
+	route := config.Routes["chat"]
+	route.Models = []string{"test/first", "test/second"}
+	config.Routes["chat"] = route
+	if err := routes.Update(config); err != nil {
+		t.Fatal(err)
+	}
+	handler := New(store, registry, Config{MaxAttempts: 3, Routes: routes}, upstream.Client())
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat","messages":[]}`)))
+	if recorder.Code != http.StatusOK || strings.Join(calls, ",") != "first,second" {
+		t.Fatalf("status=%d calls=%v body=%s", recorder.Code, calls, recorder.Body.String())
+	}
+}
+
+func TestEmbeddingAliasUsesCachedEmbeddingModel(t *testing.T) {
+	clearBuiltinKeys(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"BAAI/bge-m3"}]}`))
+		case "/embeddings":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			_ = json.NewEncoder(w).Encode(map[string]any{"model": body["model"]})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","api_key":"test"}]`)
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	if err := store.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	handler := New(store, registry, Config{MaxAttempts: 2, Routes: routes}, upstream.Client())
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(`{"model":"embedding","input":"hello"}`)))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "BAAI/bge-m3") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestRewriteMultipartModelPreservesFile(t *testing.T) {
+	var input bytes.Buffer
+	writer := multipart.NewWriter(&input)
+	file, _ := writer.CreateFormFile("file", "voice.wav")
+	_, _ = io.WriteString(file, "audio-data")
+	_ = writer.WriteField("model", "audio")
+	boundary := writer.Boundary()
+	_ = writer.Close()
+
+	output, _, err := rewriteMultipartModel(input.Bytes(), boundary, "whisper-large-v3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := multipart.NewReader(bytes.NewReader(output), boundary)
+	values := map[string]string{}
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, _ := io.ReadAll(part)
+		values[part.FormName()] = string(data)
+	}
+	if values["model"] != "whisper-large-v3" || values["file"] != "audio-data" {
+		t.Fatalf("multipart values = %#v", values)
 	}
 }
 
