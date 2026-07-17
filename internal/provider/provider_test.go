@@ -30,3 +30,30 @@ func TestSiliconFlowDiscoversOnlyChatModels(t *testing.T) {
 		t.Fatal("siliconflow must have an explicit free-model allowlist")
 	}
 }
+
+func TestSavedCredentialEnablesProviderAndEnvironmentWins(t *testing.T) {
+	for _, key := range SupportedKeyEnvs() {
+		t.Setenv(key, "")
+	}
+	resolver := func(id string) (string, bool) {
+		return "saved-key", id == "groq"
+	}
+	registry, err := NewRegistry("", resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, ok := registry.Get("groq")
+	if !ok || spec.APIKey != "saved-key" {
+		t.Fatalf("saved credential not used: %#v, %v", spec, ok)
+	}
+
+	t.Setenv("GROQ_API_KEY", "environment-key")
+	registry, err = NewRegistry("", resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, _ = registry.Get("groq")
+	if spec.APIKey != "environment-key" {
+		t.Fatalf("environment must take precedence, got %q", spec.APIKey)
+	}
+}

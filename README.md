@@ -4,7 +4,7 @@
 
 ## 支持的免费源
 
-程序会根据环境变量自动启用 provider，没有配置密钥的源不会访问。
+程序会根据已保存凭据或环境变量自动启用 provider，没有配置密钥的源不会访问。
 
 | Provider | 环境变量 | 免费形式 |
 | --- | --- | --- |
@@ -28,7 +28,21 @@
 
 ## 启动
 
-配置任意一个或多个源，然后启动：
+首次使用只需运行一次设置命令。API Key 输入不会显示，也不会进入 shell history；macOS 优先保存在系统 Keychain，其他情况回退到权限为 `0600` 的本地文件：
+
+```bash
+free-router setup siliconflow
+free-router setup groq
+free-router
+```
+
+也可以不带 provider，按提示选择：
+
+```bash
+free-router setup
+```
+
+Docker、CI 或习惯使用环境变量的场景仍然支持原有方式：
 
 ```bash
 export GROQ_API_KEY=gsk_xxx
@@ -37,6 +51,8 @@ export GITHUB_TOKEN=github_pat_xxx
 
 go run .
 ```
+
+优先级是：环境变量 > 已保存凭据。Cloudflare 除 API Token 外仍需设置非敏感的 `CLOUDFLARE_ACCOUNT_ID`。
 
 也可以一键安装到 `GOBIN`；未设置 `GOBIN` 时默认安装到 `$(go env GOPATH)/bin`：
 
@@ -143,8 +159,14 @@ free-router                       # 启动服务
 free-router serve --addr :9000
 free-router providers             # 查看内置源及配置状态
 free-router models                # 聚合所有已配置源的实时模型
+free-router setup groq             # 交互式保存 API Key
+free-router auth add gemini        # 添加或替换凭据
+free-router auth list              # 只显示 provider 和存储后端
+free-router auth remove gemini     # 删除凭据
 free-router version
 ```
+
+凭据文件路径遵循操作系统的用户配置目录，可用 `--credentials` 或 `FREE_ROUTER_CREDENTIALS` 覆盖。程序不会自动注册第三方账号、读取邮箱验证码或绕过 CAPTCHA；账户申请仍由用户在 provider 官方网站完成一次。
 
 完整参数见 `free-router --help`。
 

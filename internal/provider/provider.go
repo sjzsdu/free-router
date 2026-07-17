@@ -66,10 +66,12 @@ type Registry struct {
 	providers map[string]Spec
 }
 
-func NewRegistry(customJSON string) (*Registry, error) {
+type KeyResolver func(providerID string) (string, bool)
+
+func NewRegistry(customJSON string, resolvers ...KeyResolver) (*Registry, error) {
 	registry := &Registry{providers: make(map[string]Spec)}
 	for _, spec := range builtins() {
-		registry.addIfConfigured(spec)
+		registry.addIfConfigured(spec, resolvers)
 	}
 	if strings.TrimSpace(customJSON) != "" {
 		var custom []Spec
@@ -83,14 +85,17 @@ func NewRegistry(customJSON string) (*Registry, error) {
 			if spec.APIKey == "" && spec.APIKeyEnv != "" {
 				spec.APIKey = os.Getenv(spec.APIKeyEnv)
 			}
+			if spec.APIKey == "" {
+				spec.APIKey, _ = resolveKey(spec.ID, resolvers)
+			}
 			if spec.APIKey == "" && !spec.NoAuth {
 				return nil, fmt.Errorf("custom provider %q has no API key; set api_key_env or no_auth", spec.ID)
 			}
-			registry.addIfConfigured(spec)
+			registry.addIfConfigured(spec, resolvers)
 		}
 	}
 	if len(registry.providers) == 0 {
-		return nil, fmt.Errorf("no free provider configured; set one of %s", strings.Join(SupportedKeyEnvs(), ", "))
+		return nil, fmt.Errorf("no free provider configured; run free-router setup or set one of %s", strings.Join(SupportedKeyEnvs(), ", "))
 	}
 	return registry, nil
 }
@@ -109,9 +114,12 @@ func (registry *Registry) All() []Spec {
 	return result
 }
 
-func (registry *Registry) addIfConfigured(spec Spec) {
+func (registry *Registry) addIfConfigured(spec Spec, resolvers []KeyResolver) {
 	if spec.APIKey == "" && spec.APIKeyEnv != "" {
 		spec.APIKey = os.Getenv(spec.APIKeyEnv)
+	}
+	if spec.APIKey == "" {
+		spec.APIKey, _ = resolveKey(spec.ID, resolvers)
 	}
 	if spec.APIKey == "" && !spec.NoAuth {
 		return
@@ -139,10 +147,13 @@ func SupportedKeyEnvs() []string {
 	return result
 }
 
-func BuiltinStatus() []map[string]any {
+func BuiltinStatus(resolvers ...KeyResolver) []map[string]any {
 	result := make([]map[string]any, 0, len(builtins()))
 	for _, spec := range builtins() {
 		configured := os.Getenv(spec.APIKeyEnv) != ""
+		if !configured {
+			_, configured = resolveKey(spec.ID, resolvers)
+		}
 		for _, key := range spec.RequiredEnvs {
 			configured = configured && os.Getenv(key) != ""
 		}
@@ -151,6 +162,18 @@ func BuiltinStatus() []map[string]any {
 		})
 	}
 	return result
+}
+
+func resolveKey(providerID string, resolvers []KeyResolver) (string, bool) {
+	for _, resolver := range resolvers {
+		if resolver == nil {
+			continue
+		}
+		if key, ok := resolver(providerID); ok && key != "" {
+			return key, true
+		}
+	}
+	return "", false
 }
 
 func builtins() []Spec {
