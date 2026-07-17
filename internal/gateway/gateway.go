@@ -115,7 +115,7 @@ func (g *Gateway) models(w http.ResponseWriter, _ *http.Request) {
 			"id": model.ID, "object": "model", "owned_by": model.Provider, "provider": model.Provider,
 			"upstream_id": model.UpstreamID, "upstream_owned_by": model.OwnedBy,
 			"name": model.Name, "description": model.Description, "created": model.Created,
-			"type": model.Type, "free": model.Free, "tier": model.Tier,
+			"type": model.Type, "route_types": routing.ModelRouteTypes(model), "free": model.Free, "tier": model.Tier,
 			"context_length": model.ContextLength, "max_output_tokens": model.MaxOutputTokens,
 			"input_modalities": model.InputModalities, "output_modalities": model.OutputModalities,
 			"capabilities": model.Capabilities, "supported_parameters": model.SupportedParameters,
@@ -301,29 +301,41 @@ func rewriteMultipartModel(body []byte, boundary, model string) ([]byte, string,
 func (g *Gateway) candidates(requested string, needsTools bool) ([]catalog.Model, bool) {
 	if g.config.Routes == nil {
 		if route, ok := routing.DefaultConfig().Routes[requested]; ok {
-			return g.dynamicCandidates(route.Type, needsTools || route.RequireTool), true
+			return g.dynamicCandidates(route, needsTools), true
 		}
 	}
 	if g.config.Routes != nil {
 		if route, ok := g.config.Routes.Route(requested); ok {
-			if route.RequireTool {
-				needsTools = true
-			}
+			effectiveRoute := route
+			effectiveRoute.RequireTool = effectiveRoute.RequireTool || needsTools
 			if len(route.Models) > 0 {
-				result := make([]catalog.Model, 0, len(route.Models))
+				priority := make([]catalog.Model, 0, len(route.Models))
+				configured := make(map[string]bool, len(route.Models))
 				for _, id := range route.Models {
+					configured[id] = true
 					model, ok := g.catalog.Find(id)
 					if ok {
 						model, ok = g.config.Routes.Apply(model)
 					}
-					if !ok || model.Type != route.Type || (needsTools && !model.Supports("tools")) {
+					if !ok || !routing.Accepts(effectiveRoute, model) {
 						continue
 					}
-					result = append(result, model)
+					priority = append(priority, model)
 				}
-				return g.limitCandidates(g.availableCandidates(result)), true
+				result := g.strictlyAvailable(priority)
+				if remaining, ok := g.pickRemaining(effectiveRoute, configured, true); ok {
+					result = append(result, remaining)
+				}
+				if len(result) == 0 {
+					if len(priority) > 0 {
+						result = append(result, priority[0])
+					} else if remaining, ok := g.pickRemaining(effectiveRoute, configured, false); ok {
+						result = append(result, remaining)
+					}
+				}
+				return result, true
 			}
-			return g.dynamicCandidates(route.Type, needsTools), true
+			return g.dynamicCandidates(effectiveRoute, false), true
 		}
 	}
 	if model, ok := g.catalog.Find(requested); ok {
@@ -338,7 +350,8 @@ func (g *Gateway) candidates(requested string, needsTools bool) ([]catalog.Model
 	return nil, false
 }
 
-func (g *Gateway) dynamicCandidates(modelType string, needsTools bool) []catalog.Model {
+func (g *Gateway) dynamicCandidates(route routing.Route, needsTools bool) []catalog.Model {
+	route.RequireTool = route.RequireTool || needsTools
 	groups := make(map[string][]catalog.Model)
 	var preferred *catalog.Model
 	for _, model := range g.catalog.Models() {
@@ -349,7 +362,7 @@ func (g *Gateway) dynamicCandidates(modelType string, needsTools bool) []catalog
 				continue
 			}
 		}
-		if model.Type != modelType || (needsTools && !model.Supports("tools")) {
+		if !routing.Accepts(route, model) {
 			continue
 		}
 		if model.Provider == "openrouter" && model.UpstreamID == "openrouter/free" {
@@ -391,6 +404,41 @@ func (g *Gateway) dynamicCandidates(modelType string, needsTools bool) []catalog
 		}
 	}
 	return g.limitCandidates(g.availableCandidates(result))
+}
+
+func (g *Gateway) strictlyAvailable(models []catalog.Model) []catalog.Model {
+	result := make([]catalog.Model, 0, len(models))
+	for _, model := range models {
+		if g.tracker.Available(model.ID) {
+			result = append(result, model)
+		}
+	}
+	return result
+}
+
+func (g *Gateway) pickRemaining(route routing.Route, excluded map[string]bool, healthyOnly bool) (catalog.Model, bool) {
+	models := make([]catalog.Model, 0)
+	for _, model := range g.catalog.Models() {
+		if excluded[model.ID] {
+			continue
+		}
+		if g.config.Routes != nil {
+			var enabled bool
+			model, enabled = g.config.Routes.Apply(model)
+			if !enabled {
+				continue
+			}
+		}
+		if !routing.Accepts(route, model) || (healthyOnly && !g.tracker.Available(model.ID)) {
+			continue
+		}
+		models = append(models, model)
+	}
+	if len(models) == 0 {
+		return catalog.Model{}, false
+	}
+	index := int(g.next.Add(1)-1) % len(models)
+	return models[index], true
 }
 
 func (g *Gateway) availableCandidates(models []catalog.Model) []catalog.Model {

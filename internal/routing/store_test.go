@@ -1,8 +1,10 @@
 package routing
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/sjzsdu/free-router/internal/catalog"
@@ -42,7 +44,7 @@ func TestModelOverridesDisableAndCorrectCapabilities(t *testing.T) {
 	}
 	config := store.Config()
 	toolCall := true
-	config.Models["provider/model"] = ModelOverride{Type: "normal", ToolCall: &toolCall}
+	config.Models["provider/model"] = ModelOverride{Type: "chat", ToolCall: &toolCall}
 	config.Models["provider/disabled"] = ModelOverride{Disabled: true}
 	if err := store.Update(config); err != nil {
 		t.Fatal(err)
@@ -53,5 +55,25 @@ func TestModelOverridesDisableAndCorrectCapabilities(t *testing.T) {
 	}
 	if _, enabled := store.Apply(catalog.Model{ID: "provider/disabled"}); enabled {
 		t.Fatal("disabled model remained enabled")
+	}
+}
+
+func TestVersionTwoNormalRoutesMigrateToUserFacingTypes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	content := []byte(`{"version":2,"routes":{"chat":{"type":"normal","models":[]},"chat-tools":{"type":"normal","require_tool":true,"models":[]}},"models":{"provider/model":{"type":"normal"}}}`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := store.Config()
+	if config.Version != 3 || config.Routes["chat"].Type != "chat" || config.Routes["chat-tools"].Type != "chat-tools" || config.Models["provider/model"].Type != "chat" {
+		t.Fatalf("migrated config = %#v", config)
+	}
+	persisted, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(persisted), `"version": 3`) {
+		t.Fatalf("migration was not persisted: %s, %v", persisted, err)
 	}
 }

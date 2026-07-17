@@ -129,7 +129,7 @@ OPENAI_API_KEY=任意非空字符串
 3. siliconflow/Qwen/Qwen3-8B
 ```
 
-第一个模型出现网络错误、限流、额度不足、模型下线或 5xx 时会尝试下一个。列表为空时，路由器根据缓存的类型和能力元数据自动选择。
+数组中的模型会严格从上到下依次尝试。它们全部不可用后，路由器会从没有出现在数组中的同路由类型健康模型里轮换选择一个作为最终兜底。列表为空时，则完全根据缓存的类型、能力和健康状态自动选择。
 
 稳定版会跟踪每个模型的成功率、响应延迟和连续失败次数：
 
@@ -162,6 +162,7 @@ X-Free-Router-Model: openai/gpt-oss-120b
 `GET /v1/models` 在 OpenAI 标准字段之外统一提供以下信息：
 
 - `type`：`normal`、`embedding`、`rerank`、`audio`、`image`、`video`、`moderation`；
+- `route_types`：用户可配置的统一路由类型；聊天模型至少包含 `chat`，支持或可能支持 tools 时还包含 `chat-tools`；
 - `capabilities`：tool call、reasoning、vision、streaming，以及能力是否有明确元数据；
 - `context_length` 和 `max_output_tokens`；
 - `input_modalities`、`output_modalities`；
@@ -183,17 +184,17 @@ curl -s http://localhost:1314/v1/models | jq '.data[] | select(.id != "auto") | 
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "routes": {
     "chat": {
-      "type": "normal",
+      "type": "chat",
       "models": [
         "groq/openai/gpt-oss-120b",
         "siliconflow/Qwen/Qwen3-8B"
       ]
     },
     "chat-tools": {
-      "type": "normal",
+      "type": "chat-tools",
       "require_tool": true,
       "models": []
     },
@@ -204,7 +205,7 @@ curl -s http://localhost:1314/v1/models | jq '.data[] | select(.id != "auto") | 
   },
   "models": {
     "provider/model-with-wrong-metadata": {
-      "type": "normal",
+      "type": "chat",
       "tool_call": true
     },
     "provider/model-to-disable": {
@@ -214,7 +215,7 @@ curl -s http://localhost:1314/v1/models | jq '.data[] | select(.id != "auto") | 
 }
 ```
 
-旧版配置会自动迁移到 version 2，缺少的内置路由会自动补全。推荐通过 Web 界面修改；也可以停止服务后手工编辑。路径可用 `--config` 或 `FREE_ROUTER_CONFIG` 覆盖。
+旧版配置会自动迁移到 version 3：原来的 `normal` 聊天类型会转换成 `chat` 或 `chat-tools`，并立即写回配置文件。缺少的内置路由会自动补全。推荐通过 Web 界面修改；也可以停止服务后手工编辑。路径可用 `--config` 或 `FREE_ROUTER_CONFIG` 覆盖。
 
 ## 模型缓存与自维护
 

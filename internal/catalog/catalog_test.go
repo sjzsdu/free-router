@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,8 +56,11 @@ func TestPeriodicRefreshStartsBeforeFirstProviderIsConfigured(t *testing.T) {
 	}
 	store := New(registry, filepath.Join(t.TempDir(), "models.json"), server.Client())
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	store.Start(ctx, 10*time.Millisecond)
+	done := store.Start(ctx, 10*time.Millisecond)
+	defer func() {
+		cancel()
+		<-done
+	}()
 	if err := registry.Reload(`[{"id":"test","base_url":"` + server.URL + `","no_auth":true}]`); err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +70,21 @@ func TestPeriodicRefreshStartsBeforeFirstProviderIsConfigured(t *testing.T) {
 	}
 	if len(store.Models()) != 1 {
 		t.Fatal("periodic refresh did not discover provider added after startup")
+	}
+}
+
+func TestProbeIncludesSafeUpstreamErrorDetail(t *testing.T) {
+	clearBuiltinKeys(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"message":"organization permission denied","type":"permissions_error"}}`))
+	}))
+	defer server.Close()
+	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + server.URL + `","no_auth":true}]`)
+	store := New(registry, filepath.Join(t.TempDir(), "models.json"), server.Client())
+	_, err := store.Probe(context.Background(), "test")
+	if err == nil || !strings.Contains(err.Error(), "organization permission denied") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -193,6 +194,10 @@ func (s *Store) fetch(ctx context.Context, spec provider.Spec) ([]Model, error) 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		detail := upstreamErrorDetail(resp.Body)
+		if detail != "" {
+			return nil, fmt.Errorf("models endpoint returned %s: %s", resp.Status, detail)
+		}
 		return nil, fmt.Errorf("models endpoint returned %s", resp.Status)
 	}
 	var payload modelsResponse
@@ -246,11 +251,46 @@ func (s *Store) fetch(ctx context.Context, spec provider.Spec) ([]Model, error) 
 	return models, nil
 }
 
-func (s *Store) Start(ctx context.Context, interval time.Duration) {
+func upstreamErrorDetail(body io.Reader) string {
+	content, err := io.ReadAll(io.LimitReader(body, 16<<10))
+	if err != nil || len(content) == 0 {
+		return ""
+	}
+	var payload struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+		} `json:"error"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(content, &payload) == nil {
+		message := payload.Error.Message
+		if message == "" {
+			message = payload.Message
+		}
+		if message != "" {
+			return truncateDetail(message)
+		}
+	}
+	return truncateDetail(string(content))
+}
+
+func truncateDetail(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	if len(value) > 500 {
+		return value[:500] + "…"
+	}
+	return value
+}
+
+func (s *Store) Start(ctx context.Context, interval time.Duration) <-chan struct{} {
+	done := make(chan struct{})
 	if interval <= 0 {
-		return
+		close(done)
+		return done
 	}
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -264,6 +304,7 @@ func (s *Store) Start(ctx context.Context, interval time.Duration) {
 			}
 		}
 	}()
+	return done
 }
 
 func (s *Store) Probe(ctx context.Context, providerID string) (int, error) {

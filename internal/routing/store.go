@@ -13,7 +13,7 @@ import (
 	"github.com/sjzsdu/free-router/internal/catalog"
 )
 
-const CurrentVersion = 2
+const CurrentVersion = 3
 
 type Route struct {
 	Type        string   `json:"type"`
@@ -43,8 +43,8 @@ type Store struct {
 
 func DefaultConfig() Config {
 	return Config{Version: CurrentVersion, Models: map[string]ModelOverride{}, Routes: map[string]Route{
-		"chat":       {Type: "normal", Models: []string{}},
-		"chat-tools": {Type: "normal", RequireTool: true, Models: []string{}},
+		"chat":       {Type: "chat", Models: []string{}},
+		"chat-tools": {Type: "chat-tools", RequireTool: true, Models: []string{}},
 		"embedding":  {Type: "embedding", Models: []string{}},
 		"audio":      {Type: "audio", Models: []string{}},
 		"image":      {Type: "image", Models: []string{}},
@@ -65,7 +65,11 @@ func (s *Store) Apply(model catalog.Model) (catalog.Model, bool) {
 		return model, false
 	}
 	if override.Type != "" {
-		model.Type = override.Type
+		model.Type = InternalModelType(override.Type)
+		if override.Type == "chat-tools" {
+			model.Capabilities.ToolCall = true
+			model.Capabilities.ToolCallKnown = true
+		}
 	}
 	if override.ToolCall != nil {
 		model.Capabilities.ToolCall = *override.ToolCall
@@ -80,6 +84,33 @@ func (s *Store) Apply(model catalog.Model) (catalog.Model, bool) {
 		model.Capabilities.ReasoningKnown = true
 	}
 	return model, true
+}
+
+func InternalModelType(routeType string) string {
+	switch routeType {
+	case "chat", "chat-tools":
+		return "normal"
+	default:
+		return routeType
+	}
+}
+
+func Accepts(route Route, model catalog.Model) bool {
+	if model.Type != InternalModelType(route.Type) {
+		return false
+	}
+	return !(route.RequireTool || route.Type == "chat-tools") || model.Supports("tools")
+}
+
+func ModelRouteTypes(model catalog.Model) []string {
+	if model.Type != "normal" {
+		return []string{model.Type}
+	}
+	result := []string{"chat"}
+	if model.Supports("tools") {
+		result = append(result, "chat-tools")
+	}
+	return result
 }
 
 func New(path string) (*Store, error) {
@@ -145,9 +176,15 @@ func (s *Store) load() error {
 	if err := json.Unmarshal(content, &config); err != nil {
 		return fmt.Errorf("decode route config: %w", err)
 	}
+	originalVersion := config.Version
 	config = mergeDefaults(config)
 	if err := validate(&config); err != nil {
 		return fmt.Errorf("validate route config: %w", err)
+	}
+	if originalVersion != CurrentVersion {
+		if err := s.save(config); err != nil {
+			return fmt.Errorf("save migrated route config: %w", err)
+		}
 	}
 	s.config = config
 	return nil
@@ -184,6 +221,7 @@ func (s *Store) save(config Config) error {
 
 func mergeDefaults(config Config) Config {
 	defaults := DefaultConfig()
+	previousVersion := config.Version
 	if config.Routes == nil {
 		config.Routes = make(map[string]Route)
 	}
@@ -193,6 +231,24 @@ func mergeDefaults(config Config) Config {
 	for alias, route := range defaults.Routes {
 		if _, ok := config.Routes[alias]; !ok {
 			config.Routes[alias] = route
+		}
+	}
+	if previousVersion < 3 {
+		for alias, route := range config.Routes {
+			if route.Type == "normal" {
+				if route.RequireTool || alias == "chat-tools" {
+					route.Type = "chat-tools"
+				} else {
+					route.Type = "chat"
+				}
+				config.Routes[alias] = route
+			}
+		}
+		for id, override := range config.Models {
+			if override.Type == "normal" {
+				override.Type = "chat"
+				config.Models[id] = override
+			}
 		}
 	}
 	config.Version = CurrentVersion

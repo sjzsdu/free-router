@@ -190,14 +190,19 @@ func BuiltinStatus(resolvers ...KeyResolver) []map[string]any {
 	result := make([]map[string]any, 0, len(builtins()))
 	for _, spec := range builtins() {
 		configured := os.Getenv(spec.APIKeyEnv) != ""
+		source := "environment"
 		if !configured {
 			_, configured = resolveKey(spec.ID, resolvers)
+			source = "saved"
+		}
+		if !configured {
+			source = "missing"
 		}
 		for _, key := range spec.RequiredEnvs {
 			configured = configured && os.Getenv(key) != ""
 		}
 		result = append(result, map[string]any{
-			"id": spec.ID, "env": spec.APIKeyEnv, "requires": spec.RequiredEnvs, "configured": configured, "tier": spec.Tier,
+			"id": spec.ID, "env": spec.APIKeyEnv, "requires": spec.RequiredEnvs, "configured": configured, "source": source, "tier": spec.Tier,
 		})
 	}
 	return result
