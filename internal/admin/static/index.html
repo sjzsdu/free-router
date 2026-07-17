@@ -29,6 +29,7 @@
         <article><span>缓存模型</span><strong id="model-count">—</strong><small id="cache-status">请求过程不访问模型目录</small></article>
         <article><span>已配置免费源</span><strong id="provider-count">—</strong><small>环境变量或安全凭据</small></article>
         <article><span>固定能力路由</span><strong id="route-count">8</strong><small>对客户端保持稳定</small></article>
+        <article><span>请求成功率</span><strong id="success-rate">—</strong><small id="request-status">尚无推理请求</small></article>
       </section>
 
       <section id="routes" class="section-block">
@@ -43,7 +44,7 @@
 
       <section id="models" class="section-block">
         <div class="section-title model-title"><div><p class="eyebrow">CACHED CATALOG</p><h2>可用模型</h2></div><div class="filters"><input id="search" type="search" placeholder="搜索模型或 provider"><select id="type-filter"><option value="">全部类型</option></select></div></div>
-        <div class="table-wrap"><table><thead><tr><th>模型</th><th>类型</th><th>能力</th><th>Context</th><th>免费源</th></tr></thead><tbody id="model-table"></tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th>模型</th><th>类型</th><th>能力</th><th>健康</th><th>Context</th><th>免费源</th><th>覆盖</th></tr></thead><tbody id="model-table"></tbody></table></div>
       </section>
     </main>
   </div>

@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/sjzsdu/free-router/internal/catalog"
+	"github.com/sjzsdu/free-router/internal/health"
 	"github.com/sjzsdu/free-router/internal/provider"
 	"github.com/sjzsdu/free-router/internal/routing"
 )
@@ -115,11 +116,16 @@ func TestNamedRouteUsesConfiguredFallbackOrder(t *testing.T) {
 	if err := routes.Update(config); err != nil {
 		t.Fatal(err)
 	}
-	handler := New(store, registry, Config{MaxAttempts: 3, Routes: routes}, upstream.Client())
+	tracker := health.New()
+	handler := New(store, registry, Config{MaxAttempts: 3, Routes: routes, Health: tracker}, upstream.Client())
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat","messages":[]}`)))
 	if recorder.Code != http.StatusOK || strings.Join(calls, ",") != "first,second" {
 		t.Fatalf("status=%d calls=%v body=%s", recorder.Code, calls, recorder.Body.String())
+	}
+	states := tracker.Snapshot()
+	if len(states) != 2 || states[0].Status != "cooling" || states[1].Status != "healthy" {
+		t.Fatalf("health states = %#v", states)
 	}
 }
 

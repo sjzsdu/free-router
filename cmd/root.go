@@ -18,6 +18,7 @@ import (
 	"github.com/sjzsdu/free-router/internal/catalog"
 	"github.com/sjzsdu/free-router/internal/credentials"
 	"github.com/sjzsdu/free-router/internal/gateway"
+	"github.com/sjzsdu/free-router/internal/health"
 	"github.com/sjzsdu/free-router/internal/provider"
 	"github.com/sjzsdu/free-router/internal/routing"
 	"github.com/spf13/cobra"
@@ -38,6 +39,7 @@ type options struct {
 	config           string
 	credentials      string
 	adminAllowRemote bool
+	adminToken       string
 	refreshInterval  time.Duration
 	maxAttempts      int
 }
@@ -117,6 +119,7 @@ func defaultOptions() options {
 		config:           envOr("FREE_ROUTER_CONFIG", filepath.Join(configDir, "free-router", "config.json")),
 		credentials:      envOr("FREE_ROUTER_CREDENTIALS", filepath.Join(configDir, "free-router", "credentials.json")),
 		adminAllowRemote: envBool("FREE_ROUTER_ADMIN_ALLOW_REMOTE"),
+		adminToken:       os.Getenv("FREE_ROUTER_ADMIN_TOKEN"),
 		refreshInterval:  time.Hour,
 		maxAttempts:      6,
 	}
@@ -137,6 +140,9 @@ func runServer(ctx context.Context, opts options) error {
 	if opts.maxAttempts < 1 {
 		return errors.New("max-attempts must be at least 1")
 	}
+	if opts.adminAllowRemote && strings.TrimSpace(opts.adminToken) == "" {
+		return errors.New("FREE_ROUTER_ADMIN_TOKEN is required when admin-allow-remote is enabled")
+	}
 	vault := credentials.New(opts.credentials)
 	registry, err := provider.NewRegistryAllowEmpty(opts.providers, vault.Get)
 	if err != nil {
@@ -152,14 +158,13 @@ func runServer(ctx context.Context, opts options) error {
 			return fmt.Errorf("load free model catalog: %w", err)
 		}
 	}
-	if len(registry.All()) > 0 {
-		store.Start(ctx, opts.refreshInterval)
-	}
+	store.Start(ctx, opts.refreshInterval)
 
-	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts, Routes: routes}, http.DefaultClient)
+	tracker := health.New()
+	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts, Routes: routes, Health: tracker}, http.DefaultClient)
 	reloadProviders := func() error { return registry.Reload(opts.providers, vault.Get) }
 	handler.Handle("GET /admin", http.RedirectHandler("/admin/", http.StatusTemporaryRedirect))
-	handler.Handle("/admin/", admin.New(routes, store, vault, opts.adminAllowRemote, reloadProviders))
+	handler.Handle("/admin/", admin.New(routes, store, vault, tracker, admin.Config{AllowRemote: opts.adminAllowRemote, Token: opts.adminToken}, reloadProviders))
 	server := &http.Server{
 		Addr:              opts.addr,
 		Handler:           handler,

@@ -70,7 +70,7 @@ free-router
 http://localhost:1314/admin/
 ```
 
-可以在网页中录入免费源 API Key、刷新缓存模型、按能力筛选模型，并拖动配置每条路由的 fallback 顺序。配置保存后立即生效；新增或删除凭据也会热加载，不需要重启。
+可以在网页中录入免费源 API Key、测试 Provider 连接、刷新缓存、查看模型健康和请求成功率，并拖动配置每条路由的 fallback 顺序。还可以禁用单个模型，或手工覆盖模型类型、tools、vision、reasoning 能力。配置保存后立即生效；新增或删除凭据也会热加载，不需要重启。
 
 ```bash
 curl http://localhost:1314/healthz
@@ -131,6 +131,14 @@ OPENAI_API_KEY=任意非空字符串
 
 第一个模型出现网络错误、限流、额度不足、模型下线或 5xx 时会尝试下一个。列表为空时，路由器根据缓存的类型和能力元数据自动选择。
 
+稳定版会跟踪每个模型的成功率、响应延迟和连续失败次数：
+
+- 429 遵循上游 `Retry-After`，缺失时默认冷却 30 秒；
+- 401/403 默认冷却 5 分钟，避免持续使用无效凭据；
+- 连续网络错误或 5xx 会触发熔断；
+- 冷却中的模型不会进入正常 fallback 链；如果所有候选都在冷却，会选择一个模型进行恢复探测；
+- 健康统计保存在内存中，服务重启后重新统计。
+
 ## 直接指定模型
 
 模型 ID 使用 `provider/upstream-model`，避免不同源的同名模型冲突：
@@ -175,7 +183,7 @@ curl -s http://localhost:1314/v1/models | jq '.data[] | select(.id != "auto") | 
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "routes": {
     "chat": {
       "type": "normal",
@@ -193,11 +201,20 @@ curl -s http://localhost:1314/v1/models | jq '.data[] | select(.id != "auto") | 
       "type": "embedding",
       "models": []
     }
+  },
+  "models": {
+    "provider/model-with-wrong-metadata": {
+      "type": "normal",
+      "tool_call": true
+    },
+    "provider/model-to-disable": {
+      "disabled": true
+    }
   }
 }
 ```
 
-缺少的内置路由会自动补全。推荐通过 Web 界面修改；也可以停止服务后手工编辑。路径可用 `--config` 或 `FREE_ROUTER_CONFIG` 覆盖。
+旧版配置会自动迁移到 version 2，缺少的内置路由会自动补全。推荐通过 Web 界面修改；也可以停止服务后手工编辑。路径可用 `--config` 或 `FREE_ROUTER_CONFIG` 覆盖。
 
 ## 模型缓存与自维护
 
@@ -224,7 +241,19 @@ export FREE_ROUTER_PROVIDERS='[
 ]'
 ```
 
-模型目录和聊天地址不符合标准路径时，可以设置 `models_url`、`chat_url`、`auth_header`、`auth_prefix` 和 `headers`。无鉴权的本地服务使用 `"no_auth": true`。
+模型目录和聊天地址不符合标准路径时，可以设置 `models_url`、`chat_url`、`auth_header`、`auth_prefix` 和 `headers`。其他能力接口不符合标准路径时，可通过 `endpoints` 按路径覆盖。无鉴权的本地服务使用 `"no_auth": true`。
+
+```json
+{
+  "id": "custom-free",
+  "base_url": "https://api.example.com/v1",
+  "api_key_env": "MY_FREE_API_KEY",
+  "endpoints": {
+    "/embeddings": "https://embed.example.com/run",
+    "/audio/transcriptions": "https://audio.example.com/transcribe"
+  }
+}
+```
 
 如果源的 `/models` 提供 OpenRouter 风格的 pricing，可设置 `"filter": "zero-price"`，只允许价格为零的模型；其他源默认信任用户明确配置的免费账户。
 
@@ -242,7 +271,15 @@ free-router auth remove gemini     # 删除凭据
 free-router version
 ```
 
-管理界面默认只接受本机访问，避免局域网其他设备修改 API Key。确实需要从远程管理时显式使用 `--admin-allow-remote` 或 `FREE_ROUTER_ADMIN_ALLOW_REMOTE=true`，并自行通过防火墙或反向代理保护访问。
+管理界面默认只接受本机访问。远程管理必须同时开启远程访问并设置管理令牌：
+
+```bash
+export FREE_ROUTER_ADMIN_ALLOW_REMOTE=true
+export FREE_ROUTER_ADMIN_TOKEN='使用足够长的随机字符串'
+free-router
+```
+
+浏览器会显示 HTTP Basic 登录框，用户名固定为 `admin`，密码是令牌。管理 API 也接受 `Authorization: Bearer <token>`。服务会拒绝没有令牌的远程管理模式，并对写操作执行同源检查；生产环境仍建议放在 HTTPS 反向代理或 VPN 后面。
 
 凭据文件路径遵循操作系统的用户配置目录，可用 `--credentials` 或 `FREE_ROUTER_CREDENTIALS` 覆盖。程序不会自动注册第三方账号、读取邮箱验证码或绕过 CAPTCHA；账户申请仍由用户在 provider 官方网站完成一次。
 
@@ -267,16 +304,16 @@ GitHub Actions 会在 push 到 `main` 和 Pull Request 时自动执行 `make che
 
 ## 自动发布
 
-项目版本只有一个来源：[VERSION](./VERSION)，初始版本为 `0.1.0`。发布新版本时只需修改这个文件并推送到 `main`：
+项目版本只有一个来源：[VERSION](./VERSION)，当前稳定版为 `0.2.0`。发布新版本时只需修改这个文件并推送到 `main`：
 
 ```bash
-echo 0.1.1 > VERSION
+echo 0.2.1 > VERSION
 git add VERSION
-git commit -m 'chore: release 0.1.1'
+git commit -m 'chore: release 0.2.1'
 git push
 ```
 
-Release 工作流会检查 `v0.1.1` 是否已经存在：
+Release 工作流会检查 `v0.2.1` 是否已经存在：
 
 - 已存在：跳过，不重复构建；
 - 不存在：先运行完整检查和竞态测试，再跨平台构建、生成 SHA-256 校验文件、创建 Git tag 和 GitHub Release；

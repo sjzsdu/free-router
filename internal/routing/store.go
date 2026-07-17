@@ -9,9 +9,11 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/sjzsdu/free-router/internal/catalog"
 )
 
-const CurrentVersion = 1
+const CurrentVersion = 2
 
 type Route struct {
 	Type        string   `json:"type"`
@@ -20,8 +22,17 @@ type Route struct {
 }
 
 type Config struct {
-	Version int              `json:"version"`
-	Routes  map[string]Route `json:"routes"`
+	Version int                      `json:"version"`
+	Routes  map[string]Route         `json:"routes"`
+	Models  map[string]ModelOverride `json:"models"`
+}
+
+type ModelOverride struct {
+	Disabled  bool   `json:"disabled,omitempty"`
+	Type      string `json:"type,omitempty"`
+	ToolCall  *bool  `json:"tool_call,omitempty"`
+	Vision    *bool  `json:"vision,omitempty"`
+	Reasoning *bool  `json:"reasoning,omitempty"`
 }
 
 type Store struct {
@@ -31,7 +42,7 @@ type Store struct {
 }
 
 func DefaultConfig() Config {
-	return Config{Version: CurrentVersion, Routes: map[string]Route{
+	return Config{Version: CurrentVersion, Models: map[string]ModelOverride{}, Routes: map[string]Route{
 		"chat":       {Type: "normal", Models: []string{}},
 		"chat-tools": {Type: "normal", RequireTool: true, Models: []string{}},
 		"embedding":  {Type: "embedding", Models: []string{}},
@@ -41,6 +52,34 @@ func DefaultConfig() Config {
 		"rerank":     {Type: "rerank", Models: []string{}},
 		"moderation": {Type: "moderation", Models: []string{}},
 	}}
+}
+
+func (s *Store) Apply(model catalog.Model) (catalog.Model, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	override, ok := s.config.Models[model.ID]
+	if !ok {
+		return model, true
+	}
+	if override.Disabled {
+		return model, false
+	}
+	if override.Type != "" {
+		model.Type = override.Type
+	}
+	if override.ToolCall != nil {
+		model.Capabilities.ToolCall = *override.ToolCall
+		model.Capabilities.ToolCallKnown = true
+	}
+	if override.Vision != nil {
+		model.Capabilities.Vision = *override.Vision
+		model.Capabilities.VisionKnown = true
+	}
+	if override.Reasoning != nil {
+		model.Capabilities.Reasoning = *override.Reasoning
+		model.Capabilities.ReasoningKnown = true
+	}
+	return model, true
 }
 
 func New(path string) (*Store, error) {
@@ -85,7 +124,7 @@ func (s *Store) Aliases() []string {
 
 func (s *Store) Update(config Config) error {
 	config = mergeDefaults(config)
-	if err := validate(config); err != nil {
+	if err := validate(&config); err != nil {
 		return err
 	}
 	if err := s.save(config); err != nil {
@@ -107,7 +146,7 @@ func (s *Store) load() error {
 		return fmt.Errorf("decode route config: %w", err)
 	}
 	config = mergeDefaults(config)
-	if err := validate(config); err != nil {
+	if err := validate(&config); err != nil {
 		return fmt.Errorf("validate route config: %w", err)
 	}
 	s.config = config
@@ -148,6 +187,9 @@ func mergeDefaults(config Config) Config {
 	if config.Routes == nil {
 		config.Routes = make(map[string]Route)
 	}
+	if config.Models == nil {
+		config.Models = make(map[string]ModelOverride)
+	}
 	for alias, route := range defaults.Routes {
 		if _, ok := config.Routes[alias]; !ok {
 			config.Routes[alias] = route
@@ -157,7 +199,7 @@ func mergeDefaults(config Config) Config {
 	return config
 }
 
-func validate(config Config) error {
+func validate(config *Config) error {
 	if len(config.Routes) == 0 {
 		return errors.New("at least one route is required")
 	}
@@ -178,14 +220,27 @@ func validate(config Config) error {
 		route.Models = cleaned
 		config.Routes[alias] = route
 	}
+	cleanedOverrides := make(map[string]ModelOverride, len(config.Models))
+	for model, override := range config.Models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		override.Type = strings.TrimSpace(override.Type)
+		cleanedOverrides[model] = override
+	}
+	config.Models = cleanedOverrides
 	return nil
 }
 
 func cloneConfig(config Config) Config {
-	clone := Config{Version: config.Version, Routes: make(map[string]Route, len(config.Routes))}
+	clone := Config{Version: config.Version, Routes: make(map[string]Route, len(config.Routes)), Models: make(map[string]ModelOverride, len(config.Models))}
 	for alias, route := range config.Routes {
 		route.Models = append([]string{}, route.Models...)
 		clone.Routes[alias] = route
+	}
+	for model, override := range config.Models {
+		clone.Models[model] = override
 	}
 	return clone
 }

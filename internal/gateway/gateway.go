@@ -11,10 +11,13 @@ import (
 	"net/http"
 	"net/textproto"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/sjzsdu/free-router/internal/catalog"
+	"github.com/sjzsdu/free-router/internal/health"
 	"github.com/sjzsdu/free-router/internal/provider"
 	"github.com/sjzsdu/free-router/internal/routing"
 )
@@ -22,6 +25,7 @@ import (
 type Config struct {
 	MaxAttempts int
 	Routes      *routing.Store
+	Health      *health.Tracker
 }
 
 type Gateway struct {
@@ -30,11 +34,15 @@ type Gateway struct {
 	config   Config
 	client   *http.Client
 	next     atomic.Uint64
+	tracker  *health.Tracker
 	mux      *http.ServeMux
 }
 
 func New(store *catalog.Store, registry *provider.Registry, config Config, client *http.Client) *Gateway {
-	gateway := &Gateway{catalog: store, registry: registry, config: config, client: client, mux: http.NewServeMux()}
+	if config.Health == nil {
+		config.Health = health.New()
+	}
+	gateway := &Gateway{catalog: store, registry: registry, config: config, client: client, tracker: config.Health, mux: http.NewServeMux()}
 	gateway.mux.HandleFunc("GET /healthz", gateway.health)
 	gateway.mux.HandleFunc("GET /v1/models", gateway.models)
 	gateway.mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
@@ -74,6 +82,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) { g.mux.Serv
 func (g *Gateway) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "ok", "free_models": len(g.catalog.Models()), "providers": len(g.registry.All()),
+		"catalog": g.catalog.Status(), "requests": g.tracker.Summary(),
 	})
 }
 
@@ -95,6 +104,13 @@ func (g *Gateway) models(w http.ResponseWriter, _ *http.Request) {
 		data = append(data, map[string]any{"id": "auto", "object": "model", "owned_by": "free-router", "type": "normal", "free": true})
 	}
 	for _, model := range models {
+		if g.config.Routes != nil {
+			var enabled bool
+			model, enabled = g.config.Routes.Apply(model)
+			if !enabled {
+				continue
+			}
+		}
 		data = append(data, map[string]any{
 			"id": model.ID, "object": "model", "owned_by": model.Provider, "provider": model.Provider,
 			"upstream_id": model.UpstreamID, "upstream_owned_by": model.OwnedBy,
@@ -143,8 +159,10 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 			writeError(w, http.StatusBadRequest, "could not encode request")
 			return
 		}
+		started := time.Now()
 		resp, err := g.forward(r, model, payload, endpoint, "application/json")
 		if err != nil {
+			g.tracker.Failure(model.ID, time.Since(started), 0, err.Error(), 0)
 			slog.Warn("provider request failed", "provider", model.Provider, "model", model.UpstreamID, "error", err)
 			if index+1 < len(candidates) {
 				continue
@@ -153,11 +171,13 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 			return
 		}
 		if retryable(resp.StatusCode, fallback) && index+1 < len(candidates) {
+			g.tracker.Failure(model.ID, time.Since(started), resp.StatusCode, resp.Status, parseRetryAfter(resp.Header.Get("Retry-After")))
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
 			slog.Info("free provider unavailable; trying next", "provider", model.Provider, "model", model.UpstreamID, "status", resp.StatusCode)
 			continue
 		}
+		g.recordResponse(model.ID, time.Since(started), resp)
 		copyResponse(w, resp, model)
 		return
 	}
@@ -194,8 +214,10 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 			writeError(w, http.StatusBadRequest, "could not encode multipart request")
 			return
 		}
+		started := time.Now()
 		resp, err := g.forward(r, model, payload, endpoint, contentType)
 		if err != nil {
+			g.tracker.Failure(model.ID, time.Since(started), 0, err.Error(), 0)
 			if index+1 < len(candidates) {
 				continue
 			}
@@ -203,10 +225,12 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 			return
 		}
 		if retryable(resp.StatusCode, fallback) && index+1 < len(candidates) {
+			g.tracker.Failure(model.ID, time.Since(started), resp.StatusCode, resp.Status, parseRetryAfter(resp.Header.Get("Retry-After")))
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
 			continue
 		}
+		g.recordResponse(model.ID, time.Since(started), resp)
 		copyResponse(w, resp, model)
 		return
 	}
@@ -286,23 +310,29 @@ func (g *Gateway) candidates(requested string, needsTools bool) ([]catalog.Model
 				needsTools = true
 			}
 			if len(route.Models) > 0 {
-				result := make([]catalog.Model, 0, min(len(route.Models), g.config.MaxAttempts))
+				result := make([]catalog.Model, 0, len(route.Models))
 				for _, id := range route.Models {
 					model, ok := g.catalog.Find(id)
+					if ok {
+						model, ok = g.config.Routes.Apply(model)
+					}
 					if !ok || model.Type != route.Type || (needsTools && !model.Supports("tools")) {
 						continue
 					}
 					result = append(result, model)
-					if len(result) == g.config.MaxAttempts {
-						break
-					}
 				}
-				return result, true
+				return g.limitCandidates(g.availableCandidates(result)), true
 			}
 			return g.dynamicCandidates(route.Type, needsTools), true
 		}
 	}
 	if model, ok := g.catalog.Find(requested); ok {
+		if g.config.Routes != nil {
+			model, ok = g.config.Routes.Apply(model)
+			if !ok {
+				return nil, false
+			}
+		}
 		return []catalog.Model{model}, false
 	}
 	return nil, false
@@ -312,6 +342,13 @@ func (g *Gateway) dynamicCandidates(modelType string, needsTools bool) []catalog
 	groups := make(map[string][]catalog.Model)
 	var preferred *catalog.Model
 	for _, model := range g.catalog.Models() {
+		if g.config.Routes != nil {
+			var enabled bool
+			model, enabled = g.config.Routes.Apply(model)
+			if !enabled {
+				continue
+			}
+		}
 		if model.Type != modelType || (needsTools && !model.Supports("tools")) {
 			continue
 		}
@@ -330,15 +367,15 @@ func (g *Gateway) dynamicCandidates(modelType string, needsTools bool) []catalog
 	if len(providerIDs) == 0 && preferred == nil {
 		return nil
 	}
-	result := make([]catalog.Model, 0, g.config.MaxAttempts)
+	result := make([]catalog.Model, 0)
 	if preferred != nil {
 		result = append(result, *preferred)
 	}
 	if len(providerIDs) == 0 || len(result) == g.config.MaxAttempts {
-		return result
+		return g.limitCandidates(g.availableCandidates(result))
 	}
 	seed := int(g.next.Add(1) - 1)
-	for round := 0; len(result) < g.config.MaxAttempts; round++ {
+	for round := 0; ; round++ {
 		added := false
 		for offset := range providerIDs {
 			providerID := providerIDs[(seed+offset)%len(providerIDs)]
@@ -348,15 +385,56 @@ func (g *Gateway) dynamicCandidates(modelType string, needsTools bool) []catalog
 			}
 			result = append(result, models[(seed+round)%len(models)])
 			added = true
-			if len(result) == g.config.MaxAttempts {
-				break
-			}
 		}
 		if !added {
 			break
 		}
 	}
-	return result
+	return g.limitCandidates(g.availableCandidates(result))
+}
+
+func (g *Gateway) availableCandidates(models []catalog.Model) []catalog.Model {
+	available := make([]catalog.Model, 0, len(models))
+	for _, model := range models {
+		if g.tracker.Available(model.ID) {
+			available = append(available, model)
+		}
+	}
+	if len(available) == 0 && len(models) > 0 {
+		return models[:1]
+	}
+	return available
+}
+
+func (g *Gateway) limitCandidates(models []catalog.Model) []catalog.Model {
+	if len(models) > g.config.MaxAttempts {
+		return models[:g.config.MaxAttempts]
+	}
+	return models
+}
+
+func (g *Gateway) recordResponse(model string, latency time.Duration, resp *http.Response) {
+	if resp.StatusCode >= 400 {
+		g.tracker.Failure(model, latency, resp.StatusCode, resp.Status, parseRetryAfter(resp.Header.Get("Retry-After")))
+		return
+	}
+	g.tracker.Success(model, latency, resp.StatusCode)
+}
+
+func parseRetryAfter(value string) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if deadline, err := http.ParseTime(value); err == nil {
+		if duration := time.Until(deadline); duration > 0 {
+			return duration
+		}
+	}
+	return 0
 }
 
 func (g *Gateway) forward(original *http.Request, model catalog.Model, body []byte, endpoint, contentType string) (*http.Response, error) {

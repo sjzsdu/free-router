@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/sjzsdu/free-router/internal/provider"
 )
@@ -39,6 +40,32 @@ func TestRefreshKeepsOnlyZeroPricedModels(t *testing.T) {
 	}
 	if !model.Capabilities.ToolCall || !model.Capabilities.Reasoning || !model.Capabilities.Vision {
 		t.Fatalf("unexpected capabilities: %#v", model.Capabilities)
+	}
+}
+
+func TestPeriodicRefreshStartsBeforeFirstProviderIsConfigured(t *testing.T) {
+	clearBuiltinKeys(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"chat-model"}]}`))
+	}))
+	defer server.Close()
+	registry, err := provider.NewRegistryAllowEmpty("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := New(registry, filepath.Join(t.TempDir(), "models.json"), server.Client())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store.Start(ctx, 10*time.Millisecond)
+	if err := registry.Reload(`[{"id":"test","base_url":"` + server.URL + `","no_auth":true}]`); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(store.Models()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(store.Models()) != 1 {
+		t.Fatal("periodic refresh did not discover provider added after startup")
 	}
 }
 

@@ -21,6 +21,7 @@ type Spec struct {
 	BaseURL       string            `json:"base_url"`
 	ModelsURL     string            `json:"models_url,omitempty"`
 	ChatURL       string            `json:"chat_url,omitempty"`
+	Endpoints     map[string]string `json:"endpoints,omitempty"`
 	APIKey        string            `json:"api_key,omitempty"`
 	APIKeyEnv     string            `json:"api_key_env,omitempty"`
 	NoAuth        bool              `json:"no_auth,omitempty"`
@@ -49,6 +50,9 @@ func (spec Spec) ChatEndpoint() string {
 }
 
 func (spec Spec) APIEndpoint(path string) string {
+	if endpoint := spec.Endpoints[path]; endpoint != "" {
+		return endpoint
+	}
 	if path == "/chat/completions" {
 		return spec.ChatEndpoint()
 	}

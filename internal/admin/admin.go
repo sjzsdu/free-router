@@ -1,15 +1,19 @@
 package admin
 
 import (
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/sjzsdu/free-router/internal/catalog"
 	"github.com/sjzsdu/free-router/internal/credentials"
+	"github.com/sjzsdu/free-router/internal/health"
 	"github.com/sjzsdu/free-router/internal/provider"
 	"github.com/sjzsdu/free-router/internal/routing"
 )
@@ -18,22 +22,39 @@ import (
 var assets embed.FS
 
 type Handler struct {
-	routes      *routing.Store
-	catalog     *catalog.Store
-	vault       *credentials.Vault
-	allowRemote bool
-	reload      func() error
-	static      http.Handler
+	routes  *routing.Store
+	catalog *catalog.Store
+	vault   *credentials.Vault
+	config  Config
+	reload  func() error
+	health  *health.Tracker
+	static  http.Handler
 }
 
-func New(routes *routing.Store, models *catalog.Store, vault *credentials.Vault, allowRemote bool, reload func() error) *Handler {
+type Config struct {
+	AllowRemote bool
+	Token       string
+}
+
+func New(routes *routing.Store, models *catalog.Store, vault *credentials.Vault, tracker *health.Tracker, config Config, reload func() error) *Handler {
 	staticFS, _ := fs.Sub(assets, "static")
-	return &Handler{routes: routes, catalog: models, vault: vault, allowRemote: allowRemote, reload: reload, static: http.FileServer(http.FS(staticFS))}
+	return &Handler{routes: routes, catalog: models, vault: vault, health: tracker, config: config, reload: reload, static: http.FileServer(http.FS(staticFS))}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !h.allowRemote && !isLoopback(r.RemoteAddr) {
+	secureHeaders(w)
+	loopback := isLoopback(r.RemoteAddr)
+	if !loopback && !h.config.AllowRemote {
 		http.Error(w, "admin UI is restricted to localhost", http.StatusForbidden)
+		return
+	}
+	if h.config.Token != "" && !h.authorized(r) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="free-router admin", charset="UTF-8"`)
+		http.Error(w, "admin authentication required", http.StatusUnauthorized)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && !sameOrigin(r) {
+		http.Error(w, "cross-origin admin request rejected", http.StatusForbidden)
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/admin")
@@ -44,6 +65,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.updateConfig(w, r)
 	case r.Method == http.MethodPost && path == "/api/refresh":
 		h.refresh(w, r)
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/providers/") && strings.HasSuffix(path, "/test"):
+		h.testProvider(w, r, strings.TrimSuffix(strings.TrimPrefix(path, "/api/providers/"), "/test"))
 	case r.Method == http.MethodPost && path == "/api/credentials":
 		h.saveCredential(w, r)
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/credentials/"):
@@ -58,11 +81,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) authorized(r *http.Request) bool {
+	provided := ""
+	if username, password, ok := r.BasicAuth(); ok && username == "admin" {
+		provided = password
+	} else if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+		provided = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	}
+	return subtle.ConstantTimeCompare([]byte(provided), []byte(h.config.Token)) == 1
+}
+
 func (h *Handler) state(w http.ResponseWriter) {
 	entries, _ := h.vault.List()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"config": h.routes.Config(), "config_path": h.routes.Path(), "models": h.catalog.Models(),
 		"catalog": h.catalog.Status(), "providers": provider.BuiltinStatus(h.vault.Get), "credentials": entries,
+		"health": h.health.Snapshot(), "summary": h.health.Summary(),
 	})
 }
 
@@ -85,6 +119,21 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"refreshed": true, "models": len(h.catalog.Models())})
+}
+
+func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request, escapedID string) {
+	providerID, err := url.PathUnescape(escapedID)
+	if err != nil || providerID == "" {
+		writeError(w, http.StatusBadRequest, "invalid provider")
+		return
+	}
+	started := time.Now()
+	count, err := h.catalog.Probe(r.Context(), providerID)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "provider": providerID, "models": count, "latency_ms": time.Since(started).Milliseconds()})
 }
 
 func (h *Handler) saveCredential(w http.ResponseWriter, r *http.Request) {
@@ -151,6 +200,22 @@ func isLoopback(remote string) bool {
 	}
 	ip := net.ParseIP(strings.Trim(host, "[]"))
 	return ip != nil && ip.IsLoopback()
+}
+
+func sameOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	return err == nil && strings.EqualFold(parsed.Host, r.Host)
+}
+
+func secureHeaders(w http.ResponseWriter) {
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

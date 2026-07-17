@@ -31,6 +31,16 @@ func TestSiliconFlowDiscoversOnlyChatModels(t *testing.T) {
 	}
 }
 
+func TestProviderEndpointOverride(t *testing.T) {
+	spec := Spec{BaseURL: "https://example.com/v1", Endpoints: map[string]string{"/embeddings": "https://embed.example.com/run"}}
+	if got := spec.APIEndpoint("/embeddings"); got != "https://embed.example.com/run" {
+		t.Fatalf("endpoint = %q", got)
+	}
+	if got := spec.APIEndpoint("/audio/speech"); got != "https://example.com/v1/audio/speech" {
+		t.Fatalf("default endpoint = %q", got)
+	}
+}
+
 func TestSavedCredentialEnablesProviderAndEnvironmentWins(t *testing.T) {
 	for _, key := range SupportedKeyEnvs() {
 		t.Setenv(key, "")

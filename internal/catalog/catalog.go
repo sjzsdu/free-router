@@ -266,6 +266,18 @@ func (s *Store) Start(ctx context.Context, interval time.Duration) {
 	}()
 }
 
+func (s *Store) Probe(ctx context.Context, providerID string) (int, error) {
+	spec, ok := s.registry.Get(providerID)
+	if !ok {
+		return 0, fmt.Errorf("provider %q is not configured", providerID)
+	}
+	models, err := s.fetch(ctx, spec)
+	if err != nil {
+		return 0, err
+	}
+	return len(models), nil
+}
+
 func (s *Store) Models() []Model {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
