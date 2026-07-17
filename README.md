@@ -33,7 +33,7 @@
 ```bash
 free-router setup siliconflow
 free-router setup groq
-free-router
+free-router serve
 ```
 
 也可以不带 provider，按提示选择：
@@ -49,7 +49,7 @@ export GROQ_API_KEY=gsk_xxx
 export GEMINI_API_KEY=xxx
 export GITHUB_TOKEN=github_pat_xxx
 
-go run .
+go run . serve
 ```
 
 优先级是：环境变量 > 已保存凭据。Cloudflare 除 API Token 外仍需设置非敏感的 `CLOUDFLARE_ACCOUNT_ID`。
@@ -59,34 +59,34 @@ go run .
 ```bash
 make install
 free-router version
-free-router
+free-router serve
 ```
 
 Release 压缩包中只有一个 `free-router` 二进制文件。解压后直接执行安装命令即可，不需要 Go、Make 或额外安装脚本：
 
 ```bash
 chmod +x free-router
-./free-router service install
-~/.local/bin/free-router service status
+./free-router daemon install
+~/.local/bin/free-router daemon status
 ```
 
-程序会自行复制到 `~/.local/bin/free-router`，因此安装完成后可以删除下载目录中的原文件。整个过程无需 `sudo`。macOS 使用 LaunchAgent，Linux 使用 systemd user service；登录后自动启动，异常退出后自动恢复。
+程序会自行复制到 `~/.local/bin/free-router`，因此安装完成后可以删除下载目录中的原文件。整个过程无需 `sudo`。macOS 使用 LaunchAgent，Linux 使用 systemd user service；登录后自动启动，异常退出后自动恢复。安装 daemon 时，程序会把当前已命中的 Provider 环境变量保存到权限为 `0600` 的本机快照，确保后台进程也能读取；环境变量变更后重新执行 `free-router daemon install` 即可更新快照并重启。
 
-从源码安装时也可以使用 `make service-install`。
+从源码安装时也可以使用 `make daemon-install`。
 
 日常管理命令：
 
 ```bash
-free-router service start
-free-router service stop
-free-router service restart
-free-router service logs --follow
-free-router service uninstall
+free-router daemon start
+free-router daemon stop
+free-router daemon restart
+free-router daemon logs --follow
+free-router daemon uninstall
 ```
 
-`service` 也可以写成 `daemon`。管理页面头部的状态按钮会显示启动方式、版本、PID、运行时间、缓存模型数和请求数，并每 5 秒检查一次连接状态。
+管理页面头部的状态按钮会显示启动方式、版本、PID、运行时间、缓存模型数和请求数，并每 5 秒检查一次连接状态。
 
-服务默认监听 `http://localhost:1314`。不带子命令等同于 `free-router serve`。
+服务默认监听 `http://localhost:1314`。`free-router serve` 用于前台运行；`free-router daemon` 管理后台守护进程。不带子命令时显示帮助，不会隐式启动服务。
 
 启动后打开管理界面：
 
@@ -215,7 +215,11 @@ curl -s http://localhost:1314/v1/models | jq '.data[] | select(.id != "auto") | 
 
 ```json
 {
-  "version": 3,
+  "version": 4,
+  "provider_env": {
+    "gemini": ["GEMINI_API_KEY", "MY_GEMINI_KEY"],
+    "groq": ["GROQ_API_KEY"]
+  },
   "routes": {
     "chat": {
       "type": "chat",
@@ -246,7 +250,9 @@ curl -s http://localhost:1314/v1/models | jq '.data[] | select(.id != "auto") | 
 }
 ```
 
-旧版配置会自动迁移到 version 3：原来的 `normal` 聊天类型会转换成 `chat` 或 `chat-tools`，并立即写回配置文件。缺少的内置路由会自动补全。推荐通过 Web 界面修改；也可以停止服务后手工编辑。路径可用 `--config` 或 `FREE_ROUTER_CONFIG` 覆盖。
+`provider_env` 是 provider 到 API Key 环境变量名数组的映射。数组按顺序查找，第一个非空环境变量会作为该 Provider 的凭据并自动启用它；用户配置的名称会排在内置名称前面，合并后自动去重。配置文件只保存变量名，不保存变量值。Cloudflare 仍需额外提供 `CLOUDFLARE_ACCOUNT_ID`。
+
+旧版配置会自动迁移到 version 4：原来的 `normal` 聊天类型会转换成 `chat` 或 `chat-tools`，并立即写回配置文件。缺少的内置路由会自动补全。推荐通过 Web 界面修改；也可以停止服务后手工编辑。路径可用 `--config` 或 `FREE_ROUTER_CONFIG` 覆盖。
 
 ## 模型缓存与自维护
 
@@ -292,8 +298,10 @@ export FREE_ROUTER_PROVIDERS='[
 ## 命令
 
 ```bash
-free-router                       # 启动服务
-free-router serve --addr :9000
+free-router                       # 显示帮助
+free-router serve --addr :9000    # 前台启动服务
+free-router daemon install        # 安装并启动守护进程
+free-router daemon status         # 查看守护进程状态
 free-router providers             # 查看内置源及配置状态
 free-router models                # 聚合所有已配置源的实时模型
 free-router setup groq             # 交互式保存 API Key
@@ -308,7 +316,7 @@ free-router version
 ```bash
 export FREE_ROUTER_ADMIN_ALLOW_REMOTE=true
 export FREE_ROUTER_ADMIN_TOKEN='使用足够长的随机字符串'
-free-router
+free-router serve
 ```
 
 浏览器会显示 HTTP Basic 登录框，用户名固定为 `admin`，密码是令牌。管理 API 也接受 `Authorization: Bearer <token>`。服务会拒绝没有令牌的远程管理模式，并对写操作执行同源检查；生产环境仍建议放在 HTTPS 反向代理或 VPN 后面。

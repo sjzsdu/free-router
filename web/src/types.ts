@@ -47,12 +47,15 @@ export interface RouterConfig {
   version: number
   routes: Record<string, Route>
   models: Record<string, ModelOverride>
+  provider_env?: Record<string, string[]>
 }
 
 export interface ProviderStatus {
   id: string
-  env: string
+  envs: string[]
+  matched_env?: string
   requires?: string[]
+  missing_required?: string[]
   configured: boolean
   source: 'environment' | 'saved' | 'missing'
   tier: string

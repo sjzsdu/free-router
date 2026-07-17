@@ -4,3 +4,4 @@
 *.tmp
 /web/node_modules/
 /web/*.tsbuildinfo
+dist/

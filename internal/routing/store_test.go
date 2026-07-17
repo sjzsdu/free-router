@@ -69,11 +69,42 @@ func TestVersionTwoNormalRoutesMigrateToUserFacingTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := store.Config()
-	if config.Version != 3 || config.Routes["chat"].Type != "chat" || config.Routes["chat-tools"].Type != "chat-tools" || config.Models["provider/model"].Type != "chat" {
+	if config.Version != CurrentVersion || config.Routes["chat"].Type != "chat" || config.Routes["chat-tools"].Type != "chat-tools" || config.Models["provider/model"].Type != "chat" {
 		t.Fatalf("migrated config = %#v", config)
 	}
 	persisted, err := os.ReadFile(path)
-	if err != nil || !strings.Contains(string(persisted), `"version": 3`) {
+	if err != nil || !strings.Contains(string(persisted), `"version": 4`) {
 		t.Fatalf("migration was not persisted: %s, %v", persisted, err)
+	}
+}
+
+func TestProviderEnvironmentMappingPersistsAndDeduplicates(t *testing.T) {
+	store, err := New(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := store.Config()
+	config.ProviderEnv["gemini"] = []string{" MY_GEMINI_KEY ", "GEMINI_API_KEY", "MY_GEMINI_KEY"}
+	if err := store.Update(config); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := New(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.Config().ProviderEnv["gemini"]; !reflect.DeepEqual(got, []string{"MY_GEMINI_KEY", "GEMINI_API_KEY"}) {
+		t.Fatalf("provider env = %#v", got)
+	}
+}
+
+func TestProviderEnvironmentMappingRejectsInvalidNames(t *testing.T) {
+	store, err := New(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := store.Config()
+	config.ProviderEnv["gemini"] = []string{"NOT-AN-ENV"}
+	if err := store.Update(config); err == nil {
+		t.Fatal("invalid environment variable was accepted")
 	}
 }

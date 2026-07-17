@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
@@ -100,7 +101,7 @@ func (h *Handler) state(w http.ResponseWriter) {
 	entries, _ := h.vault.List()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"config": h.routes.Config(), "config_path": h.routes.Path(), "models": h.catalog.Models(),
-		"catalog": h.catalog.Status(), "providers": provider.BuiltinStatus(h.vault.Get), "credentials": entries,
+		"catalog": h.catalog.Status(), "providers": provider.BuiltinStatusWithEnv(provider.EnvMap(h.routes.Config().ProviderEnv), h.vault.Get), "credentials": entries,
 		"health": h.health.Snapshot(), "summary": h.health.Summary(), "runtime": h.runtimeState(),
 	})
 }
@@ -123,6 +124,7 @@ func (h *Handler) runtimeState() map[string]any {
 }
 
 func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
+	previousProviderEnv := h.routes.Config().ProviderEnv
 	var config routing.Config
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&config); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid configuration")
@@ -131,6 +133,12 @@ func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
 	if err := h.routes.Update(config); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if !reflect.DeepEqual(previousProviderEnv, h.routes.Config().ProviderEnv) {
+		if err := h.reloadProviders(r); err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"saved": true, "config": h.routes.Config()})
 }

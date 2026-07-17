@@ -8,8 +8,8 @@ import (
 )
 
 func TestLaunchdPlistEscapesPathsAndSetsManager(t *testing.T) {
-	content := launchdPlist("/tmp/free & router", "/tmp/router <log>.txt")
-	for _, expected := range []string{"/tmp/free &amp; router", "/tmp/router &lt;log&gt;.txt", "FREE_ROUTER_SERVICE_MANAGER", "launchd"} {
+	content := launchdPlist("/tmp/free & router", "/tmp/router <log>.txt", "/tmp/daemon & env.json")
+	for _, expected := range []string{"/tmp/free &amp; router", "/tmp/router &lt;log&gt;.txt", "/tmp/daemon &amp; env.json", "FREE_ROUTER_SERVICE_MANAGER", "FREE_ROUTER_DAEMON_ENV_FILE", "launchd"} {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("plist does not contain %q: %s", expected, content)
 		}
@@ -17,12 +17,37 @@ func TestLaunchdPlistEscapesPathsAndSetsManager(t *testing.T) {
 }
 
 func TestSystemdServiceQuotesExecutable(t *testing.T) {
-	content := systemdService(`/opt/free router/free-router`)
+	content := systemdService(`/opt/free router/free-router`, `/home/test user/daemon-env.json`)
 	if !strings.Contains(content, `ExecStart="/opt/free router/free-router" serve`) {
 		t.Fatalf("unexpected unit: %s", content)
 	}
 	if !strings.Contains(content, "Restart=on-failure") {
 		t.Fatalf("unit should restart after failures: %s", content)
+	}
+	if !strings.Contains(content, `FREE_ROUTER_DAEMON_ENV_FILE="/home/test user/daemon-env.json"`) {
+		t.Fatalf("unit should include daemon environment file: %s", content)
+	}
+}
+
+func TestWriteEnvironmentUsesPrivateFile(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	manager := &Manager{goos: "linux", home: home}
+	if err := manager.writeEnvironment(map[string]string{"MY_GEMINI_KEY": "secret"}); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(manager.daemonEnvPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != `{"MY_GEMINI_KEY":"secret"}` {
+		t.Fatalf("environment content = %s", content)
+	}
+	info, err := os.Stat(manager.daemonEnvPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("environment permissions = %o", info.Mode().Perm())
 	}
 }
 

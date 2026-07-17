@@ -5,57 +5,73 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/sjzsdu/free-router/internal/provider"
 	servicepkg "github.com/sjzsdu/free-router/internal/service"
 	"github.com/spf13/cobra"
 )
 
-func addServiceCommands(root *cobra.Command) {
-	serviceCommand := &cobra.Command{
-		Use:     "service",
-		Aliases: []string{"daemon"},
-		Short:   "Manage free-router as a user service",
+func addDaemonCommands(root *cobra.Command, opts *options) {
+	daemonCommand := &cobra.Command{
+		Use:   "daemon",
+		Short: "Manage free-router as a background daemon",
 	}
 
-	serviceCommand.AddCommand(serviceAction("install", "Install and start the user service", func(command *cobra.Command, manager *servicepkg.Manager) error {
-		if err := manager.Install(command.Context()); err != nil {
+	daemonCommand.AddCommand(daemonAction("install", "Install and start the background daemon", func(command *cobra.Command, manager *servicepkg.Manager) error {
+		envMap, err := configuredEnvMap(*opts)
+		if err != nil {
 			return err
 		}
-		fmt.Printf("free-router installed to %s\nservice installed and started\n", manager.BinaryPath())
+		environment := make(map[string]string)
+		for _, name := range provider.EnvironmentNames(envMap) {
+			if value := os.Getenv(name); value != "" {
+				environment[name] = value
+			}
+		}
+		environment["FREE_ROUTER_ADDR"] = opts.addr
+		environment["FREE_ROUTER_CONFIG"] = opts.config
+		environment["FREE_ROUTER_CREDENTIALS"] = opts.credentials
+		if opts.providers != "" {
+			environment["FREE_ROUTER_PROVIDERS"] = opts.providers
+		}
+		if err := manager.Install(command.Context(), environment); err != nil {
+			return err
+		}
+		fmt.Printf("free-router installed to %s\ndaemon installed and started\n", manager.BinaryPath())
 		return nil
 	}))
-	serviceCommand.AddCommand(serviceAction("start", "Start the installed user service", func(command *cobra.Command, manager *servicepkg.Manager) error {
+	daemonCommand.AddCommand(daemonAction("start", "Start the installed daemon", func(command *cobra.Command, manager *servicepkg.Manager) error {
 		if err := manager.Start(command.Context()); err != nil {
 			return err
 		}
-		fmt.Println("free-router service started")
+		fmt.Println("free-router daemon started")
 		return nil
 	}))
-	serviceCommand.AddCommand(serviceAction("stop", "Stop the installed user service", func(command *cobra.Command, manager *servicepkg.Manager) error {
+	daemonCommand.AddCommand(daemonAction("stop", "Stop the installed daemon", func(command *cobra.Command, manager *servicepkg.Manager) error {
 		if err := manager.Stop(command.Context()); err != nil {
 			return err
 		}
-		fmt.Println("free-router service stopped")
+		fmt.Println("free-router daemon stopped")
 		return nil
 	}))
-	serviceCommand.AddCommand(serviceAction("restart", "Restart the installed user service", func(command *cobra.Command, manager *servicepkg.Manager) error {
+	daemonCommand.AddCommand(daemonAction("restart", "Restart the installed daemon", func(command *cobra.Command, manager *servicepkg.Manager) error {
 		if err := manager.Restart(command.Context()); err != nil {
 			return err
 		}
-		fmt.Println("free-router service restarted")
+		fmt.Println("free-router daemon restarted")
 		return nil
 	}))
-	serviceCommand.AddCommand(serviceAction("uninstall", "Stop and remove the user service", func(command *cobra.Command, manager *servicepkg.Manager) error {
+	daemonCommand.AddCommand(daemonAction("uninstall", "Stop and remove the daemon", func(command *cobra.Command, manager *servicepkg.Manager) error {
 		if err := manager.Uninstall(command.Context()); err != nil {
 			return err
 		}
-		fmt.Println("free-router service uninstalled")
+		fmt.Println("free-router daemon uninstalled")
 		return nil
 	}))
 
 	jsonOutput := false
 	statusCommand := &cobra.Command{
 		Use:   "status",
-		Short: "Show user service status",
+		Short: "Show daemon status",
 		RunE: func(command *cobra.Command, _ []string) error {
 			manager, err := servicepkg.New()
 			if err != nil {
@@ -81,12 +97,12 @@ func addServiceCommands(root *cobra.Command) {
 		},
 	}
 	statusCommand.Flags().BoolVar(&jsonOutput, "json", false, "print status as JSON")
-	serviceCommand.AddCommand(statusCommand)
+	daemonCommand.AddCommand(statusCommand)
 
 	follow, lines := false, 100
 	logsCommand := &cobra.Command{
 		Use:   "logs",
-		Short: "Show user service logs",
+		Short: "Show daemon logs",
 		RunE: func(command *cobra.Command, _ []string) error {
 			manager, err := servicepkg.New()
 			if err != nil {
@@ -97,11 +113,11 @@ func addServiceCommands(root *cobra.Command) {
 	}
 	logsCommand.Flags().BoolVarP(&follow, "follow", "f", false, "follow new log entries")
 	logsCommand.Flags().IntVarP(&lines, "lines", "n", lines, "number of recent lines")
-	serviceCommand.AddCommand(logsCommand)
-	root.AddCommand(serviceCommand)
+	daemonCommand.AddCommand(logsCommand)
+	root.AddCommand(daemonCommand)
 }
 
-func serviceAction(use, short string, action func(*cobra.Command, *servicepkg.Manager) error) *cobra.Command {
+func daemonAction(use, short string, action func(*cobra.Command, *servicepkg.Manager) error) *cobra.Command {
 	return &cobra.Command{
 		Use:   use,
 		Short: short,

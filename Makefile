@@ -13,7 +13,7 @@ endif
 LDFLAGS := -s -w
 
 .DEFAULT_GOAL := help
-.PHONY: help build web-install web-build web-check install uninstall service-install service-start service-stop service-restart service-status service-logs service-uninstall run test test-race test-cover vet fmt fmt-check version-check check tidy clean
+.PHONY: help build web-install web-build web-check install uninstall daemon-install daemon-start daemon-stop daemon-restart daemon-status daemon-logs daemon-uninstall run test test-race test-cover vet fmt fmt-check version-check check tidy clean
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -38,32 +38,32 @@ install: web-build ## Install free-router into GOBIN (defaults to GOPATH/bin)
 	GOBIN=$(GOBIN) $(GO) install -trimpath -ldflags="$(LDFLAGS)" .
 	@echo "installed $(BINARY) $(VERSION) to $(GOBIN)/$(BINARY)"
 
-service-install: install ## Install binary and start it as a user service
-	$(GOBIN)/$(BINARY) service install
+daemon-install: install ## Install binary and start it as a daemon
+	$(GOBIN)/$(BINARY) daemon install
 
-service-start: ## Start the installed user service
-	$(GOBIN)/$(BINARY) service start
+daemon-start: ## Start the installed daemon
+	$(GOBIN)/$(BINARY) daemon start
 
-service-stop: ## Stop the installed user service
-	$(GOBIN)/$(BINARY) service stop
+daemon-stop: ## Stop the installed daemon
+	$(GOBIN)/$(BINARY) daemon stop
 
-service-restart: ## Restart the installed user service
-	$(GOBIN)/$(BINARY) service restart
+daemon-restart: ## Restart the installed daemon
+	$(GOBIN)/$(BINARY) daemon restart
 
-service-status: ## Show user service status
-	$(GOBIN)/$(BINARY) service status
+daemon-status: ## Show daemon status
+	$(GOBIN)/$(BINARY) daemon status
 
-service-logs: ## Follow user service logs
-	$(GOBIN)/$(BINARY) service logs --follow
+daemon-logs: ## Follow daemon logs
+	$(GOBIN)/$(BINARY) daemon logs --follow
 
-service-uninstall: ## Stop and remove the user service
-	$(GOBIN)/$(BINARY) service uninstall
+daemon-uninstall: ## Stop and remove the daemon
+	$(GOBIN)/$(BINARY) daemon uninstall
 
 uninstall: ## Remove the installed binary
 	rm -f $(GOBIN)/$(BINARY)
 
 run: web-build ## Run the service
-	$(GO) run -ldflags="$(LDFLAGS)" .
+	$(GO) run -ldflags="$(LDFLAGS)" . serve
 
 test: ## Run unit and integration tests
 	$(GO) test ./...

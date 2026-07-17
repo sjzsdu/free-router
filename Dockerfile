@@ -9,3 +9,4 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /free-router /free-router
 EXPOSE 1314
 ENTRYPOINT ["/free-router"]
+CMD ["serve"]

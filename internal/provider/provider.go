@@ -81,18 +81,52 @@ type Registry struct {
 
 type KeyResolver func(providerID string) (string, bool)
 
+type EnvMap map[string][]string
+
+func DefaultEnvMap() EnvMap {
+	result := make(EnvMap)
+	for _, spec := range builtins() {
+		if spec.APIKeyEnv != "" {
+			result[spec.ID] = []string{spec.APIKeyEnv}
+		}
+	}
+	return result
+}
+
+func MergeEnvMap(custom EnvMap) EnvMap {
+	result := make(EnvMap)
+	defaults := DefaultEnvMap()
+	for providerID, names := range custom {
+		result[providerID] = mergeEnvNames(names, defaults[providerID])
+	}
+	for providerID, names := range defaults {
+		if _, ok := result[providerID]; !ok {
+			result[providerID] = append([]string{}, names...)
+		}
+	}
+	return result
+}
+
 func NewRegistry(customJSON string, resolvers ...KeyResolver) (*Registry, error) {
-	return newRegistry(customJSON, false, resolvers...)
+	return newRegistry(customJSON, false, DefaultEnvMap(), resolvers...)
 }
 
 func NewRegistryAllowEmpty(customJSON string, resolvers ...KeyResolver) (*Registry, error) {
-	return newRegistry(customJSON, true, resolvers...)
+	return newRegistry(customJSON, true, DefaultEnvMap(), resolvers...)
 }
 
-func newRegistry(customJSON string, allowEmpty bool, resolvers ...KeyResolver) (*Registry, error) {
+func NewRegistryWithEnv(customJSON string, envMap EnvMap, resolvers ...KeyResolver) (*Registry, error) {
+	return newRegistry(customJSON, false, MergeEnvMap(envMap), resolvers...)
+}
+
+func NewRegistryAllowEmptyWithEnv(customJSON string, envMap EnvMap, resolvers ...KeyResolver) (*Registry, error) {
+	return newRegistry(customJSON, true, MergeEnvMap(envMap), resolvers...)
+}
+
+func newRegistry(customJSON string, allowEmpty bool, envMap EnvMap, resolvers ...KeyResolver) (*Registry, error) {
 	registry := &Registry{providers: make(map[string]Spec)}
 	for _, spec := range builtins() {
-		registry.addIfConfigured(spec, resolvers)
+		registry.addIfConfigured(spec, envMap, resolvers)
 	}
 	if strings.TrimSpace(customJSON) != "" {
 		var custom []Spec
@@ -103,8 +137,8 @@ func newRegistry(customJSON string, allowEmpty bool, resolvers ...KeyResolver) (
 			if spec.ID == "" || spec.BaseURL == "" {
 				return nil, fmt.Errorf("custom provider requires id and base_url")
 			}
-			if spec.APIKey == "" && spec.APIKeyEnv != "" {
-				spec.APIKey = os.Getenv(spec.APIKeyEnv)
+			if spec.APIKey == "" {
+				spec.APIKey, _, _ = resolveEnvironment(spec, envMap)
 			}
 			if spec.APIKey == "" {
 				spec.APIKey, _ = resolveKey(spec.ID, resolvers)
@@ -115,7 +149,7 @@ func newRegistry(customJSON string, allowEmpty bool, resolvers ...KeyResolver) (
 				}
 				return nil, fmt.Errorf("custom provider %q has no API key; set api_key_env or no_auth", spec.ID)
 			}
-			registry.addIfConfigured(spec, resolvers)
+			registry.addIfConfigured(spec, envMap, resolvers)
 		}
 	}
 	if len(registry.providers) == 0 && !allowEmpty {
@@ -143,7 +177,11 @@ func (registry *Registry) All() []Spec {
 }
 
 func (registry *Registry) Reload(customJSON string, resolvers ...KeyResolver) error {
-	updated, err := newRegistry(customJSON, true, resolvers...)
+	return registry.ReloadWithEnv(customJSON, DefaultEnvMap(), resolvers...)
+}
+
+func (registry *Registry) ReloadWithEnv(customJSON string, envMap EnvMap, resolvers ...KeyResolver) error {
+	updated, err := newRegistry(customJSON, true, MergeEnvMap(envMap), resolvers...)
 	if err != nil {
 		return err
 	}
@@ -153,9 +191,9 @@ func (registry *Registry) Reload(customJSON string, resolvers ...KeyResolver) er
 	return nil
 }
 
-func (registry *Registry) addIfConfigured(spec Spec, resolvers []KeyResolver) {
-	if spec.APIKey == "" && spec.APIKeyEnv != "" {
-		spec.APIKey = os.Getenv(spec.APIKeyEnv)
+func (registry *Registry) addIfConfigured(spec Spec, envMap EnvMap, resolvers []KeyResolver) {
+	if spec.APIKey == "" {
+		spec.APIKey, _, _ = resolveEnvironment(spec, envMap)
 	}
 	if spec.APIKey == "" {
 		spec.APIKey, _ = resolveKey(spec.ID, resolvers)
@@ -186,10 +224,39 @@ func SupportedKeyEnvs() []string {
 	return result
 }
 
+func EnvironmentNames(custom EnvMap) []string {
+	merged := MergeEnvMap(custom)
+	seen := make(map[string]bool)
+	result := make([]string, 0)
+	for _, names := range merged {
+		for _, name := range names {
+			if !seen[name] {
+				seen[name] = true
+				result = append(result, name)
+			}
+		}
+	}
+	for _, spec := range builtins() {
+		for _, name := range spec.RequiredEnvs {
+			if !seen[name] {
+				seen[name] = true
+				result = append(result, name)
+			}
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
 func BuiltinStatus(resolvers ...KeyResolver) []map[string]any {
+	return BuiltinStatusWithEnv(DefaultEnvMap(), resolvers...)
+}
+
+func BuiltinStatusWithEnv(envMap EnvMap, resolvers ...KeyResolver) []map[string]any {
+	envMap = MergeEnvMap(envMap)
 	result := make([]map[string]any, 0, len(builtins()))
 	for _, spec := range builtins() {
-		configured := os.Getenv(spec.APIKeyEnv) != ""
+		_, matchedEnv, configured := resolveEnvironment(spec, envMap)
 		source := "environment"
 		if !configured {
 			_, configured = resolveKey(spec.ID, resolvers)
@@ -198,12 +265,53 @@ func BuiltinStatus(resolvers ...KeyResolver) []map[string]any {
 		if !configured {
 			source = "missing"
 		}
+		missingRequired := make([]string, 0)
 		for _, key := range spec.RequiredEnvs {
-			configured = configured && os.Getenv(key) != ""
+			if os.Getenv(key) == "" {
+				missingRequired = append(missingRequired, key)
+				configured = false
+			}
 		}
 		result = append(result, map[string]any{
-			"id": spec.ID, "env": spec.APIKeyEnv, "requires": spec.RequiredEnvs, "configured": configured, "source": source, "tier": spec.Tier,
+			"id": spec.ID, "envs": effectiveEnvNames(spec, envMap), "matched_env": matchedEnv,
+			"requires": spec.RequiredEnvs, "missing_required": missingRequired,
+			"configured": configured, "source": source, "tier": spec.Tier,
 		})
+	}
+	return result
+}
+
+func resolveEnvironment(spec Spec, envMap EnvMap) (string, string, bool) {
+	for _, name := range effectiveEnvNames(spec, envMap) {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value, name, true
+		}
+	}
+	return "", "", false
+}
+
+func effectiveEnvNames(spec Spec, envMap EnvMap) []string {
+	if names := envMap[spec.ID]; len(names) > 0 {
+		return names
+	}
+	if spec.APIKeyEnv != "" {
+		return []string{spec.APIKeyEnv}
+	}
+	return nil
+}
+
+func mergeEnvNames(groups ...[]string) []string {
+	seen := make(map[string]bool)
+	result := make([]string, 0)
+	for _, group := range groups {
+		for _, name := range group {
+			name = strings.TrimSpace(name)
+			if name == "" || seen[name] {
+				continue
+			}
+			seen[name] = true
+			result = append(result, name)
+		}
 	}
 	return result
 }

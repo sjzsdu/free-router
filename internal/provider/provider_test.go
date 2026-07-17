@@ -2,6 +2,7 @@ package provider
 
 import (
 	"net/url"
+	"reflect"
 	"testing"
 )
 
@@ -65,5 +66,34 @@ func TestSavedCredentialEnablesProviderAndEnvironmentWins(t *testing.T) {
 	spec, _ = registry.Get("groq")
 	if spec.APIKey != "environment-key" {
 		t.Fatalf("environment must take precedence, got %q", spec.APIKey)
+	}
+}
+
+func TestConfiguredEnvironmentAliasEnablesProvider(t *testing.T) {
+	for _, key := range SupportedKeyEnvs() {
+		t.Setenv(key, "")
+	}
+	t.Setenv("MY_GEMINI_KEY", "mapped-key")
+	registry, err := NewRegistryWithEnv("", EnvMap{"gemini": {"MY_GEMINI_KEY"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, ok := registry.Get("gemini")
+	if !ok || spec.APIKey != "mapped-key" {
+		t.Fatalf("mapped environment did not enable provider: %#v, %v", spec, ok)
+	}
+	status := BuiltinStatusWithEnv(EnvMap{"gemini": {"MY_GEMINI_KEY"}})
+	for _, item := range status {
+		if item["id"] == "gemini" && item["matched_env"] != "MY_GEMINI_KEY" {
+			t.Fatalf("matched environment = %#v", item["matched_env"])
+		}
+	}
+}
+
+func TestCustomEnvironmentAliasesPrecedeBuiltins(t *testing.T) {
+	merged := MergeEnvMap(EnvMap{"gemini": {"MY_GEMINI_KEY", "GEMINI_API_KEY"}})
+	want := []string{"MY_GEMINI_KEY", "GEMINI_API_KEY"}
+	if got := merged["gemini"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("merged aliases = %#v", got)
 	}
 }

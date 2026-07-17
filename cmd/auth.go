@@ -76,7 +76,11 @@ func addCredential(cmd *cobra.Command, opts *options, providerID string) error {
 	reader := bufio.NewReader(cmd.InOrStdin())
 	if strings.TrimSpace(providerID) == "" {
 		fmt.Fprintln(cmd.ErrOrStderr(), "Available built-in providers:")
-		for _, status := range provider.BuiltinStatus() {
+		envMap, err := configuredEnvMap(*opts)
+		if err != nil {
+			return err
+		}
+		for _, status := range provider.BuiltinStatusWithEnv(envMap) {
 			fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", status["id"])
 		}
 		fmt.Fprint(cmd.ErrOrStderr(), "Provider ID: ")

@@ -13,7 +13,7 @@ import (
 	"github.com/sjzsdu/free-router/internal/catalog"
 )
 
-const CurrentVersion = 3
+const CurrentVersion = 4
 
 type Route struct {
 	Type        string   `json:"type"`
@@ -22,9 +22,10 @@ type Route struct {
 }
 
 type Config struct {
-	Version int                      `json:"version"`
-	Routes  map[string]Route         `json:"routes"`
-	Models  map[string]ModelOverride `json:"models"`
+	Version     int                      `json:"version"`
+	ProviderEnv map[string][]string      `json:"provider_env"`
+	Routes      map[string]Route         `json:"routes"`
+	Models      map[string]ModelOverride `json:"models"`
 }
 
 type ModelOverride struct {
@@ -42,7 +43,7 @@ type Store struct {
 }
 
 func DefaultConfig() Config {
-	return Config{Version: CurrentVersion, Models: map[string]ModelOverride{}, Routes: map[string]Route{
+	return Config{Version: CurrentVersion, Models: map[string]ModelOverride{}, ProviderEnv: map[string][]string{}, Routes: map[string]Route{
 		"chat":       {Type: "chat", Models: []string{}},
 		"chat-tools": {Type: "chat-tools", RequireTool: true, Models: []string{}},
 		"embedding":  {Type: "embedding", Models: []string{}},
@@ -228,6 +229,9 @@ func mergeDefaults(config Config) Config {
 	if config.Models == nil {
 		config.Models = make(map[string]ModelOverride)
 	}
+	if config.ProviderEnv == nil {
+		config.ProviderEnv = make(map[string][]string)
+	}
 	for alias, route := range defaults.Routes {
 		if _, ok := config.Routes[alias]; !ok {
 			config.Routes[alias] = route
@@ -286,11 +290,35 @@ func validate(config *Config) error {
 		cleanedOverrides[model] = override
 	}
 	config.Models = cleanedOverrides
+	cleanedProviderEnv := make(map[string][]string, len(config.ProviderEnv))
+	for providerID, names := range config.ProviderEnv {
+		providerID = strings.TrimSpace(providerID)
+		if providerID == "" {
+			continue
+		}
+		seen := make(map[string]bool)
+		cleaned := make([]string, 0, len(names))
+		for _, name := range names {
+			name = strings.TrimSpace(name)
+			if name == "" || seen[name] {
+				continue
+			}
+			if !validEnvName(name) {
+				return fmt.Errorf("invalid environment variable %q for provider %q", name, providerID)
+			}
+			seen[name] = true
+			cleaned = append(cleaned, name)
+		}
+		if len(cleaned) > 0 {
+			cleanedProviderEnv[providerID] = cleaned
+		}
+	}
+	config.ProviderEnv = cleanedProviderEnv
 	return nil
 }
 
 func cloneConfig(config Config) Config {
-	clone := Config{Version: config.Version, Routes: make(map[string]Route, len(config.Routes)), Models: make(map[string]ModelOverride, len(config.Models))}
+	clone := Config{Version: config.Version, Routes: make(map[string]Route, len(config.Routes)), Models: make(map[string]ModelOverride, len(config.Models)), ProviderEnv: make(map[string][]string, len(config.ProviderEnv))}
 	for alias, route := range config.Routes {
 		route.Models = append([]string{}, route.Models...)
 		clone.Routes[alias] = route
@@ -298,5 +326,18 @@ func cloneConfig(config Config) Config {
 	for model, override := range config.Models {
 		clone.Models[model] = override
 	}
+	for providerID, names := range config.ProviderEnv {
+		clone.ProviderEnv[providerID] = append([]string{}, names...)
+	}
 	return clone
+}
+
+func validEnvName(name string) bool {
+	for index, character := range name {
+		if (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z') || character == '_' || (index > 0 && character >= '0' && character <= '9') {
+			continue
+		}
+		return false
+	}
+	return name != ""
 }

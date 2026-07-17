@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -57,7 +58,7 @@ func New() (*Manager, error) {
 	return &Manager{goos: runtime.GOOS, executable: executable, home: home, uid: uid}, nil
 }
 
-func (m *Manager) Install(ctx context.Context) error {
+func (m *Manager) Install(ctx context.Context, environment map[string]string) error {
 	if m.goos != "darwin" && m.goos != "linux" {
 		return m.unsupported()
 	}
@@ -66,6 +67,9 @@ func (m *Manager) Install(ctx context.Context) error {
 		return err
 	}
 	m.executable = installed
+	if err := m.writeEnvironment(environment); err != nil {
+		return err
+	}
 	switch m.goos {
 	case "darwin":
 		return m.installLaunchd(ctx)
@@ -81,7 +85,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	switch m.goos {
 	case "darwin":
 		if _, err := os.Stat(m.launchdPath()); err != nil {
-			return errors.New("service is not installed; run free-router service install")
+			return errors.New("daemon is not installed; run free-router daemon install")
 		}
 		_ = m.run(ctx, "launchctl", "enable", m.launchdTarget())
 		if err := m.run(ctx, "launchctl", "bootstrap", m.launchdDomain(), m.launchdPath()); err != nil {
@@ -135,12 +139,14 @@ func (m *Manager) Uninstall(ctx context.Context) error {
 		if err := os.Remove(m.launchdPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove LaunchAgent: %w", err)
 		}
+		_ = os.Remove(m.daemonEnvPath())
 		return nil
 	case "linux":
 		_ = m.run(ctx, "systemctl", "--user", "disable", "--now", systemdUnit)
 		if err := os.Remove(m.systemdPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove systemd unit: %w", err)
 		}
+		_ = os.Remove(m.daemonEnvPath())
 		return m.run(ctx, "systemctl", "--user", "daemon-reload")
 	default:
 		return m.unsupported()
@@ -218,7 +224,7 @@ func (m *Manager) installLaunchd(ctx context.Context) error {
 	if err := os.MkdirAll(filepath.Dir(m.logPath()), 0o755); err != nil {
 		return err
 	}
-	content := launchdPlist(m.executable, m.logPath())
+	content := launchdPlist(m.executable, m.logPath(), m.daemonEnvPath())
 	if err := os.WriteFile(m.launchdPath(), []byte(content), 0o644); err != nil {
 		return fmt.Errorf("write LaunchAgent: %w", err)
 	}
@@ -234,13 +240,33 @@ func (m *Manager) installSystemd(ctx context.Context) error {
 	if err := os.MkdirAll(filepath.Dir(m.systemdPath()), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(m.systemdPath(), []byte(systemdService(m.executable)), 0o644); err != nil {
+	if err := os.WriteFile(m.systemdPath(), []byte(systemdService(m.executable, m.daemonEnvPath())), 0o644); err != nil {
 		return fmt.Errorf("write systemd unit: %w", err)
 	}
 	if err := m.run(ctx, "systemctl", "--user", "daemon-reload"); err != nil {
 		return err
 	}
 	return m.run(ctx, "systemctl", "--user", "enable", "--now", systemdUnit)
+}
+
+func (m *Manager) writeEnvironment(environment map[string]string) error {
+	if environment == nil {
+		environment = map[string]string{}
+	}
+	content, err := json.Marshal(environment)
+	if err != nil {
+		return fmt.Errorf("encode daemon environment: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(m.daemonEnvPath()), 0o700); err != nil {
+		return fmt.Errorf("create daemon environment directory: %w", err)
+	}
+	if err := os.WriteFile(m.daemonEnvPath(), content, 0o600); err != nil {
+		return fmt.Errorf("write daemon environment: %w", err)
+	}
+	if err := os.Chmod(m.daemonEnvPath(), 0o600); err != nil {
+		return fmt.Errorf("secure daemon environment: %w", err)
+	}
+	return nil
 }
 
 func (m *Manager) installBinary() (string, error) {
@@ -316,6 +342,12 @@ func (m *Manager) launchdTarget() string { return m.launchdDomain() + "/" + laun
 func (m *Manager) systemdPath() string {
 	return filepath.Join(m.home, ".config", "systemd", "user", systemdUnit)
 }
+func (m *Manager) daemonEnvPath() string {
+	if m.goos == "darwin" {
+		return filepath.Join(m.home, "Library", "Application Support", "free-router", "daemon-env.json")
+	}
+	return filepath.Join(m.home, ".config", "free-router", "daemon-env.json")
+}
 
 func (m *Manager) unsupported() error {
 	return fmt.Errorf("service management is not supported on %s; use macOS LaunchAgent or Linux systemd user services", m.goos)
@@ -337,7 +369,7 @@ func parseLaunchdPID(output string) int {
 	return 0
 }
 
-func launchdPlist(executable, logPath string) string {
+func launchdPlist(executable, logPath, envPath string) string {
 	escape := func(value string) string {
 		var output strings.Builder
 		_ = xml.EscapeText(&output, []byte(value))
@@ -352,15 +384,18 @@ func launchdPlist(executable, logPath string) string {
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ProcessType</key><string>Background</string>
-  <key>EnvironmentVariables</key><dict><key>FREE_ROUTER_SERVICE_MANAGER</key><string>launchd</string></dict>
+  <key>EnvironmentVariables</key><dict>
+    <key>FREE_ROUTER_SERVICE_MANAGER</key><string>launchd</string>
+    <key>FREE_ROUTER_DAEMON_ENV_FILE</key><string>%s</string>
+  </dict>
   <key>StandardOutPath</key><string>%s</string>
   <key>StandardErrorPath</key><string>%s</string>
 </dict>
 </plist>
-`, launchdLabel, escape(executable), escape(logPath), escape(logPath))
+`, launchdLabel, escape(executable), escape(envPath), escape(logPath), escape(logPath))
 }
 
-func systemdService(executable string) string {
+func systemdService(executable, envPath string) string {
 	quoted := strconv.Quote(executable)
 	return fmt.Sprintf(`[Unit]
 Description=Free Router model gateway
@@ -371,10 +406,11 @@ Wants=network-online.target
 Type=simple
 ExecStart=%s serve
 Environment=FREE_ROUTER_SERVICE_MANAGER=systemd
+Environment=FREE_ROUTER_DAEMON_ENV_FILE=%s
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=default.target
-`, quoted)
+`, quoted, strconv.Quote(envPath))
 }

@@ -45,6 +45,9 @@ type options struct {
 }
 
 func Execute() error {
+	if err := loadDaemonEnvironment(); err != nil {
+		return err
+	}
 	opts := defaultOptions()
 	root := &cobra.Command{
 		Use:           "free-router",
@@ -52,12 +55,12 @@ func Execute() error {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runServer(cmd.Context(), opts)
+			return cmd.Help()
 		},
 	}
 	bindFlags(root, &opts)
 	addAuthCommands(root, &opts)
-	addServiceCommands(root)
+	addDaemonCommands(root, &opts)
 
 	serve := &cobra.Command{
 		Use:   "serve",
@@ -88,7 +91,11 @@ func Execute() error {
 		Short: "Show built-in free providers and configuration status",
 		RunE: func(_ *cobra.Command, _ []string) error {
 			vault := credentials.New(opts.credentials)
-			return json.NewEncoder(os.Stdout).Encode(provider.BuiltinStatus(vault.Get))
+			envMap, err := configuredEnvMap(opts)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(provider.BuiltinStatusWithEnv(envMap, vault.Get))
 		},
 	})
 	root.AddCommand(&cobra.Command{
@@ -145,13 +152,13 @@ func runServer(ctx context.Context, opts options) error {
 		return errors.New("FREE_ROUTER_ADMIN_TOKEN is required when admin-allow-remote is enabled")
 	}
 	vault := credentials.New(opts.credentials)
-	registry, err := provider.NewRegistryAllowEmpty(opts.providers, vault.Get)
-	if err != nil {
-		return err
-	}
 	routes, err := routing.New(opts.config)
 	if err != nil {
 		return fmt.Errorf("load route configuration: %w", err)
+	}
+	registry, err := provider.NewRegistryAllowEmptyWithEnv(opts.providers, provider.EnvMap(routes.Config().ProviderEnv), vault.Get)
+	if err != nil {
+		return err
 	}
 	store := catalog.New(registry, opts.cache, catalogHTTPClient())
 	if len(registry.All()) > 0 {
@@ -163,7 +170,9 @@ func runServer(ctx context.Context, opts options) error {
 
 	tracker := health.New()
 	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts, Routes: routes, Health: tracker}, http.DefaultClient)
-	reloadProviders := func() error { return registry.Reload(opts.providers, vault.Get) }
+	reloadProviders := func() error {
+		return registry.ReloadWithEnv(opts.providers, provider.EnvMap(routes.Config().ProviderEnv), vault.Get)
+	}
 	handler.Handle("GET /admin", http.RedirectHandler("/admin/", http.StatusTemporaryRedirect))
 	handler.Handle("/admin/", admin.New(routes, store, vault, tracker, admin.Config{AllowRemote: opts.adminAllowRemote, Token: opts.adminToken, Version: version}, reloadProviders))
 	server := &http.Server{
@@ -194,7 +203,19 @@ func runServer(ctx context.Context, opts options) error {
 
 func newRegistry(opts options) (*provider.Registry, error) {
 	vault := credentials.New(opts.credentials)
-	return provider.NewRegistry(opts.providers, vault.Get)
+	envMap, err := configuredEnvMap(opts)
+	if err != nil {
+		return nil, err
+	}
+	return provider.NewRegistryWithEnv(opts.providers, envMap, vault.Get)
+}
+
+func configuredEnvMap(opts options) (provider.EnvMap, error) {
+	routes, err := routing.New(opts.config)
+	if err != nil {
+		return nil, fmt.Errorf("load configuration: %w", err)
+	}
+	return provider.EnvMap(routes.Config().ProviderEnv), nil
 }
 
 func envOr(key, fallback string) string {
@@ -211,4 +232,27 @@ func envBool(key string) bool {
 
 func catalogHTTPClient() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second}
+}
+
+func loadDaemonEnvironment() error {
+	path := strings.TrimSpace(os.Getenv("FREE_ROUTER_DAEMON_ENV_FILE"))
+	if path == "" {
+		return nil
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read daemon environment: %w", err)
+	}
+	var environment map[string]string
+	if err := json.Unmarshal(content, &environment); err != nil {
+		return fmt.Errorf("decode daemon environment: %w", err)
+	}
+	for name, value := range environment {
+		if os.Getenv(name) == "" && value != "" {
+			if err := os.Setenv(name, value); err != nil {
+				return fmt.Errorf("load daemon environment %s: %w", name, err)
+			}
+		}
+	}
+	return nil
 }
