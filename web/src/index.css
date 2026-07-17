@@ -305,15 +305,33 @@ select, .field-label select { min-width: 0; height: 34px; padding: 0 25px 0 9px;
 .provider-intro > div:last-child strong { font-size: 20px; }
 .provider-intro > div:last-child span { color: var(--muted); font-size: 8px; }
 .provider-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; }
-.provider-card { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-sm); }
+.provider-card { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-sm); transition: border-color .18s ease, box-shadow .18s ease; }
+.provider-card.available { border-color: color-mix(in srgb, var(--accent) 38%, var(--border)); box-shadow: inset 0 3px 0 var(--accent), var(--shadow-sm); }
+.provider-card.pending { border-color: color-mix(in srgb, var(--amber) 38%, var(--border)); box-shadow: inset 0 3px 0 var(--amber), var(--shadow-sm); }
+.provider-card.error { border-color: color-mix(in srgb, var(--danger) 42%, var(--border)); box-shadow: inset 0 3px 0 var(--danger), var(--shadow-sm); }
+.provider-card.inactive .provider-logo { color: var(--subtle); background: var(--surface-3); }
 .provider-card-head { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 9px; }
 .provider-logo { width: 36px; height: 36px; color: var(--accent); background: var(--accent-soft); }
 .provider-card h3 { margin: 0; font-size: 12px; }
 .provider-card p { margin: 3px 0 0; color: var(--muted); font-size: 8px; }
-.provider-meta { margin: 14px 0 11px; padding: 10px; border-radius: 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; background: var(--surface-2); }
-.provider-meta span, .provider-meta strong { display: block; }
-.provider-meta span { color: var(--muted); font-size: 8px; }
-.provider-meta strong { margin-top: 4px; font-size: 9px; }
+.provider-runtime { margin: 14px 0 13px; padding: 10px; border-radius: 9px; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 9px; background: var(--surface-2); }
+.provider-runtime.available { background: var(--accent-soft); color: var(--accent); }
+.provider-runtime.pending { background: var(--amber-soft); color: var(--amber); }
+.provider-runtime.error { background: var(--danger-soft); color: var(--danger); }
+.provider-runtime.inactive { color: var(--muted); }
+.provider-runtime-icon { width: 29px; height: 29px; border-radius: 8px; display: grid; place-items: center; background: color-mix(in srgb, currentColor 10%, transparent); }
+.provider-runtime span, .provider-runtime strong, .provider-runtime small { display: block; }
+.provider-runtime > div:nth-child(2) > span { opacity: .72; font-size: 7px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.provider-runtime > div:nth-child(2) > strong { margin-top: 2px; color: currentColor; font-size: 10px; }
+.provider-runtime > div:nth-child(2) > small { max-width: 190px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: currentColor; opacity: .75; font-size: 7px; }
+.provider-model-count { min-width: 48px; padding-left: 9px; border-left: 1px solid color-mix(in srgb, currentColor 18%, transparent); text-align: center; }
+.provider-model-count strong { font-size: 14px; }
+.provider-model-count span { margin-top: 1px; opacity: .7; font-size: 7px; }
+.provider-credential-head { margin: 0 1px 8px; padding-top: 11px; border-top: 1px solid var(--border); display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; }
+.provider-credential-head span, .provider-credential-head strong { display: block; }
+.provider-credential-head span { color: var(--muted); font-size: 8px; }
+.provider-credential-head strong { margin-top: 2px; font-size: 10px; }
+.provider-credential-head small { max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--subtle); font-size: 7px; }
 .credential-input { height: 36px; border: 1px solid var(--border); border-radius: 7px; display: flex; align-items: center; }
 .credential-input:focus-within { border-color: var(--accent); }
 .credential-input input { min-width: 0; width: 100%; padding: 0 9px; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 9px; }

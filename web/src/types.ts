@@ -38,12 +38,15 @@ export interface ModelOverride {
 }
 
 export interface Route {
+  _comment?: string
   type: RouteType
   require_tool?: boolean
   models: string[]
 }
 
 export interface RouterConfig {
+  _comment?: string
+  _help?: Record<string, string>
   version: number
   routes: Record<string, Route>
   models: Record<string, ModelOverride>

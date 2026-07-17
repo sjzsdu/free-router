@@ -16,12 +16,15 @@ import (
 const CurrentVersion = 4
 
 type Route struct {
+	Comment     string   `json:"_comment,omitempty"`
 	Type        string   `json:"type"`
 	RequireTool bool     `json:"require_tool,omitempty"`
 	Models      []string `json:"models"`
 }
 
 type Config struct {
+	Comment     string                   `json:"_comment,omitempty"`
+	Help        map[string]string        `json:"_help,omitempty"`
 	Version     int                      `json:"version"`
 	ProviderEnv map[string][]string      `json:"provider_env"`
 	Routes      map[string]Route         `json:"routes"`
@@ -318,7 +321,13 @@ func validate(config *Config) error {
 }
 
 func cloneConfig(config Config) Config {
-	clone := Config{Version: config.Version, Routes: make(map[string]Route, len(config.Routes)), Models: make(map[string]ModelOverride, len(config.Models)), ProviderEnv: make(map[string][]string, len(config.ProviderEnv))}
+	clone := Config{Comment: config.Comment, Version: config.Version, Routes: make(map[string]Route, len(config.Routes)), Models: make(map[string]ModelOverride, len(config.Models)), ProviderEnv: make(map[string][]string, len(config.ProviderEnv))}
+	if config.Help != nil {
+		clone.Help = make(map[string]string, len(config.Help))
+		for field, description := range config.Help {
+			clone.Help[field] = description
+		}
+	}
 	for alias, route := range config.Routes {
 		route.Models = append([]string{}, route.Models...)
 		clone.Routes[alias] = route

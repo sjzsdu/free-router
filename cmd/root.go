@@ -61,6 +61,7 @@ func Execute() error {
 	bindFlags(root, &opts)
 	addAuthCommands(root, &opts)
 	addDaemonCommands(root, &opts)
+	addOnboardCommand(root, &opts)
 
 	serve := &cobra.Command{
 		Use:   "serve",

@@ -215,6 +215,15 @@ curl -s http://localhost:1314/v1/models | jq '.data[] | select(.id != "auto") | 
 
 首次启动会在操作系统用户配置目录生成 `free-router/config.json`。API Key 不在这个文件中，仍单独存储在 Keychain 或安全凭据文件。
 
+推荐首次运行 `free-router onboard`。它会读取当前二进制中的默认配置，生成带 `_comment`、`_help` 和每条路由说明的标准 JSON 文件，同时展开全部内置 Provider 环境变量映射。说明字段不会参与运行；已有文件默认不会被覆盖。
+
+```bash
+free-router onboard                    # 写入默认配置路径
+free-router onboard ./config.json      # 写入指定路径
+free-router onboard --stdout           # 只打印，不写文件
+free-router onboard --force            # 明确覆盖已有配置
+```
+
 ```json
 {
   "version": 4,
@@ -301,6 +310,7 @@ export FREE_ROUTER_PROVIDERS='[
 
 ```bash
 free-router                       # 显示帮助
+free-router onboard               # 生成带说明的完整默认配置
 free-router serve --addr :9000    # 前台启动服务
 free-router daemon install        # 安装并启动守护进程
 free-router daemon status         # 查看守护进程状态
