@@ -32,6 +32,15 @@ func TestSiliconFlowDiscoversOnlyChatModels(t *testing.T) {
 	}
 }
 
+func TestBuiltinsHaveOfficialRegistrationURLs(t *testing.T) {
+	for _, spec := range builtins() {
+		parsed, err := url.Parse(spec.RegisterURL)
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+			t.Errorf("provider %s has invalid registration URL %q", spec.ID, spec.RegisterURL)
+		}
+	}
+}
+
 func TestProviderEndpointOverride(t *testing.T) {
 	spec := Spec{BaseURL: "https://example.com/v1", Endpoints: map[string]string{"/embeddings": "https://embed.example.com/run"}}
 	if got := spec.APIEndpoint("/embeddings"); got != "https://embed.example.com/run" {

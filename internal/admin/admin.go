@@ -24,25 +24,44 @@ import (
 var assets embed.FS
 
 type Handler struct {
-	routes  *routing.Store
-	catalog *catalog.Store
-	vault   *credentials.Vault
-	config  Config
-	reload  func() error
-	health  *health.Tracker
-	static  http.Handler
-	started time.Time
+	routes             *routing.Store
+	catalog            *catalog.Store
+	vault              *credentials.Vault
+	config             Config
+	reload             func() error
+	health             *health.Tracker
+	static             http.Handler
+	started            time.Time
+	oauthFlows         *oauthFlows
+	oauthHTTPClient    *http.Client
+	openRouterAuthURL  string
+	openRouterTokenURL string
 }
 
 type Config struct {
-	AllowRemote bool
-	Token       string
-	Version     string
+	AllowRemote        bool
+	Token              string
+	Version            string
+	OAuthHTTPClient    *http.Client
+	OpenRouterAuthURL  string
+	OpenRouterTokenURL string
 }
 
 func New(routes *routing.Store, models *catalog.Store, vault *credentials.Vault, tracker *health.Tracker, config Config, reload func() error) *Handler {
 	staticFS, _ := fs.Sub(assets, "dist")
-	return &Handler{routes: routes, catalog: models, vault: vault, health: tracker, config: config, reload: reload, static: http.FileServer(http.FS(staticFS)), started: time.Now()}
+	client := config.OAuthHTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 20 * time.Second}
+	}
+	authURL := config.OpenRouterAuthURL
+	if authURL == "" {
+		authURL = "https://openrouter.ai/auth"
+	}
+	tokenURL := config.OpenRouterTokenURL
+	if tokenURL == "" {
+		tokenURL = "https://openrouter.ai/api/v1/auth/keys"
+	}
+	return &Handler{routes: routes, catalog: models, vault: vault, health: tracker, config: config, reload: reload, static: http.FileServer(http.FS(staticFS)), started: time.Now(), oauthFlows: newOAuthFlows(), oauthHTTPClient: client, openRouterAuthURL: authURL, openRouterTokenURL: tokenURL}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -71,6 +90,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.updateConfig(w, r)
 	case r.Method == http.MethodPost && path == "/api/refresh":
 		h.refresh(w, r)
+	case r.Method == http.MethodPost && path == "/api/oauth/openrouter/start":
+		h.startOpenRouterOAuth(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/oauth/openrouter/callback/"):
+		h.finishOpenRouterOAuth(w, r, strings.TrimPrefix(path, "/oauth/openrouter/callback/"))
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/providers/") && strings.HasSuffix(path, "/test"):
 		h.testProvider(w, r, strings.TrimSuffix(strings.TrimPrefix(path, "/api/providers/"), "/test"))
 	case r.Method == http.MethodPost && path == "/api/credentials":
@@ -160,7 +183,11 @@ func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request, escapedID
 	started := time.Now()
 	count, err := h.catalog.Probe(r.Context(), providerID)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		message := err.Error()
+		if providerID == "groq" && strings.Contains(message, "403") {
+			message += "; Groq 403 表示账户、组织或项目权限受限（无效 Key 通常返回 401），并非模型目录地址错误；请确认 Key 所属项目可用，并检查 Organization / Project 的 Model Permissions，必要时重新创建 Key 或联系 Groq"
+		}
+		writeError(w, http.StatusBadGateway, message)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "provider": providerID, "models": count, "latency_ms": time.Since(started).Milliseconds()})

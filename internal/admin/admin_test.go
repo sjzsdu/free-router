@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/sjzsdu/free-router/internal/catalog"
@@ -195,6 +196,28 @@ func TestProviderConnectionProbe(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestGroqForbiddenProbeExplainsPermissionRestriction(t *testing.T) {
+	for _, key := range provider.SupportedKeyEnvs() {
+		t.Setenv(key, "")
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":{"message":"Forbidden"}}`, http.StatusForbidden)
+	}))
+	defer upstream.Close()
+	registry, _ := provider.NewRegistry(`[{"id":"groq","base_url":"` + upstream.URL + `","no_auth":true}]`)
+	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
+	handler := New(routes, models, vault, health.New(), Config{}, nil)
+	request := httptest.NewRequest(http.MethodPost, "/admin/api/providers/groq/test", nil)
+	request.RemoteAddr = "127.0.0.1:1234"
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "Model Permissions") {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }

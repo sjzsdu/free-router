@@ -10,7 +10,7 @@ import * as Popover from '@radix-ui/react-popover'
 import * as Tooltip from '@radix-ui/react-tooltip'
 import {
   Activity, AlertTriangle, ArrowDownUp, Blocks, Bot, Check, ChevronRight, CircleHelp,
-  Database, Eye, EyeOff, Gauge, GripVertical, KeyRound, Menu, Moon,
+  Database, ExternalLink, Eye, EyeOff, Gauge, GripVertical, KeyRound, LogIn, Menu, Moon,
   Network, Plus, RefreshCw, Route as RouteIcon, Save, Search, Server, Settings2,
   ShieldCheck, Sparkles, Sun, Trash2, Unplug, X,
 } from 'lucide-react'
@@ -135,6 +135,17 @@ function App() {
     const timer = window.setTimeout(() => setToast(null), 3200)
     return () => window.clearTimeout(timer)
   }, [toast])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const status = params.get('oauth_status')
+    if (!status) return
+    setPage('providers')
+    setToast(status === 'success'
+      ? { message: 'OpenRouter 已登录，API Key 已安全保存并启用' }
+      : { message: params.get('oauth_message') || 'OpenRouter 登录失败', error: true })
+    window.history.replaceState({}, '', window.location.pathname)
+  }, [])
 
   const dirty = useMemo(() => Boolean(draft && baseline && JSON.stringify(draft) !== JSON.stringify(baseline)), [draft, baseline])
 
@@ -354,10 +365,11 @@ function ProviderCard({ provider, modelCount, saved, refresh, toast }: { provide
   const [visible, setVisible] = useState(false)
   const [busy, setBusy] = useState('')
   const run = async (action: string, task: () => Promise<unknown>, success: string) => { setBusy(action); try { await task(); toast({ message: success }); refresh(); setKey('') } catch (error) { toast({ message: (error as Error).message, error: true }) } finally { setBusy('') } }
+  const login = async () => { setBusy('oauth'); try { const result = await api.startOpenRouterOAuth(); window.location.assign(result.authorization_url) } catch (error) { toast({ message: (error as Error).message, error: true }); setBusy('') } }
   const missingRequired = provider.missing_required || []
   const source = provider.matched_env || (provider.source === 'saved' ? '安全存储' : '—')
   const placeholder = provider.envs?.length ? provider.envs.join(' / ') : 'API Key'
-  return <article className="provider-card"><div className="provider-card-head"><div className="provider-logo">{provider.id.slice(0, 2).toUpperCase()}</div><div><h3>{provider.id}</h3><p>{provider.tier}</p></div><StatusBadge status={provider.configured ? 'configured' : 'missing'} /></div><div className="provider-meta"><div><span>缓存模型</span><strong>{modelCount}</strong></div><div><span>凭据来源</span><strong title={source}>{source}</strong></div></div>{missingRequired.length > 0 && <div className="provider-warning"><AlertTriangle size={14} />还需要 {missingRequired.join(', ')}</div>}<div className="credential-input"><input type={visible ? 'text' : 'password'} value={key} onChange={event => setKey(event.target.value)} placeholder={provider.configured ? '输入新 Key 可替换' : `粘贴 ${placeholder}`} autoComplete="new-password" /><button onClick={() => setVisible(value => !value)} aria-label={visible ? '隐藏密钥' : '显示密钥'}>{visible ? <EyeOff size={16} /> : <Eye size={16} />}</button></div><div className="provider-actions"><button className="button small" disabled={!key || Boolean(busy)} onClick={() => run('save', () => api.saveCredential(provider.id, key), `${provider.id} 凭据已保存并热加载`)}>{busy === 'save' ? '保存中…' : '保存凭据'}</button>{provider.configured && <button className="button secondary small" disabled={Boolean(busy)} onClick={() => run('test', () => api.testProvider(provider.id), `${provider.id} 连接与模型目录正常`)}>{busy === 'test' ? '测试中…' : '测试连接'}</button>}{saved && <IconButton label="删除保存的凭据" disabled={Boolean(busy)} onClick={() => run('delete', () => api.deleteCredential(provider.id), `${provider.id} 凭据已删除`)}><Trash2 size={15} /></IconButton>}</div></article>
+  return <article className="provider-card"><div className="provider-card-head"><div className="provider-logo">{provider.id.slice(0, 2).toUpperCase()}</div><div><h3>{provider.id}</h3><p>{provider.tier}</p></div><StatusBadge status={provider.configured ? 'configured' : 'missing'} /></div><div className="provider-meta"><div><span>缓存模型</span><strong>{modelCount}</strong></div><div><span>凭据来源</span><strong title={source}>{source}</strong></div></div>{missingRequired.length > 0 && <div className="provider-warning"><AlertTriangle size={14} />还需要 {missingRequired.join(', ')}</div>}<div className="credential-input"><input type={visible ? 'text' : 'password'} value={key} onChange={event => setKey(event.target.value)} placeholder={provider.configured ? '输入新 Key 可替换' : `粘贴 ${placeholder}`} autoComplete="new-password" /><button onClick={() => setVisible(value => !value)} aria-label={visible ? '隐藏密钥' : '显示密钥'}>{visible ? <EyeOff size={16} /> : <Eye size={16} />}</button></div><div className="provider-actions">{provider.oauth && <button className="button small" disabled={Boolean(busy)} onClick={login}><LogIn size={14} />{busy === 'oauth' ? '跳转中…' : provider.configured ? '重新登录' : 'OAuth 登录'}</button>}<button className={cx('button small', provider.oauth && 'secondary')} disabled={!key || Boolean(busy)} onClick={() => run('save', () => api.saveCredential(provider.id, key), `${provider.id} 凭据已保存并热加载`)}>{busy === 'save' ? '保存中…' : '保存凭据'}</button>{provider.configured && <button className="button secondary small" disabled={Boolean(busy)} onClick={() => run('test', () => api.testProvider(provider.id), `${provider.id} 连接与模型目录正常`)}>{busy === 'test' ? '测试中…' : '测试连接'}</button>}{provider.register_url && <a className="button secondary small provider-register" href={provider.register_url} target="_blank" rel="noreferrer">获取 Key<ExternalLink size={14} /></a>}{saved && <IconButton label="删除保存的凭据" disabled={Boolean(busy)} onClick={() => run('delete', () => api.deleteCredential(provider.id), `${provider.id} 凭据已删除`)}><Trash2 size={15} /></IconButton>}</div></article>
 }
 
 function SystemPage({ state, runtime, offline }: { state: AppState; runtime: RuntimeStatus; offline: boolean }) {

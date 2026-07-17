@@ -6,25 +6,27 @@
 
 程序会根据已保存凭据或环境变量自动启用 provider，没有配置密钥的源不会访问。
 
-| Provider | 环境变量 | 免费形式 |
-| --- | --- | --- |
-| OpenRouter | `OPENROUTER_API_KEY` | 严格选择输入、输出价格均为 0 的模型 |
-| Groq | `GROQ_API_KEY` | Free Plan |
-| Cerebras | `CEREBRAS_API_KEY` | Free Tier |
-| Google Gemini | `GEMINI_API_KEY` | Free Tier |
-| GitHub Models | `GITHUB_TOKEN` | 免费原型额度 |
-| Pollinations | `POLLINATIONS_API_KEY` | 免费 credits / Pollen |
-| Hugging Face | `HF_TOKEN` | 每月免费 credits |
-| NVIDIA NIM | `NVIDIA_API_KEY` | 免费 credits |
-| Mistral | `MISTRAL_API_KEY` | Experiment Plan |
-| SambaNova | `SAMBANOVA_API_KEY` | Free Tier |
-| Ollama Cloud | `OLLAMA_API_KEY` | Free Tier |
-| ModelScope | `MODELSCOPE_API_KEY` | 免费推理额度 |
-| SiliconFlow | `SILICONFLOW_API_KEY` | 官方标记免费的聊天模型 |
-| Z.AI | `ZAI_API_KEY` | GLM Flash 免费模型 |
-| Cloudflare Workers AI | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | 每日 10,000 Neurons |
+| Provider | 环境变量 | 免费形式 | 注册 / 获取 Key |
+| --- | --- | --- | --- |
+| OpenRouter | `OPENROUTER_API_KEY` | 严格选择输入、输出价格均为 0 的模型 | [OpenRouter Keys](https://openrouter.ai/keys) |
+| Groq | `GROQ_API_KEY` | Free Plan | [Groq Console](https://console.groq.com/keys) |
+| Cerebras | `CEREBRAS_API_KEY` | Free Tier | [Cerebras Cloud](https://cloud.cerebras.ai/) |
+| Google Gemini | `GEMINI_API_KEY` | Free Tier | [Google AI Studio](https://aistudio.google.com/apikey) |
+| GitHub Models | `GITHUB_TOKEN` | 免费原型额度 | [创建 PAT](https://github.com/settings/personal-access-tokens/new)（需 `models:read`） |
+| Pollinations | `POLLINATIONS_API_KEY` | 免费 credits / Pollen | [Pollinations](https://enter.pollinations.ai/) |
+| Hugging Face | `HF_TOKEN` | 每月免费 credits | [Access Tokens](https://huggingface.co/settings/tokens) |
+| NVIDIA NIM | `NVIDIA_API_KEY` | 免费 credits | [NVIDIA API Keys](https://build.nvidia.com/settings/api-keys) |
+| Mistral | `MISTRAL_API_KEY` | Experiment Plan | [Mistral Console](https://console.mistral.ai/api-keys) |
+| SambaNova | `SAMBANOVA_API_KEY` | Free Tier | [SambaNova Cloud](https://cloud.sambanova.ai/apis) |
+| Ollama Cloud | `OLLAMA_API_KEY` | Free Tier | [Ollama Keys](https://ollama.com/settings/keys) |
+| ModelScope | `MODELSCOPE_API_KEY` | 免费推理额度 | [访问令牌](https://modelscope.cn/my/myaccesstoken) |
+| SiliconFlow | `SILICONFLOW_API_KEY` | 官方标记免费的聊天模型 | [API 密钥](https://cloud.siliconflow.cn/account/ak) |
+| Z.AI | `ZAI_API_KEY` | GLM Flash 免费模型 | [API Keys](https://z.ai/manage-apikey/apikey-list) |
+| Cloudflare Workers AI | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | 每日 10,000 Neurons | [创建 API Token](https://dash.cloudflare.com/profile/api-tokens) |
 
 这些服务的条款、区域和额度会变化。除 OpenRouter 的零价模型筛选外，provider 通常不会通过 `/models` 告诉路由器账户是否启用了付费；要确保绝不扣费，请使用没有绑定计费方式的 Free Tier 账户。
+
+OpenRouter 还支持网页中的 **OAuth 登录**：点击后在 OpenRouter 完成授权，free-router 使用 PKCE 换取用户自己的 API Key，并直接保存到本机安全凭据存储。整个过程无需复制 Key，授权回调只允许 localhost，且 10 分钟后自动失效。其他 Provider 的官网社交登录不等于 API OAuth；需要预先注册 OAuth Client 的平台暂不内置公共 Client 凭据。
 
 ## 启动
 
@@ -94,7 +96,7 @@ free-router daemon uninstall
 http://localhost:1314/admin/
 ```
 
-可以在网页中录入免费源 API Key、测试 Provider 连接、刷新缓存、查看模型健康和请求成功率，并拖动配置每条路由的 fallback 顺序。还可以禁用单个模型，或手工覆盖模型类型、tools、vision、reasoning 能力。配置保存后立即生效；新增或删除凭据也会热加载，不需要重启。
+可以在网页中直接打开每个免费源的官方注册 / Key 页面，录入 API Key、测试 Provider 连接、刷新缓存、查看模型健康和请求成功率，并拖动配置每条路由的 fallback 顺序。还可以禁用单个模型，或手工覆盖模型类型、tools、vision、reasoning 能力。配置保存后立即生效；新增或删除凭据也会热加载，不需要重启。
 
 管理界面使用 React、TypeScript、Vite、Tailwind CSS、React Query、Radix UI 和 dnd-kit 构建，生产静态资源会通过 Go Embed 打入同一个二进制。普通用户不需要安装 Node；只有修改管理界面源码时才需要运行：
 

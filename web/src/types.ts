@@ -59,6 +59,8 @@ export interface ProviderStatus {
   configured: boolean
   source: 'environment' | 'saved' | 'missing'
   tier: string
+  register_url?: string
+  oauth?: boolean
 }
 
 export interface Credential { provider: string; backend?: string }

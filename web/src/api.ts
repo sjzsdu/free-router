@@ -18,6 +18,7 @@ export const api = {
   saveConfig: (config: RouterConfig) => request<{ saved: boolean; config: RouterConfig }>('config', { method: 'PUT', body: JSON.stringify(config) }),
   refresh: () => request<{ refreshed: boolean; models: number }>('refresh', { method: 'POST' }),
   testProvider: (provider: string) => request<{ ok: boolean; provider: string; models: number; latency_ms: number }>(`providers/${encodeURIComponent(provider)}/test`, { method: 'POST' }),
+  startOpenRouterOAuth: () => request<{ provider: string; authorization_url: string }>('oauth/openrouter/start', { method: 'POST' }),
   saveCredential: (provider: string, apiKey: string) => request<{ saved: boolean; backend: string }>('credentials', { method: 'POST', body: JSON.stringify({ provider, api_key: apiKey }) }),
   deleteCredential: (provider: string) => request<{ removed: boolean }>(`credentials/${encodeURIComponent(provider)}`, { method: 'DELETE' }),
 }

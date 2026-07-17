@@ -30,6 +30,8 @@ type Spec struct {
 	Headers       map[string]string `json:"headers,omitempty"`
 	Filter        Filter            `json:"filter,omitempty"`
 	Tier          string            `json:"tier,omitempty"`
+	RegisterURL   string            `json:"register_url,omitempty"`
+	OAuth         bool              `json:"oauth,omitempty"`
 	UseNameAsID   bool              `json:"use_name_as_id,omitempty"`
 	AllowedModels []string          `json:"allowed_models,omitempty"`
 	RequiredEnvs  []string          `json:"-"`
@@ -275,7 +277,7 @@ func BuiltinStatusWithEnv(envMap EnvMap, resolvers ...KeyResolver) []map[string]
 		result = append(result, map[string]any{
 			"id": spec.ID, "envs": effectiveEnvNames(spec, envMap), "matched_env": matchedEnv,
 			"requires": spec.RequiredEnvs, "missing_required": missingRequired,
-			"configured": configured, "source": source, "tier": spec.Tier,
+			"configured": configured, "source": source, "tier": spec.Tier, "register_url": spec.RegisterURL, "oauth": spec.OAuth,
 		})
 	}
 	return result
@@ -331,22 +333,22 @@ func resolveKey(providerID string, resolvers []KeyResolver) (string, bool) {
 func builtins() []Spec {
 	cloudflareAccount := os.Getenv("CLOUDFLARE_ACCOUNT_ID")
 	return []Spec{
-		{ID: "openrouter", BaseURL: "https://openrouter.ai/api/v1", APIKeyEnv: "OPENROUTER_API_KEY", Filter: FilterZeroPrice, Tier: "zero-price-models"},
-		{ID: "groq", BaseURL: "https://api.groq.com/openai/v1", APIKeyEnv: "GROQ_API_KEY", Tier: "free-tier"},
-		{ID: "cerebras", BaseURL: "https://api.cerebras.ai/v1", APIKeyEnv: "CEREBRAS_API_KEY", Tier: "free-tier"},
-		{ID: "gemini", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai", APIKeyEnv: "GEMINI_API_KEY", Tier: "free-tier"},
-		{ID: "github-models", BaseURL: "https://models.github.ai/inference", APIKeyEnv: "GITHUB_TOKEN", Headers: map[string]string{"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}, Tier: "free-tier"},
-		{ID: "pollinations", BaseURL: "https://gen.pollinations.ai/v1", APIKeyEnv: "POLLINATIONS_API_KEY", Tier: "free-credits"},
-		{ID: "huggingface", BaseURL: "https://router.huggingface.co/v1", APIKeyEnv: "HF_TOKEN", Tier: "free-credits"},
-		{ID: "nvidia", BaseURL: "https://integrate.api.nvidia.com/v1", APIKeyEnv: "NVIDIA_API_KEY", Tier: "free-credits"},
-		{ID: "mistral", BaseURL: "https://api.mistral.ai/v1", APIKeyEnv: "MISTRAL_API_KEY", Tier: "free-experiment-plan"},
-		{ID: "sambanova", BaseURL: "https://api.sambanova.ai/v1", APIKeyEnv: "SAMBANOVA_API_KEY", Tier: "free-tier"},
-		{ID: "ollama-cloud", BaseURL: "https://api.ollama.com/v1", APIKeyEnv: "OLLAMA_API_KEY", Tier: "free-tier"},
-		{ID: "modelscope", BaseURL: "https://api-inference.modelscope.cn/v1", APIKeyEnv: "MODELSCOPE_API_KEY", Tier: "free-tier"},
+		{ID: "openrouter", BaseURL: "https://openrouter.ai/api/v1", APIKeyEnv: "OPENROUTER_API_KEY", Filter: FilterZeroPrice, Tier: "zero-price-models", RegisterURL: "https://openrouter.ai/keys", OAuth: true},
+		{ID: "groq", BaseURL: "https://api.groq.com/openai/v1", APIKeyEnv: "GROQ_API_KEY", Tier: "free-tier", RegisterURL: "https://console.groq.com/keys"},
+		{ID: "cerebras", BaseURL: "https://api.cerebras.ai/v1", APIKeyEnv: "CEREBRAS_API_KEY", Tier: "free-tier", RegisterURL: "https://cloud.cerebras.ai/"},
+		{ID: "gemini", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai", APIKeyEnv: "GEMINI_API_KEY", Tier: "free-tier", RegisterURL: "https://aistudio.google.com/apikey"},
+		{ID: "github-models", BaseURL: "https://models.github.ai/inference", APIKeyEnv: "GITHUB_TOKEN", Headers: map[string]string{"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}, Tier: "free-tier", RegisterURL: "https://github.com/settings/personal-access-tokens/new"},
+		{ID: "pollinations", BaseURL: "https://gen.pollinations.ai/v1", APIKeyEnv: "POLLINATIONS_API_KEY", Tier: "free-credits", RegisterURL: "https://enter.pollinations.ai/"},
+		{ID: "huggingface", BaseURL: "https://router.huggingface.co/v1", APIKeyEnv: "HF_TOKEN", Tier: "free-credits", RegisterURL: "https://huggingface.co/settings/tokens"},
+		{ID: "nvidia", BaseURL: "https://integrate.api.nvidia.com/v1", APIKeyEnv: "NVIDIA_API_KEY", Tier: "free-credits", RegisterURL: "https://build.nvidia.com/settings/api-keys"},
+		{ID: "mistral", BaseURL: "https://api.mistral.ai/v1", APIKeyEnv: "MISTRAL_API_KEY", Tier: "free-experiment-plan", RegisterURL: "https://console.mistral.ai/api-keys"},
+		{ID: "sambanova", BaseURL: "https://api.sambanova.ai/v1", APIKeyEnv: "SAMBANOVA_API_KEY", Tier: "free-tier", RegisterURL: "https://cloud.sambanova.ai/apis"},
+		{ID: "ollama-cloud", BaseURL: "https://api.ollama.com/v1", APIKeyEnv: "OLLAMA_API_KEY", Tier: "free-tier", RegisterURL: "https://ollama.com/settings/keys"},
+		{ID: "modelscope", BaseURL: "https://api-inference.modelscope.cn/v1", APIKeyEnv: "MODELSCOPE_API_KEY", Tier: "free-tier", RegisterURL: "https://modelscope.cn/my/myaccesstoken"},
 		{
 			ID: "siliconflow", BaseURL: "https://api.siliconflow.cn/v1",
 			ModelsURL: "https://api.siliconflow.cn/v1/models?type=text&sub_type=chat",
-			APIKeyEnv: "SILICONFLOW_API_KEY", Tier: "free-models",
+			APIKeyEnv: "SILICONFLOW_API_KEY", Tier: "free-models", RegisterURL: "https://cloud.siliconflow.cn/account/ak",
 			AllowedModels: []string{
 				"Qwen/Qwen3.5-4B",
 				"PaddlePaddle/PaddleOCR-VL-1.5",
@@ -359,7 +361,7 @@ func builtins() []Spec {
 				"tencent/Hunyuan-MT-7B",
 			},
 		},
-		{ID: "zai", BaseURL: "https://api.z.ai/api/paas/v4", APIKeyEnv: "ZAI_API_KEY", Tier: "free-models"},
-		{ID: "cloudflare", BaseURL: "https://api.cloudflare.com/client/v4/accounts/" + cloudflareAccount + "/ai/v1", ModelsURL: "https://api.cloudflare.com/client/v4/accounts/" + cloudflareAccount + "/ai/models/search", APIKeyEnv: "CLOUDFLARE_API_TOKEN", RequiredEnvs: []string{"CLOUDFLARE_ACCOUNT_ID"}, UseNameAsID: true, Tier: "10000-neurons-per-day"},
+		{ID: "zai", BaseURL: "https://api.z.ai/api/paas/v4", APIKeyEnv: "ZAI_API_KEY", Tier: "free-models", RegisterURL: "https://z.ai/manage-apikey/apikey-list"},
+		{ID: "cloudflare", BaseURL: "https://api.cloudflare.com/client/v4/accounts/" + cloudflareAccount + "/ai/v1", ModelsURL: "https://api.cloudflare.com/client/v4/accounts/" + cloudflareAccount + "/ai/models/search", APIKeyEnv: "CLOUDFLARE_API_TOKEN", RequiredEnvs: []string{"CLOUDFLARE_ACCOUNT_ID"}, UseNameAsID: true, Tier: "10000-neurons-per-day", RegisterURL: "https://dash.cloudflare.com/profile/api-tokens"},
 	}
 }

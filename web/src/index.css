@@ -318,7 +318,8 @@ select, .field-label select { min-width: 0; height: 34px; padding: 0 25px 0 9px;
 .credential-input:focus-within { border-color: var(--accent); }
 .credential-input input { min-width: 0; width: 100%; padding: 0 9px; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 9px; }
 .credential-input button { width: 34px; height: 34px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
-.provider-actions { margin-top: 9px; display: flex; gap: 6px; }
+.provider-actions { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 6px; }
+.provider-register { text-decoration: none; }
 .provider-warning { margin: -3px 0 9px; padding: 7px 8px; border-radius: 6px; display: flex; align-items: center; gap: 6px; background: var(--amber-soft); color: var(--amber); font-size: 8px; }
 
 .system-layout { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(290px, .6fr); gap: 15px; }
