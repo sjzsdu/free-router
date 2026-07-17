@@ -57,6 +57,7 @@ func Execute() error {
 	}
 	bindFlags(root, &opts)
 	addAuthCommands(root, &opts)
+	addServiceCommands(root)
 
 	serve := &cobra.Command{
 		Use:   "serve",
@@ -164,7 +165,7 @@ func runServer(ctx context.Context, opts options) error {
 	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts, Routes: routes, Health: tracker}, http.DefaultClient)
 	reloadProviders := func() error { return registry.Reload(opts.providers, vault.Get) }
 	handler.Handle("GET /admin", http.RedirectHandler("/admin/", http.StatusTemporaryRedirect))
-	handler.Handle("/admin/", admin.New(routes, store, vault, tracker, admin.Config{AllowRemote: opts.adminAllowRemote, Token: opts.adminToken}, reloadProviders))
+	handler.Handle("/admin/", admin.New(routes, store, vault, tracker, admin.Config{AllowRemote: opts.adminAllowRemote, Token: opts.adminToken, Version: version}, reloadProviders))
 	server := &http.Server{
 		Addr:              opts.addr,
 		Handler:           handler,

@@ -1,0 +1,367 @@
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent,
+} from '@dnd-kit/core'
+import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import * as Dialog from '@radix-ui/react-dialog'
+import * as Popover from '@radix-ui/react-popover'
+import * as Tooltip from '@radix-ui/react-tooltip'
+import {
+  Activity, AlertTriangle, ArrowDownUp, Blocks, Bot, Check, ChevronRight, CircleHelp,
+  Database, Eye, EyeOff, Gauge, GripVertical, KeyRound, Menu, Moon,
+  Network, Plus, RefreshCw, Route as RouteIcon, Save, Search, Server, Settings2,
+  ShieldCheck, Sparkles, Sun, Trash2, Unplug, X,
+} from 'lucide-react'
+import { api } from './api'
+import type {
+  AppState, EffectiveModel, HealthState, Model, ModelOverride, ProviderStatus, RouteType, RouterConfig, RuntimeStatus,
+} from './types'
+
+type Page = 'overview' | 'routes' | 'models' | 'providers' | 'system'
+
+const routeLabels: Record<string, { title: string; description: string }> = {
+  chat: { title: '通用对话', description: '标准文本聊天与流式输出' },
+  'chat-tools': { title: '工具调用', description: '需要 function/tool call 的任务' },
+  embedding: { title: '向量嵌入', description: '文本向量化与语义检索' },
+  audio: { title: '音频', description: '语音合成、转录和翻译' },
+  image: { title: '图像', description: '图像生成与处理' },
+  video: { title: '视频', description: '视频生成能力' },
+  rerank: { title: '重排序', description: '检索结果相关性排序' },
+  moderation: { title: '内容审核', description: '内容安全分类' },
+}
+
+const pageInfo: Record<Page, { title: string; subtitle: string }> = {
+  overview: { title: '运行概览', subtitle: '服务、模型目录和路由健康状态' },
+  routes: { title: '路由策略', subtitle: '配置固定能力名称的 fallback 优先级' },
+  models: { title: '模型目录', subtitle: '浏览缓存模型、能力元数据和健康状态' },
+  providers: { title: '免费源', subtitle: '管理凭据、连接状态和模型同步' },
+  system: { title: '系统状态', subtitle: '查看守护进程、缓存和本地配置位置' },
+}
+
+const routeOrder = ['chat', 'chat-tools', 'embedding', 'audio', 'image', 'video', 'rerank', 'moderation']
+
+const navigation: { id: Page; label: string; icon: typeof Gauge }[] = [
+  { id: 'overview', label: '概览', icon: Gauge },
+  { id: 'routes', label: '路由', icon: RouteIcon },
+  { id: 'models', label: '模型', icon: Database },
+  { id: 'providers', label: '免费源', icon: Network },
+  { id: 'system', label: '系统', icon: Settings2 },
+]
+
+const cloneConfig = (config: RouterConfig): RouterConfig => JSON.parse(JSON.stringify(config))
+const cx = (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(' ')
+
+function effectiveModel(model: Model, config: RouterConfig): EffectiveModel {
+  const override = config.models?.[model.id] || {}
+  const selectedType = override.type || (model.type === 'normal' ? 'chat' : model.type)
+  const internalType = selectedType === 'chat' || selectedType === 'chat-tools' ? 'normal' : selectedType
+  const parameters = model.supported_parameters || []
+  const toolCall = override.tool_call ?? (selectedType === 'chat-tools' || (model.capabilities.tool_call_known
+    ? model.capabilities.tool_call
+    : parameters.length === 0 || parameters.includes('tools')))
+  const routeTypes = internalType === 'normal' ? ['chat', ...(toolCall ? ['chat-tools'] : [])] : [selectedType]
+  return {
+    ...model,
+    disabled: Boolean(override.disabled),
+    type: internalType,
+    route_types: routeTypes as RouteType[],
+    capabilities: {
+      ...model.capabilities,
+      tool_call: toolCall,
+      vision: override.vision ?? model.capabilities.vision,
+      reasoning: override.reasoning ?? model.capabilities.reasoning,
+    },
+  }
+}
+
+function formatNumber(value?: number) { return Number(value || 0).toLocaleString() }
+function formatDate(value?: string) { return value ? new Date(value).toLocaleString() : '尚未更新' }
+function formatUptime(seconds = 0) {
+  const days = Math.floor(seconds / 86400)
+  const hours = Math.floor((seconds % 86400) / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  if (days) return `${days} 天 ${hours} 小时`
+  if (hours) return `${hours} 小时 ${minutes} 分钟`
+  if (minutes) return `${minutes} 分钟`
+  return `${Math.max(0, Math.floor(seconds))} 秒`
+}
+
+function IconButton({ label, children, onClick, disabled }: { label: string; children: ReactNode; onClick?: () => void; disabled?: boolean }) {
+  return <Tooltip.Root><Tooltip.Trigger asChild><button className="icon-button" aria-label={label} onClick={onClick} disabled={disabled}>{children}</button></Tooltip.Trigger><Tooltip.Portal><Tooltip.Content className="tooltip" sideOffset={7}>{label}<Tooltip.Arrow className="tooltip-arrow" /></Tooltip.Content></Tooltip.Portal></Tooltip.Root>
+}
+
+function StatusBadge({ status }: { status: HealthState['status'] | 'configured' | 'missing' }) {
+  const labels: Record<string, string> = { healthy: '健康', cooling: '冷却', degraded: '降级', unknown: '未测试', configured: '已配置', missing: '未配置' }
+  return <span className={`status-badge ${status}`}><span />{labels[status] || status}</span>
+}
+
+function CapabilityPills({ model }: { model: EffectiveModel }) {
+  return <div className="pill-row">
+    {model.capabilities.tool_call && <span className="capability-pill accent">Tools</span>}
+    {model.capabilities.vision && <span className="capability-pill">Vision</span>}
+    {model.capabilities.reasoning && <span className="capability-pill">Reasoning</span>}
+    {!model.capabilities.tool_call && !model.capabilities.vision && !model.capabilities.reasoning && <span className="capability-pill muted">Standard</span>}
+  </div>
+}
+
+function App() {
+  const queryClient = useQueryClient()
+  const [page, setPage] = useState<Page>('overview')
+  const [mobileNav, setMobileNav] = useState(false)
+  const [dark, setDark] = useState(() => localStorage.getItem('free-router-theme') === 'dark')
+  const [draft, setDraft] = useState<RouterConfig | null>(null)
+  const [baseline, setBaseline] = useState<RouterConfig | null>(null)
+  const [toast, setToast] = useState<{ message: string; error?: boolean } | null>(null)
+
+  const stateQuery = useQuery({ queryKey: ['state'], queryFn: api.state })
+  const runtimeQuery = useQuery({ queryKey: ['runtime'], queryFn: api.runtime, refetchInterval: 5000, retry: false })
+
+  useEffect(() => {
+    if (stateQuery.data && !draft) {
+      setDraft(cloneConfig(stateQuery.data.config))
+      setBaseline(cloneConfig(stateQuery.data.config))
+    }
+  }, [stateQuery.data, draft])
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', dark)
+    localStorage.setItem('free-router-theme', dark ? 'dark' : 'light')
+  }, [dark])
+
+  useEffect(() => {
+    if (!toast) return
+    const timer = window.setTimeout(() => setToast(null), 3200)
+    return () => window.clearTimeout(timer)
+  }, [toast])
+
+  const dirty = useMemo(() => Boolean(draft && baseline && JSON.stringify(draft) !== JSON.stringify(baseline)), [draft, baseline])
+
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => { if (dirty) event.preventDefault() }
+    window.addEventListener('beforeunload', beforeUnload)
+    return () => window.removeEventListener('beforeunload', beforeUnload)
+  }, [dirty])
+
+  const saveMutation = useMutation({
+    mutationFn: () => api.saveConfig(draft!),
+    onSuccess: ({ config }) => {
+      setDraft(cloneConfig(config)); setBaseline(cloneConfig(config)); setToast({ message: '路由配置已保存并即时生效' })
+      queryClient.invalidateQueries({ queryKey: ['state'] })
+    },
+    onError: (error: Error) => setToast({ message: error.message, error: true }),
+  })
+  const refreshMutation = useMutation({
+    mutationFn: api.refresh,
+    onSuccess: ({ models }) => { setToast({ message: `模型目录已刷新，共 ${models} 个模型` }); queryClient.invalidateQueries({ queryKey: ['state'] }) },
+    onError: (error: Error) => setToast({ message: error.message, error: true }),
+  })
+
+  if (stateQuery.isError) return <ErrorScreen error={(stateQuery.error as Error).message} retry={() => stateQuery.refetch()} />
+  if (stateQuery.isLoading || !stateQuery.data || !draft) return <LoadingScreen />
+
+  const state = stateQuery.data
+  const runtime = runtimeQuery.data || state.runtime
+  const models = state.models.map(model => effectiveModel(model, draft))
+  const healthMap = new Map(state.health.map(item => [item.model, item]))
+  const info = pageInfo[page]
+
+  return <div className="app-shell">
+    <aside className={cx('sidebar', mobileNav && 'mobile-open')}>
+      <div className="brand"><div className="brand-mark"><RouteIcon size={18} /></div><div><strong>Free Router</strong><small>Model control plane</small></div></div>
+      <nav className="main-nav" aria-label="主要导航">
+        {navigation.map(item => <button key={item.id} className={page === item.id ? 'active' : ''} onClick={() => { setPage(item.id); setMobileNav(false) }}><item.icon size={18} /><span>{item.label}</span>{item.id === 'routes' && dirty && <i />}</button>)}
+      </nav>
+      <div className="sidebar-bottom">
+        <div className="sidebar-health"><span className={runtimeQuery.isError ? 'offline-dot' : 'online-dot'} /><div><strong>{runtimeQuery.isError ? '服务连接中断' : '服务运行中'}</strong><small>{runtime.service_manager === 'manual' ? '手动启动' : runtime.service_manager}</small></div></div>
+        <div className="version-row"><span>free-router</span><code>v{runtime.version}</code></div>
+      </div>
+    </aside>
+    {mobileNav && <button className="nav-backdrop" aria-label="关闭导航" onClick={() => setMobileNav(false)} />}
+
+    <main className="workspace">
+      <header className="topbar">
+        <div className="page-heading"><button className="mobile-menu" onClick={() => setMobileNav(true)} aria-label="打开导航"><Menu size={20} /></button><div><h1>{info.title}</h1><p>{info.subtitle}</p></div></div>
+        <div className="topbar-actions">
+          <RuntimePopover runtime={runtime} offline={runtimeQuery.isError} state={state} />
+          <IconButton label={dark ? '切换亮色模式' : '切换暗色模式'} onClick={() => setDark(value => !value)}>{dark ? <Sun size={18} /> : <Moon size={18} />}</IconButton>
+          <button className="button secondary compact" onClick={() => refreshMutation.mutate()} disabled={refreshMutation.isPending}><RefreshCw size={16} className={refreshMutation.isPending ? 'spin' : ''} /><span className="desktop-label">刷新模型</span></button>
+        </div>
+      </header>
+
+      <div className="page-content">
+        {page === 'overview' && <Overview state={state} runtime={runtime} models={models} healthMap={healthMap} navigate={setPage} />}
+        {page === 'routes' && <RoutesPage config={draft} setConfig={setDraft} models={models} healthMap={healthMap} />}
+        {page === 'models' && <ModelsPage config={draft} setConfig={setDraft} models={models} healthMap={healthMap} />}
+        {page === 'providers' && <ProvidersPage state={state} onToast={setToast} />}
+        {page === 'system' && <SystemPage state={state} runtime={runtime} offline={runtimeQuery.isError} />}
+      </div>
+
+      {dirty && <div className="save-bar"><div><span className="unsaved-dot" /><div><strong>有未保存的路由修改</strong><small>保存后立即对新请求生效</small></div></div><div><button className="button ghost" onClick={() => setDraft(cloneConfig(baseline!))}>放弃修改</button><button className="button" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}><Save size={16} />{saveMutation.isPending ? '保存中…' : '保存配置'}</button></div></div>}
+    </main>
+    {toast && <div className={cx('toast', toast.error && 'error')}><span>{toast.error ? <AlertTriangle size={17} /> : <Check size={17} />}</span>{toast.message}</div>}
+  </div>
+}
+
+function LoadingScreen() {
+  return <div className="loading-screen"><div className="loading-brand"><RouteIcon size={22} /><strong>Free Router</strong></div><div className="loading-line" /><p>正在读取本地路由状态…</p></div>
+}
+
+function ErrorScreen({ error, retry }: { error: string; retry: () => void }) {
+  return <div className="error-screen"><div className="error-icon"><Unplug size={24} /></div><h1>无法连接管理服务</h1><p>{error}</p><button className="button" onClick={retry}><RefreshCw size={16} />重新连接</button></div>
+}
+
+function RuntimePopover({ runtime, offline, state }: { runtime: RuntimeStatus; offline: boolean; state: AppState }) {
+  return <Popover.Root><Popover.Trigger asChild><button className={cx('runtime-trigger', offline && 'offline')}><span />{offline ? '已断开' : '运行中'}<ChevronRight size={14} /></button></Popover.Trigger><Popover.Portal><Popover.Content className="runtime-popover" align="end" sideOffset={10}>
+    <div className="popover-title"><div className={cx('service-icon', offline && 'offline')}><Server size={18} /></div><div><strong>{offline ? '服务连接已断开' : '服务运行正常'}</strong><small>v{runtime.version} · PID {runtime.pid || '—'}</small></div></div>
+    <div className="runtime-grid"><div><span>运行方式</span><strong>{runtime.service_manager === 'launchd' ? 'macOS LaunchAgent' : runtime.service_manager === 'systemd' ? 'systemd user' : '手动启动'}</strong></div><div><span>运行时间</span><strong>{offline ? '—' : formatUptime(runtime.uptime_seconds)}</strong></div><div><span>缓存模型</span><strong>{state.models.length}</strong></div><div><span>累计请求</span><strong>{formatNumber(state.summary.requests)}</strong></div></div>
+    <div className="command-hint"><code>free-router service status</code></div><Popover.Arrow className="popover-arrow" /></Popover.Content></Popover.Portal></Popover.Root>
+}
+
+function MetricCard({ icon, label, value, note, tone = 'default' }: { icon: ReactNode; label: string; value: string | number; note: string; tone?: string }) {
+  return <article className="metric-card"><div className={`metric-icon ${tone}`}>{icon}</div><div className="metric-label">{label}</div><strong>{value}</strong><p>{note}</p></article>
+}
+
+function Overview({ state, runtime, models, healthMap, navigate }: { state: AppState; runtime: RuntimeStatus; models: EffectiveModel[]; healthMap: Map<string, HealthState>; navigate: (page: Page) => void }) {
+  const configured = state.providers.filter(provider => provider.configured).length
+  const healthy = models.filter(model => healthMap.get(model.id)?.status === 'healthy').length
+  const requests = state.summary.requests || 0
+  const successRate = requests ? Math.round((state.summary.successes / requests) * 100) : null
+  const incidents = state.health.filter(item => item.last_error || item.status === 'cooling' || item.status === 'degraded').sort((a, b) => (b.last_used_at || '').localeCompare(a.last_used_at || '')).slice(0, 5)
+  return <div className="stack-xl">
+    <section className="metrics-grid">
+      <MetricCard icon={<Bot size={19} />} label="缓存模型" value={models.length} note={`${healthy} 个已验证健康`} tone="green" />
+      <MetricCard icon={<Network size={19} />} label="已配置免费源" value={`${configured} / ${state.providers.length}`} note="凭据保存在本机安全存储" tone="blue" />
+      <MetricCard icon={<Activity size={19} />} label="请求成功率" value={successRate === null ? '—' : `${successRate}%`} note={requests ? `${formatNumber(requests)} 次路由请求` : '等待首个推理请求'} tone="violet" />
+      <MetricCard icon={<Server size={19} />} label="服务运行时间" value={formatUptime(runtime.uptime_seconds)} note={`${runtime.service_manager} · PID ${runtime.pid}`} tone="amber" />
+    </section>
+
+    <section className="overview-grid">
+      <article className="panel route-summary-panel"><div className="panel-heading"><div><span className="eyebrow">ACTIVE ROUTES</span><h2>固定能力路由</h2></div><button className="text-button" onClick={() => navigate('routes')}>编辑策略 <ChevronRight size={15} /></button></div>
+        <div className="route-summary-list">{routeOrder.filter(alias => state.config.routes[alias]).map(alias => {
+          const route = state.config.routes[alias]
+          const first = route.models[0]
+          const health = first ? healthMap.get(first) : undefined
+          return <button key={alias} onClick={() => navigate('routes')}><div className="route-glyph"><Blocks size={17} /></div><div><strong>{routeLabels[alias]?.title || alias}</strong><small><code>{alias}</code> · {route.models.length ? `${route.models.length} 个固定模型` : '完全自动选择'}</small></div><div className="route-current"><span>{first || 'AUTO'}</span>{first && <StatusBadge status={health?.status || 'unknown'} />}</div><ChevronRight size={16} /></button>
+        })}</div>
+      </article>
+
+      <article className="panel incidents-panel"><div className="panel-heading"><div><span className="eyebrow">RECENT HEALTH</span><h2>最近异常</h2></div><button className="text-button" onClick={() => navigate('models')}>查看模型 <ChevronRight size={15} /></button></div>
+        {incidents.length ? <div className="incident-list">{incidents.map(item => <div key={item.model}><div className={`incident-icon ${item.status}`}><AlertTriangle size={15} /></div><div><strong>{item.model}</strong><p>{friendlyError(item.last_status, item.last_error)}</p></div><StatusBadge status={item.status} /></div>)}</div> : <div className="healthy-empty"><ShieldCheck size={28} /><strong>没有待处理异常</strong><p>路由健康状态将在请求发生后持续更新。</p></div>}
+      </article>
+    </section>
+
+    <section className="panel catalog-strip"><div><div className="catalog-icon"><Database size={20} /></div><div><strong>模型目录已缓存到本机</strong><p>推理请求不会临时访问 Provider 的模型接口。</p></div></div><div><span>最后更新</span><strong>{formatDate(state.catalog.updated_at)}</strong></div><div><span>当前冷却</span><strong>{state.summary.cooling} 个模型</strong></div></section>
+  </div>
+}
+
+function friendlyError(status?: number, error?: string) {
+  if (status === 401 || status === 403) return `认证被拒绝 (${status})，请检查 API Key、账户权限或区域限制。`
+  if (status === 429) return '上游免费额度或速率限制已触发，模型正在冷却。'
+  if (status && status >= 500) return `上游服务暂时不可用 (${status})，路由已尝试后续模型。`
+  return error || '模型当前处于降级状态。'
+}
+
+function RoutesPage({ config, setConfig, models, healthMap }: { config: RouterConfig; setConfig: (config: RouterConfig) => void; models: EffectiveModel[]; healthMap: Map<string, HealthState> }) {
+  const [selected, setSelected] = useState(() => config.routes.chat ? 'chat' : Object.keys(config.routes)[0])
+  const [search, setSearch] = useState('')
+  const [provider, setProvider] = useState('')
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }))
+  const route = config.routes[selected]
+  const modelMap = new Map(models.map(model => [model.id, model]))
+  const eligible = models.filter(model => !model.disabled && model.route_types.includes(route.type))
+  const providers = [...new Set(eligible.map(model => model.provider))].sort()
+  const candidates = eligible.filter(model => !route.models.includes(model.id) && (!provider || model.provider === provider) && (!search || `${model.id} ${model.name || ''}`.toLowerCase().includes(search.toLowerCase())))
+
+  const updateModels = (items: string[]) => {
+    const next = cloneConfig(config); next.routes[selected].models = items; setConfig(next)
+  }
+  const onDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id) return
+    const oldIndex = route.models.indexOf(String(active.id)), newIndex = route.models.indexOf(String(over.id))
+    updateModels(arrayMove(route.models, oldIndex, newIndex))
+  }
+
+  return <div className="route-workbench">
+    <aside className="route-nav panel"><div className="route-nav-heading"><span>固定能力</span><small>{Object.keys(config.routes).length} 条路由</small></div>{routeOrder.filter(alias => config.routes[alias]).map(alias => { const item = config.routes[alias]; return <button key={alias} className={selected === alias ? 'active' : ''} onClick={() => setSelected(alias)}><div className="route-glyph"><Blocks size={16} /></div><div><strong>{routeLabels[alias]?.title || alias}</strong><small>{item.models.length ? `${item.models.length} 个固定模型` : '自动选择'}</small></div><ChevronRight size={15} /></button> })}</aside>
+
+    <section className="route-chain panel"><div className="route-chain-heading"><div><span className="eyebrow">FALLBACK CHAIN</span><h2>{routeLabels[selected]?.title || selected}</h2><p>{routeLabels[selected]?.description}</p></div><span className="model-alias"><code>model: {selected}</code></span></div>
+      <div className="chain-explainer"><ArrowDownUp size={16} /><span>严格从上到下尝试。拖动可排序，也支持键盘操作。</span></div>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}><SortableContext items={route.models} strategy={verticalListSortingStrategy}><div className="fallback-chain">
+        {route.models.map((id, index) => <SortableModel key={id} id={id} index={index} model={modelMap.get(id)} health={healthMap.get(id)} remove={() => updateModels(route.models.filter(item => item !== id))} />)}
+        {!route.models.length && <div className="empty-chain"><Sparkles size={24} /><strong>当前使用完全自动路由</strong><p>可以从右侧加入固定优先模型，或继续让系统按能力与健康状态选择。</p></div>}
+      </div></SortableContext></DndContext>
+      <div className="automatic-fallback"><div className="auto-index">∞</div><div><strong>自动安全兜底</strong><p>固定数组全部失败后，从剩余 {Math.max(0, eligible.length - route.models.length)} 个同类型健康模型中轮换选择一个。</p></div><span className="capability-pill accent">始终启用</span></div>
+    </section>
+
+    <aside className="candidate-panel panel"><div className="candidate-heading"><div><span className="eyebrow">CANDIDATES</span><h2>添加候选模型</h2></div><span>{candidates.length}</span></div><div className="candidate-filters"><label className="search-field"><Search size={15} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索模型" /></label><select value={provider} onChange={event => setProvider(event.target.value)}><option value="">全部 Provider</option>{providers.map(item => <option key={item}>{item}</option>)}</select></div>
+      <div className="candidate-list">{candidates.slice(0, 80).map(model => <div key={model.id} className="candidate-row"><div><strong title={model.id}>{model.id}</strong><span><StatusBadge status={healthMap.get(model.id)?.status || 'unknown'} /> · {formatNumber(model.context_length)} context</span></div><IconButton label="加入优先级" onClick={() => updateModels([...route.models, model.id])}><Plus size={16} /></IconButton></div>)}{!candidates.length && <div className="small-empty"><Search size={22} /><span>没有匹配的候选模型</span></div>}</div>
+    </aside>
+  </div>
+}
+
+function SortableModel({ id, index, model, health, remove }: { id: string; index: number; model?: EffectiveModel; health?: HealthState; remove: () => void }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
+  const unavailable = !model || model.disabled
+  return <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={cx('fallback-item', isDragging && 'dragging', unavailable && 'unavailable')}>
+    <div className="priority-index">{index + 1}</div><button className="drag-handle" {...attributes} {...listeners} aria-label={`拖动 ${id} 调整优先级`}><GripVertical size={17} /></button><div className="fallback-model"><strong>{id}</strong><div>{model ? <><span>{model.provider}</span><CapabilityPills model={model} /></> : <span className="danger-text">模型不在当前缓存中</span>}</div></div><div className="fallback-health"><StatusBadge status={health?.status || 'unknown'} />{health?.average_latency_ms ? <small>{Math.round(health.average_latency_ms)}ms</small> : null}</div><IconButton label="从优先级移除" onClick={remove}><Trash2 size={15} /></IconButton>
+  </div>
+}
+
+function ModelsPage({ config, setConfig, models, healthMap }: { config: RouterConfig; setConfig: (config: RouterConfig) => void; models: EffectiveModel[]; healthMap: Map<string, HealthState> }) {
+  const [search, setSearch] = useState('')
+  const [type, setType] = useState('')
+  const [provider, setProvider] = useState('')
+  const [health, setHealth] = useState('')
+  const [selected, setSelected] = useState<EffectiveModel | null>(null)
+  const providers = [...new Set(models.map(model => model.provider))].sort()
+  const filtered = models.filter(model => (!search || `${model.id} ${model.name || ''}`.toLowerCase().includes(search.toLowerCase())) && (!type || model.route_types.includes(type as RouteType)) && (!provider || model.provider === provider) && (!health || (healthMap.get(model.id)?.status || 'unknown') === health))
+  const updateOverride = (id: string, patch: Partial<ModelOverride>) => {
+    const next = cloneConfig(config); next.models[id] = { ...(next.models[id] || {}), ...patch }; setConfig(next)
+    setSelected(previous => previous?.id === id ? effectiveModel(models.find(model => model.id === id)!, next) : previous)
+  }
+  return <div className="stack-lg">
+    <section className="model-toolbar panel"><label className="search-field large"><Search size={17} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索模型 ID、名称或组织" /></label><div className="filter-row"><select value={type} onChange={event => setType(event.target.value)}><option value="">全部类型</option>{Object.keys(routeLabels).map(item => <option key={item}>{item}</option>)}</select><select value={provider} onChange={event => setProvider(event.target.value)}><option value="">全部 Provider</option>{providers.map(item => <option key={item}>{item}</option>)}</select><select value={health} onChange={event => setHealth(event.target.value)}><option value="">全部健康状态</option><option value="healthy">健康</option><option value="cooling">冷却</option><option value="degraded">降级</option><option value="unknown">未测试</option></select></div><div className="result-count"><strong>{filtered.length}</strong><span>个模型</span></div></section>
+    <section className="model-table panel"><div className="model-table-head"><span>模型</span><span>路由类型</span><span>能力</span><span>健康</span><span>Context</span><span /></div><div className="model-table-body">{filtered.map(model => <button className={cx('model-table-row', model.disabled && 'disabled')} key={model.id} onClick={() => setSelected(model)}><div className="model-identity"><div className="provider-avatar">{model.provider.slice(0, 2).toUpperCase()}</div><div><strong>{model.id}</strong><small>{model.name || model.upstream_id}</small></div></div><div className="pill-row">{model.route_types.map(item => <span key={item} className="route-pill">{item}</span>)}</div><CapabilityPills model={model} /><StatusBadge status={healthMap.get(model.id)?.status || 'unknown'} /><span className="context-cell">{model.context_length ? formatNumber(model.context_length) : '—'}</span><ChevronRight size={16} /></button>)}</div></section>
+    <ModelDrawer model={selected} health={selected ? healthMap.get(selected.id) : undefined} override={selected ? config.models[selected.id] || {} : {}} close={() => setSelected(null)} update={updateOverride} />
+  </div>
+}
+
+function ModelDrawer({ model, health, override, close, update }: { model: EffectiveModel | null; health?: HealthState; override: ModelOverride; close: () => void; update: (id: string, patch: Partial<ModelOverride>) => void }) {
+  return <Dialog.Root open={Boolean(model)} onOpenChange={open => !open && close()}><Dialog.Portal><Dialog.Overlay className="dialog-overlay" /><Dialog.Content className="model-drawer">{model && <>
+    <div className="drawer-header"><div><span className="eyebrow">MODEL DETAILS</span><Dialog.Title>{model.id}</Dialog.Title><Dialog.Description>{model.description || model.name || model.upstream_id}</Dialog.Description></div><Dialog.Close asChild><button className="icon-button"><X size={19} /></button></Dialog.Close></div>
+    <div className="drawer-status"><StatusBadge status={health?.status || 'unknown'} /><span>{model.provider}</span><span>{model.tier || 'free tier'}</span></div>
+    {health?.last_error && <div className="drawer-alert"><AlertTriangle size={17} /><div><strong>最近一次错误</strong><p>{friendlyError(health.last_status, health.last_error)}</p></div></div>}
+    <div className="detail-section"><h3>能力与上下文</h3><div className="detail-grid"><div><span>路由类型</span><strong>{model.route_types.join(', ')}</strong></div><div><span>Context</span><strong>{model.context_length ? formatNumber(model.context_length) : '未知'}</strong></div><div><span>最大输出</span><strong>{model.max_output_tokens ? formatNumber(model.max_output_tokens) : '未知'}</strong></div><div><span>平均延迟</span><strong>{health?.average_latency_ms ? `${Math.round(health.average_latency_ms)}ms` : '尚无数据'}</strong></div></div><CapabilityPills model={model} /></div>
+    <div className="detail-section"><h3>人工覆盖</h3><p className="section-help">上游元数据不准确时，可在本机覆盖识别结果。</p><label className="field-label">路由类型<select value={override.type || ''} onChange={event => update(model.id, { type: event.target.value || undefined })}><option value="">自动识别</option>{Object.keys(routeLabels).map(item => <option key={item}>{item}</option>)}</select></label><div className="toggle-list"><OverrideToggle label="Tool call" value={override.tool_call} onChange={value => update(model.id, { tool_call: value })} /><OverrideToggle label="Vision" value={override.vision} onChange={value => update(model.id, { vision: value })} /><OverrideToggle label="Reasoning" value={override.reasoning} onChange={value => update(model.id, { reasoning: value })} /></div></div>
+    <div className="drawer-footer"><button className={cx('button full', model.disabled ? '' : 'danger-button')} onClick={() => update(model.id, { disabled: !model.disabled })}>{model.disabled ? <><Eye size={16} />重新启用模型</> : <><EyeOff size={16} />禁用这个模型</>}</button></div>
+  </>}</Dialog.Content></Dialog.Portal></Dialog.Root>
+}
+
+function OverrideToggle({ label, value, onChange }: { label: string; value?: boolean; onChange: (value: boolean | undefined) => void }) {
+  return <div><span>{label}</span><div className="segmented"><button className={value === undefined ? 'active' : ''} onClick={() => onChange(undefined)}>自动</button><button className={value === true ? 'active' : ''} onClick={() => onChange(true)}>支持</button><button className={value === false ? 'active' : ''} onClick={() => onChange(false)}>不支持</button></div></div>
+}
+
+function ProvidersPage({ state, onToast }: { state: AppState; onToast: (toast: { message: string; error?: boolean }) => void }) {
+  const queryClient = useQueryClient()
+  const configured = state.providers.filter(provider => provider.configured).length
+  return <div className="stack-lg"><section className="provider-intro panel"><div className="provider-intro-icon"><KeyRound size={22} /></div><div><h2>免费源凭据保存在本机</h2><p>macOS 优先使用 Keychain，其他环境使用权限为 0600 的凭据文件。密钥不会写入普通路由配置。</p></div><div><strong>{configured}</strong><span>已配置</span></div></section><section className="provider-grid">{state.providers.map(provider => <ProviderCard key={provider.id} provider={provider} modelCount={state.models.filter(model => model.provider === provider.id).length} saved={state.credentials.some(item => item.provider === provider.id)} refresh={() => queryClient.invalidateQueries({ queryKey: ['state'] })} toast={onToast} />)}</section></div>
+}
+
+function ProviderCard({ provider, modelCount, saved, refresh, toast }: { provider: ProviderStatus; modelCount: number; saved: boolean; refresh: () => void; toast: (toast: { message: string; error?: boolean }) => void }) {
+  const [key, setKey] = useState('')
+  const [visible, setVisible] = useState(false)
+  const [busy, setBusy] = useState('')
+  const run = async (action: string, task: () => Promise<unknown>, success: string) => { setBusy(action); try { await task(); toast({ message: success }); refresh(); setKey('') } catch (error) { toast({ message: (error as Error).message, error: true }) } finally { setBusy('') } }
+  return <article className="provider-card"><div className="provider-card-head"><div className="provider-logo">{provider.id.slice(0, 2).toUpperCase()}</div><div><h3>{provider.id}</h3><p>{provider.tier}</p></div><StatusBadge status={provider.configured ? 'configured' : 'missing'} /></div><div className="provider-meta"><div><span>缓存模型</span><strong>{modelCount}</strong></div><div><span>凭据来源</span><strong>{provider.source === 'environment' ? '环境变量' : provider.source === 'saved' ? '安全存储' : '—'}</strong></div></div><div className="credential-input"><input type={visible ? 'text' : 'password'} value={key} onChange={event => setKey(event.target.value)} placeholder={provider.configured ? '输入新 Key 可替换' : `粘贴 ${provider.env}`} autoComplete="new-password" /><button onClick={() => setVisible(value => !value)} aria-label={visible ? '隐藏密钥' : '显示密钥'}>{visible ? <EyeOff size={16} /> : <Eye size={16} />}</button></div><div className="provider-actions"><button className="button small" disabled={!key || Boolean(busy)} onClick={() => run('save', () => api.saveCredential(provider.id, key), `${provider.id} 凭据已保存并热加载`)}>{busy === 'save' ? '保存中…' : '保存凭据'}</button>{provider.configured && <button className="button secondary small" disabled={Boolean(busy)} onClick={() => run('test', () => api.testProvider(provider.id), `${provider.id} 连接与模型目录正常`)}>{busy === 'test' ? '测试中…' : '测试连接'}</button>}{saved && <IconButton label="删除保存的凭据" disabled={Boolean(busy)} onClick={() => run('delete', () => api.deleteCredential(provider.id), `${provider.id} 凭据已删除`)}><Trash2 size={15} /></IconButton>}</div></article>
+}
+
+function SystemPage({ state, runtime, offline }: { state: AppState; runtime: RuntimeStatus; offline: boolean }) {
+  const rows = [
+    ['服务状态', offline ? '连接已断开' : '运行中'], ['启动方式', runtime.service_manager], ['版本', runtime.version], ['PID', String(runtime.pid)], ['运行时间', formatUptime(runtime.uptime_seconds)], ['监听地址', 'http://localhost:1314'], ['路由配置', state.config_path], ['模型缓存', state.catalog.cache_path], ['缓存更新时间', formatDate(state.catalog.updated_at)],
+  ]
+  return <div className="system-layout"><section className="panel system-card"><div className="system-hero"><div className={cx('system-service-icon', offline && 'offline')}><Server size={28} /></div><div><span className="eyebrow">FREE ROUTER DAEMON</span><h2>{offline ? '服务连接已断开' : '本地服务运行正常'}</h2><p>用户级守护进程，无需 root 权限。</p></div><StatusBadge status={offline ? 'degraded' : 'healthy'} /></div><div className="system-rows">{rows.map(([label, value]) => <div key={label}><span>{label}</span><code>{value}</code></div>)}</div></section><aside className="stack-md"><section className="panel command-card"><div className="command-card-icon"><Activity size={19} /></div><h3>服务管理</h3><p>页面随服务一起运行，停止后需从终端重新启动。</p>{['free-router service status', 'free-router service restart', 'free-router service logs --follow'].map(command => <code key={command}>{command}</code>)}</section><section className="panel command-card"><div className="command-card-icon blue"><CircleHelp size={19} /></div><h3>API 接入</h3><p>所有 OpenAI 兼容客户端只需设置一个本地地址。</p><code>OPENAI_BASE_URL=http://localhost:1314/v1</code></section></aside></div>
+}
+
+export default App

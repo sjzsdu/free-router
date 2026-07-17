@@ -57,6 +57,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build admin
+        run: |
+          npm ci --prefix web
+          npm run build --prefix web
+          git diff --exit-code -- internal/admin/dist
       - name: Check
         run: make check
       - name: Race test

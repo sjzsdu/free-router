@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"github.com/sjzsdu/free-router/internal/catalog"
@@ -66,6 +67,34 @@ func TestAdminRejectsRemoteAccessByDefault(t *testing.T) {
 	}
 }
 
+func TestAdminServesEmbeddedReactApp(t *testing.T) {
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	registry, _ := provider.NewRegistryAllowEmpty("")
+	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
+	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
+	handler := New(routes, models, vault, health.New(), Config{}, nil)
+
+	request := httptest.NewRequest(http.MethodGet, "/admin/", nil)
+	request.RemoteAddr = "127.0.0.1:1234"
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !bytes.Contains(recorder.Body.Bytes(), []byte(`<div id="root"></div>`)) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	asset := regexp.MustCompile(`src="(/admin/assets/[^"]+\.js)"`).FindSubmatch(recorder.Body.Bytes())
+	if len(asset) != 2 {
+		t.Fatalf("compiled script not found in body=%s", recorder.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, string(asset[1]), nil)
+	request.RemoteAddr = "127.0.0.1:1234"
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("asset status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestCredentialSaveHotReloadsProviderAndCatalog(t *testing.T) {
 	for _, key := range provider.SupportedKeyEnvs() {
 		t.Setenv(key, "")
@@ -117,6 +146,34 @@ func TestAdminTokenAuthentication(t *testing.T) {
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("authenticated status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestRuntimeStatus(t *testing.T) {
+	t.Setenv("FREE_ROUTER_SERVICE_MANAGER", "launchd")
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	registry, _ := provider.NewRegistryAllowEmpty("")
+	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
+	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
+	handler := New(routes, models, vault, health.New(), Config{Version: "0.1.0"}, nil)
+	request := httptest.NewRequest(http.MethodGet, "/admin/api/runtime", nil)
+	request.RemoteAddr = "127.0.0.1:1234"
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var runtimeStatus struct {
+		Status         string `json:"status"`
+		Version        string `json:"version"`
+		ServiceManager string `json:"service_manager"`
+		PID            int    `json:"pid"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &runtimeStatus); err != nil {
+		t.Fatal(err)
+	}
+	if runtimeStatus.Status != "running" || runtimeStatus.Version != "0.1.0" || runtimeStatus.ServiceManager != "launchd" || runtimeStatus.PID < 1 {
+		t.Fatalf("runtime status = %#v", runtimeStatus)
 	}
 }
 

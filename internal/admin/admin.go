@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -18,7 +19,7 @@ import (
 	"github.com/sjzsdu/free-router/internal/routing"
 )
 
-//go:embed static/*
+//go:embed dist
 var assets embed.FS
 
 type Handler struct {
@@ -29,16 +30,18 @@ type Handler struct {
 	reload  func() error
 	health  *health.Tracker
 	static  http.Handler
+	started time.Time
 }
 
 type Config struct {
 	AllowRemote bool
 	Token       string
+	Version     string
 }
 
 func New(routes *routing.Store, models *catalog.Store, vault *credentials.Vault, tracker *health.Tracker, config Config, reload func() error) *Handler {
-	staticFS, _ := fs.Sub(assets, "static")
-	return &Handler{routes: routes, catalog: models, vault: vault, health: tracker, config: config, reload: reload, static: http.FileServer(http.FS(staticFS))}
+	staticFS, _ := fs.Sub(assets, "dist")
+	return &Handler{routes: routes, catalog: models, vault: vault, health: tracker, config: config, reload: reload, static: http.FileServer(http.FS(staticFS)), started: time.Now()}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -61,6 +64,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && path == "/api/state":
 		h.state(w)
+	case r.Method == http.MethodGet && path == "/api/runtime":
+		h.runtime(w)
 	case r.Method == http.MethodPut && path == "/api/config":
 		h.updateConfig(w, r)
 	case r.Method == http.MethodPost && path == "/api/refresh":
@@ -71,9 +76,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.saveCredential(w, r)
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/credentials/"):
 		h.deleteCredential(w, r, strings.TrimPrefix(path, "/api/credentials/"))
-	case r.Method == http.MethodGet && (path == "" || path == "/"):
+	case (r.Method == http.MethodGet || r.Method == http.MethodHead) && (path == "" || path == "/"):
 		h.serveIndex(w, r)
-	case r.Method == http.MethodGet:
+	case r.Method == http.MethodGet || r.Method == http.MethodHead:
 		r.URL.Path = "/" + strings.TrimPrefix(path, "/")
 		h.static.ServeHTTP(w, r)
 	default:
@@ -96,8 +101,25 @@ func (h *Handler) state(w http.ResponseWriter) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"config": h.routes.Config(), "config_path": h.routes.Path(), "models": h.catalog.Models(),
 		"catalog": h.catalog.Status(), "providers": provider.BuiltinStatus(h.vault.Get), "credentials": entries,
-		"health": h.health.Snapshot(), "summary": h.health.Summary(),
+		"health": h.health.Snapshot(), "summary": h.health.Summary(), "runtime": h.runtimeState(),
 	})
+}
+
+func (h *Handler) runtime(w http.ResponseWriter) {
+	writeJSON(w, http.StatusOK, h.runtimeState())
+}
+
+func (h *Handler) runtimeState() map[string]any {
+	manager := strings.TrimSpace(os.Getenv("FREE_ROUTER_SERVICE_MANAGER"))
+	if manager == "" {
+		manager = "manual"
+	}
+	return map[string]any{
+		"status": "running", "pid": os.Getpid(), "version": h.config.Version,
+		"started_at": h.started, "uptime_seconds": int64(time.Since(h.started).Seconds()),
+		"service_manager": manager, "models": len(h.catalog.Models()),
+		"requests": h.health.Summary().Requests, "cooling": h.health.Summary().Cooling,
+	}
 }
 
 func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
@@ -183,13 +205,16 @@ func (h *Handler) reloadProviders(r *http.Request) error {
 }
 
 func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {
-	content, err := assets.ReadFile("static/index.html")
+	content, err := assets.ReadFile("dist/index.html")
 	if err != nil {
 		http.Error(w, "admin UI unavailable", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	if r.Method == http.MethodHead {
+		return
+	}
 	_, _ = w.Write(content)
 }
 

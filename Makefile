@@ -1,5 +1,7 @@
 BINARY := free-router
 GO ?= go
+NPM ?= npm
+WEB_DIR := web
 VERSION := $(strip $(shell cat VERSION))
 BUILD_DIR ?= bin
 GOBIN ?= $(shell $(GO) env GOBIN)
@@ -11,24 +13,56 @@ endif
 LDFLAGS := -s -w
 
 .DEFAULT_GOAL := help
-.PHONY: help build install uninstall run test test-race test-cover vet fmt fmt-check version-check check tidy clean
+.PHONY: help build web-install web-build web-check install uninstall service-install service-start service-stop service-restart service-status service-logs service-uninstall run test test-race test-cover vet fmt fmt-check version-check check tidy clean
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-build: ## Build bin/free-router
+build: web-build ## Build React admin and bin/free-router
 	@mkdir -p $(BUILD_DIR)
 	$(GO) build -trimpath -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY) .
 
-install: ## Install free-router into GOBIN (defaults to GOPATH/bin)
+web-install: ## Install locked React admin dependencies
+	cd $(WEB_DIR) && $(NPM) ci
+
+web-build: ## Build React admin into the Go embedded assets
+	@test -d $(WEB_DIR)/node_modules || $(MAKE) web-install
+	cd $(WEB_DIR) && $(NPM) run build
+
+web-check: ## Type-check the React admin
+	@test -d $(WEB_DIR)/node_modules || $(MAKE) web-install
+	cd $(WEB_DIR) && $(NPM) run typecheck
+
+install: web-build ## Install free-router into GOBIN (defaults to GOPATH/bin)
 	@mkdir -p $(GOBIN)
 	GOBIN=$(GOBIN) $(GO) install -trimpath -ldflags="$(LDFLAGS)" .
 	@echo "installed $(BINARY) $(VERSION) to $(GOBIN)/$(BINARY)"
 
+service-install: install ## Install binary and start it as a user service
+	$(GOBIN)/$(BINARY) service install
+
+service-start: ## Start the installed user service
+	$(GOBIN)/$(BINARY) service start
+
+service-stop: ## Stop the installed user service
+	$(GOBIN)/$(BINARY) service stop
+
+service-restart: ## Restart the installed user service
+	$(GOBIN)/$(BINARY) service restart
+
+service-status: ## Show user service status
+	$(GOBIN)/$(BINARY) service status
+
+service-logs: ## Follow user service logs
+	$(GOBIN)/$(BINARY) service logs --follow
+
+service-uninstall: ## Stop and remove the user service
+	$(GOBIN)/$(BINARY) service uninstall
+
 uninstall: ## Remove the installed binary
 	rm -f $(GOBIN)/$(BINARY)
 
-run: ## Run the service
+run: web-build ## Run the service
 	$(GO) run -ldflags="$(LDFLAGS)" .
 
 test: ## Run unit and integration tests
@@ -55,7 +89,7 @@ version-check: ## Verify the binary reports the VERSION file value
 	@actual="$$($(GO) run . version)"; \
 	if [ "$$actual" != "$(VERSION)" ]; then echo "version mismatch: VERSION=$(VERSION), binary=$$actual"; exit 1; fi
 
-check: fmt-check version-check vet test ## Run all required checks
+check: fmt-check version-check vet test web-check ## Run all required checks
 
 tidy: ## Update and verify Go module metadata
 	$(GO) mod tidy

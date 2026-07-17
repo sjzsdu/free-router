@@ -62,6 +62,30 @@ free-router version
 free-router
 ```
 
+Release 压缩包中只有一个 `free-router` 二进制文件。解压后直接执行安装命令即可，不需要 Go、Make 或额外安装脚本：
+
+```bash
+chmod +x free-router
+./free-router service install
+~/.local/bin/free-router service status
+```
+
+程序会自行复制到 `~/.local/bin/free-router`，因此安装完成后可以删除下载目录中的原文件。整个过程无需 `sudo`。macOS 使用 LaunchAgent，Linux 使用 systemd user service；登录后自动启动，异常退出后自动恢复。
+
+从源码安装时也可以使用 `make service-install`。
+
+日常管理命令：
+
+```bash
+free-router service start
+free-router service stop
+free-router service restart
+free-router service logs --follow
+free-router service uninstall
+```
+
+`service` 也可以写成 `daemon`。管理页面头部的状态按钮会显示启动方式、版本、PID、运行时间、缓存模型数和请求数，并每 5 秒检查一次连接状态。
+
 服务默认监听 `http://localhost:1314`。不带子命令等同于 `free-router serve`。
 
 启动后打开管理界面：
@@ -71,6 +95,13 @@ http://localhost:1314/admin/
 ```
 
 可以在网页中录入免费源 API Key、测试 Provider 连接、刷新缓存、查看模型健康和请求成功率，并拖动配置每条路由的 fallback 顺序。还可以禁用单个模型，或手工覆盖模型类型、tools、vision、reasoning 能力。配置保存后立即生效；新增或删除凭据也会热加载，不需要重启。
+
+管理界面使用 React、TypeScript、Vite、Tailwind CSS、React Query、Radix UI 和 dnd-kit 构建，生产静态资源会通过 Go Embed 打入同一个二进制。普通用户不需要安装 Node；只有修改管理界面源码时才需要运行：
+
+```bash
+make web-install
+make web-build
+```
 
 ```bash
 curl http://localhost:1314/healthz
@@ -305,7 +336,7 @@ GitHub Actions 会在 push 到 `main` 和 Pull Request 时自动执行 `make che
 
 ## 自动发布
 
-项目版本只有一个来源：[VERSION](./VERSION)，当前稳定版为 `0.2.0`。发布新版本时只需修改这个文件并推送到 `main`：
+项目版本只有一个来源：[VERSION](./VERSION)，当前稳定版为 `0.1.0`。发布新版本时只需修改这个文件并推送到 `main`：
 
 ```bash
 echo 0.2.1 > VERSION
