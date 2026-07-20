@@ -96,9 +96,15 @@ func (g *Gateway) models(w http.ResponseWriter, _ *http.Request) {
 		aliases := g.config.Routes.Aliases()
 		for _, alias := range aliases {
 			route := config.Routes[alias]
+			fallbackModels := make([]string, 0, len(route.Models))
+			for _, modelID := range route.Models {
+				if g.tracker.Available(modelID) {
+					fallbackModels = append(fallbackModels, modelID)
+				}
+			}
 			data = append(data, map[string]any{
 				"id": alias, "object": "model", "owned_by": "free-router", "type": route.Type,
-				"free": true, "route": true, "strategy": route.Strategy, "fallback_models": route.Models,
+				"free": true, "route": true, "strategy": route.Strategy, "fallback_models": fallbackModels,
 				"capabilities": catalog.Capabilities{ToolCall: route.RequireTool, ToolCallKnown: route.RequireTool, Streaming: true},
 			})
 		}
@@ -112,6 +118,9 @@ func (g *Gateway) models(w http.ResponseWriter, _ *http.Request) {
 			if !enabled {
 				continue
 			}
+		}
+		if !g.tracker.Available(model.ID) {
+			continue
 		}
 		data = append(data, map[string]any{
 			"id": model.ID, "object": "model", "owned_by": model.Provider, "provider": model.Provider,

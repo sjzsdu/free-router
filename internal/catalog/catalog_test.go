@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -130,6 +131,72 @@ func TestAudioProbeUsesEmbeddedWAVMultipart(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.ProbeModel(context.Background(), "test/whisper-test"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestImageEditProbeUsesEmbeddedPNGMultipart(t *testing.T) {
+	clearBuiltinKeys(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"image-edit-test","type":"image","supported_endpoints":["/images/edits"]}]}`))
+		case "/images/edits":
+			if err := r.ParseMultipartForm(32 << 10); err != nil {
+				t.Fatal(err)
+			}
+			file, _, err := r.FormFile("image")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			header := make([]byte, 8)
+			if _, err := io.ReadFull(file, header); err != nil || string(header) != "\x89PNG\r\n\x1a\n" {
+				t.Fatalf("invalid PNG header %q: %v", header, err)
+			}
+			_, _ = w.Write([]byte(`{"data":[{"url":"https://example.invalid/probe.png"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + server.URL + `","no_auth":true}]`)
+	store := New(registry, filepath.Join(t.TempDir(), "models.json"), server.Client())
+	if err := store.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ProbeModel(context.Background(), "test/image-edit-test"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestImageToVideoProbeIncludesEmbeddedPNG(t *testing.T) {
+	clearBuiltinKeys(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"tiny-i2v","type":"video"}]}`))
+		case "/videos/generations":
+			var input map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Fatal(err)
+			}
+			image, _ := input["image"].(string)
+			if !strings.HasPrefix(image, "data:image/png;base64,iVBOR") {
+				t.Fatalf("missing embedded image: %#v", input)
+			}
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + server.URL + `","no_auth":true}]`)
+	store := New(registry, filepath.Join(t.TempDir(), "models.json"), server.Client())
+	if err := store.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ProbeModel(context.Background(), "test/tiny-i2v"); err != nil {
 		t.Fatal(err)
 	}
 }

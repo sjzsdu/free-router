@@ -364,3 +364,99 @@ func TestModelHealthProbeUses24HourCacheAndSupportsForce(t *testing.T) {
 		t.Fatalf("forced probe did not run: calls=%d", chatCalls.Load())
 	}
 }
+
+func TestExpensiveModelProbeRequiresConfirmation(t *testing.T) {
+	for _, key := range provider.SupportedKeyEnvs() {
+		t.Setenv(key, "")
+	}
+	var imageCalls atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"image-test","type":"image"}]}`))
+		case "/images/generations":
+			imageCalls.Add(1)
+			_, _ = w.Write([]byte(`{"data":[{"url":"https://example.invalid/probe.png"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","no_auth":true}]`)
+	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	if err := models.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
+	tracker := health.New()
+	handler := New(routes, models, vault, tracker, Config{}, nil)
+
+	request := httptest.NewRequest(http.MethodPost, "/admin/api/health/probe/model", strings.NewReader(`{"model":"test/image-test"}`))
+	request.RemoteAddr = "127.0.0.1:1234"
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest || imageCalls.Load() != 0 {
+		t.Fatalf("unconfirmed status=%d calls=%d", recorder.Code, imageCalls.Load())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/admin/api/health/probe/model", strings.NewReader(`{"model":"test/image-test","allow_expensive":true}`))
+	request.RemoteAddr = "127.0.0.1:1234"
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("confirmed status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	deadline := time.Now().Add(time.Second)
+	for handler.probes.Snapshot().Status == "running" && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if imageCalls.Load() != 1 || tracker.Snapshot()[0].Status != "healthy" {
+		t.Fatalf("calls=%d health=%#v", imageCalls.Load(), tracker.Snapshot())
+	}
+}
+
+func TestAutomaticHealthProbeIncludesImageAndVideo(t *testing.T) {
+	for _, key := range provider.SupportedKeyEnvs() {
+		t.Setenv(key, "")
+	}
+	var imageCalls atomic.Int64
+	var videoCalls atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"image-test","type":"image"},{"id":"video-test","type":"video"}]}`))
+		case "/images/generations":
+			imageCalls.Add(1)
+			_, _ = w.Write([]byte(`{"data":[{"url":"https://example.invalid/probe.png"}]}`))
+		case "/videos/generations":
+			videoCalls.Add(1)
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","no_auth":true}]`)
+	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	if err := models.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
+	tracker := health.New()
+	handler := New(routes, models, vault, tracker, Config{}, nil)
+
+	status, started := handler.probes.Start(handler, false)
+	if !started || status.Total != 2 {
+		t.Fatalf("started=%t status=%#v", started, status)
+	}
+	deadline := time.Now().Add(time.Second)
+	for handler.probes.Snapshot().Status == "running" && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	status = handler.probes.Snapshot()
+	if status.Status != "completed" || status.Healthy != 2 || imageCalls.Load() != 1 || videoCalls.Load() != 1 {
+		t.Fatalf("status=%#v image_calls=%d video_calls=%d health=%#v", status, imageCalls.Load(), videoCalls.Load(), tracker.Snapshot())
+	}
+}

@@ -77,6 +77,39 @@ func TestAutoRetriesNextFreeModel(t *testing.T) {
 	}
 }
 
+func TestModelsEndpointHidesFailedModels(t *testing.T) {
+	clearBuiltinKeys(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/models" {
+			_, _ = w.Write([]byte(`{"data":[{"id":"healthy"},{"id":"failed"}]}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer upstream.Close()
+	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","no_auth":true}]`)
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	if err := store.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	tracker := health.New()
+	tracker.Failure("test/failed", 0, http.StatusBadGateway, "broken", 0)
+	handler := New(store, registry, Config{Health: tracker}, upstream.Client())
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	var list struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Data) != 2 || list.Data[0].ID != "auto" || list.Data[1].ID != "test/healthy" {
+		t.Fatalf("unexpected discoverable models: %#v", list.Data)
+	}
+}
+
 func TestNamedRouteFallsBackToRemainingModelAfterPriorityArray(t *testing.T) {
 	clearBuiltinKeys(t)
 	var calls []string

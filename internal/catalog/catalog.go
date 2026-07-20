@@ -27,6 +27,9 @@ import (
 //go:embed assets/probe.wav.b64
 var probeWAVBase64 string
 
+//go:embed assets/probe.png.b64
+var probePNGBase64 string
+
 type Model struct {
 	ID                  string       `json:"id"`
 	Provider            string       `json:"provider"`
@@ -356,7 +359,7 @@ func (s *Store) Probe(ctx context.Context, providerID string) (int, error) {
 	return len(models), nil
 }
 
-// ProbeModel sends the smallest useful inference request for lightweight model types.
+// ProbeModel sends the smallest useful inference request supported for each model type.
 func (s *Store) ProbeModel(ctx context.Context, modelID string) (ModelProbeResult, error) {
 	model, ok := s.Find(modelID)
 	if !ok {
@@ -393,11 +396,23 @@ func (s *Store) ProbeModel(ctx context.Context, modelID string) (ModelProbeResul
 			input = map[string]any{"model": model.UpstreamID, "input": "ping", "voice": "alloy", "response_format": "mp3"}
 		}
 	case "image":
-		endpoint = "/images/generations"
-		input = map[string]any{"model": model.UpstreamID, "prompt": "a dot", "n": 1}
+		if imageUsesEdit(model) {
+			endpoint = "/images/edits"
+			var err error
+			payload, contentType, err = imageProbePayload(model.UpstreamID)
+			if err != nil {
+				return ModelProbeResult{}, err
+			}
+		} else {
+			endpoint = "/images/generations"
+			input = map[string]any{"model": model.UpstreamID, "prompt": "a dot", "n": 1}
+		}
 	case "video":
 		endpoint = "/videos/generations"
 		input = map[string]any{"model": model.UpstreamID, "prompt": "a still black dot", "duration": 1}
+		if videoUsesImage(model) {
+			input["image"] = "data:image/png;base64," + strings.TrimSpace(probePNGBase64)
+		}
 	default:
 		return ModelProbeResult{}, fmt.Errorf("automatic probing is disabled for model type %q", model.Type)
 	}
@@ -461,6 +476,54 @@ func audioProbePayload(model string) ([]byte, string, error) {
 		return nil, "", err
 	}
 	if _, err := file.Write(audio); err != nil {
+		return nil, "", err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, "", err
+	}
+	return body.Bytes(), writer.FormDataContentType(), nil
+}
+
+func imageUsesEdit(model Model) bool {
+	for _, endpoint := range model.SupportedEndpoints {
+		lower := strings.ToLower(endpoint)
+		if strings.Contains(lower, "image") && (strings.Contains(lower, "edit") || strings.Contains(lower, "variation")) {
+			return true
+		}
+	}
+	id := strings.ToLower(model.UpstreamID)
+	return strings.Contains(id, "image-edit") || strings.Contains(id, "inpaint")
+}
+
+func videoUsesImage(model Model) bool {
+	for _, endpoint := range model.SupportedEndpoints {
+		lower := strings.ToLower(endpoint)
+		if strings.Contains(lower, "image-to-video") || strings.Contains(lower, "i2v") {
+			return true
+		}
+	}
+	id := strings.ToLower(model.UpstreamID)
+	return strings.Contains(id, "image-to-video") || strings.Contains(id, "i2v")
+}
+
+func imageProbePayload(model string) ([]byte, string, error) {
+	image, err := base64.StdEncoding.DecodeString(strings.TrimSpace(probePNGBase64))
+	if err != nil {
+		return nil, "", fmt.Errorf("decode embedded probe image: %w", err)
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("model", model); err != nil {
+		return nil, "", err
+	}
+	if err := writer.WriteField("prompt", "keep this image unchanged"); err != nil {
+		return nil, "", err
+	}
+	file, err := writer.CreateFormFile("image", "probe.png")
+	if err != nil {
+		return nil, "", err
+	}
+	if _, err := file.Write(image); err != nil {
 		return nil, "", err
 	}
 	if err := writer.Close(); err != nil {

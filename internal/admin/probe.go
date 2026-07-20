@@ -137,7 +137,7 @@ func probeCandidates(h *Handler, force bool) ([]catalog.Model, int) {
 	for _, model := range h.catalog.Models() {
 		var enabled bool
 		model, enabled = h.routes.Apply(model)
-		if !enabled || (model.Type != "normal" && model.Type != "embedding" && model.Type != "rerank" && model.Type != "audio") {
+		if !enabled || (model.Type != "normal" && model.Type != "embedding" && model.Type != "rerank" && model.Type != "audio" && model.Type != "image" && model.Type != "video") {
 			skipped++
 			continue
 		}
