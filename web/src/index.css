@@ -164,7 +164,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .incident-list strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
 .incident-list p { margin: 5px 0 0; color: var(--muted); font-size: 9px; line-height: 1.45; }
 .incident-icon { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; background: var(--amber-soft); color: var(--amber); }
-.incident-icon.cooling { background: var(--danger-soft); color: var(--danger); }
+.incident-icon.failed { background: var(--danger-soft); color: var(--danger); }
 .healthy-empty { min-height: 250px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--accent); text-align: center; }
 .healthy-empty strong { margin-top: 10px; color: var(--text); font-size: 12px; }
 .healthy-empty p { margin: 5px 0 0; color: var(--muted); font-size: 10px; }
@@ -180,8 +180,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .status-badge { width: max-content; padding: 4px 7px; border-radius: 999px; display: inline-flex; align-items: center; gap: 5px; background: var(--surface-3); color: var(--muted); font-size: 8px; font-weight: 700; white-space: nowrap; }
 .status-badge > span { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .status-badge.healthy, .status-badge.configured { background: var(--accent-soft); color: var(--accent); }
-.status-badge.cooling { background: var(--danger-soft); color: var(--danger); }
-.status-badge.degraded { background: var(--amber-soft); color: var(--amber); }
+.status-badge.failed { background: var(--danger-soft); color: var(--danger); }
 .status-badge.missing { color: var(--subtle); }
 .pill-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
 .capability-pill, .route-pill { padding: 3px 6px; border-radius: 5px; background: var(--surface-3); color: var(--muted); font-size: 8px; font-weight: 700; }
@@ -206,6 +205,12 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .route-chain-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; }
 .route-chain-heading h2 { margin: 4px 0 0; font-size: 20px; letter-spacing: -.03em; }
 .route-chain-heading p { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
+.route-strategy { margin-top: 15px; padding: 4px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.route-strategy button { min-width: 0; padding: 9px 11px; display: flex; align-items: center; justify-content: center; gap: 8px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; text-align: left; }
+.route-strategy button.active { color: var(--text); background: var(--surface); box-shadow: var(--shadow-sm); }
+.route-strategy span, .route-strategy strong, .route-strategy small { display: block; }
+.route-strategy strong { font-size: 10px; }
+.route-strategy small { margin-top: 2px; color: var(--muted); font-size: 8px; }
 .model-alias { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--accent); background: var(--surface-2); font-size: 9px; }
 .chain-explainer { margin: 18px 0 10px; padding: 9px 10px; border-radius: 7px; display: flex; align-items: center; gap: 7px; background: var(--blue-soft); color: var(--blue); font-size: 9px; }
 .fallback-chain { display: grid; gap: 7px; }
@@ -245,6 +250,16 @@ select, .field-label select { min-width: 0; height: 34px; padding: 0 25px 0 9px;
 .small-empty { height: 180px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--subtle); font-size: 9px; }
 
 .model-toolbar { min-height: 74px; padding: 13px; display: grid; grid-template-columns: minmax(260px, 1fr) auto auto; align-items: center; gap: 13px; }
+.probe-panel { min-height: 82px; padding: 13px 15px; display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.probe-panel.running { border-color: color-mix(in srgb, var(--blue) 35%, var(--border)); }
+.probe-icon { width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; background: var(--blue-soft); color: var(--blue); }
+.probe-copy { min-width: 0; }
+.probe-copy > div { display: flex; align-items: center; gap: 9px; }
+.probe-copy strong { font-size: 11px; }
+.probe-copy > div span { color: var(--muted); font-size: 9px; }
+.probe-copy p { margin: 5px 0 0; color: var(--muted); font-size: 9px; }
+.probe-progress { max-width: 520px; height: 4px; margin-top: 8px; overflow: hidden; border-radius: 999px; background: var(--surface-3); }
+.probe-progress span { height: 100%; display: block; border-radius: inherit; background: var(--blue); transition: width .25s ease; }
 .search-field.large { height: 40px; }
 .search-field.large input { font-size: 11px; }
 .filter-row { display: flex; gap: 7px; }
@@ -267,6 +282,8 @@ select, .field-label select { min-width: 0; height: 34px; padding: 0 25px 0 9px;
 .model-identity strong { font-family: "SFMono-Regular", Consolas, monospace; font-size: 9px; }
 .model-identity small { margin-top: 4px; color: var(--muted); font-size: 8px; }
 .context-cell { color: var(--muted); font-size: 9px; }
+.model-health { display: grid; gap: 3px; }
+.model-health small { color: var(--amber); font-size: 7px; line-height: 1.3; }
 
 .dialog-overlay { position: fixed; inset: 0; z-index: 90; background: rgba(7, 12, 9, .46); animation: fadeIn .15s ease; }
 .model-drawer { position: fixed; z-index: 91; top: 0; right: 0; width: min(480px, 94vw); height: 100vh; padding: 21px; overflow: auto; background: var(--surface); box-shadow: var(--shadow-lg); animation: slideIn .22s ease; }
@@ -294,7 +311,7 @@ select, .field-label select { min-width: 0; height: 34px; padding: 0 25px 0 9px;
 .segmented { padding: 3px; border-radius: 7px; display: flex; background: var(--surface-3); }
 .segmented button { min-height: 27px; padding: 0 8px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; font-size: 8px; }
 .segmented button.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); font-weight: 700; }
-.drawer-footer { margin-top: 23px; }
+.drawer-footer { margin-top: 23px; display: grid; gap: 8px; }
 
 .provider-intro { min-height: 88px; padding: 16px 18px; display: grid; grid-template-columns: 42px 1fr auto; align-items: center; gap: 13px; }
 .provider-intro-icon { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; background: var(--violet-soft); color: var(--violet); }
@@ -431,6 +448,8 @@ select, .field-label select { min-width: 0; height: 34px; padding: 0 25px 0 9px;
   .route-summary-list > button { grid-template-columns: 34px minmax(0, 1fr) 14px; }
   .route-current { display: none; }
   .catalog-strip { grid-template-columns: 1fr; gap: 14px; }
+  .probe-panel { grid-template-columns: 34px minmax(0, 1fr); }
+  .probe-panel > button { grid-column: 1 / -1; width: 100%; }
   .model-toolbar { display: block; }
   .filter-row { margin-top: 8px; display: grid; grid-template-columns: 1fr 1fr; }
   .filter-row select { min-width: 0; }

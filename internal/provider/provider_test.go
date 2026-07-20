@@ -32,6 +32,38 @@ func TestSiliconFlowDiscoversOnlyChatModels(t *testing.T) {
 	}
 }
 
+func TestChineseFreeProvidersHaveExplicitFreeModelPolicies(t *testing.T) {
+	byID := make(map[string]Spec)
+	for _, spec := range builtins() {
+		byID[spec.ID] = spec
+	}
+	for _, id := range []string{"bigmodel", "qianfan"} {
+		spec, ok := byID[id]
+		if !ok {
+			t.Fatalf("missing Chinese provider %s", id)
+		}
+		if len(spec.AllowedModels) == 0 && len(spec.AllowedModelPatterns) == 0 {
+			t.Fatalf("provider %s must restrict discovery to verified free models", id)
+		}
+	}
+}
+
+func TestCreditProvidersExposeBillingWarnings(t *testing.T) {
+	byID := make(map[string]Spec)
+	for _, spec := range builtins() {
+		byID[spec.ID] = spec
+	}
+	for _, id := range []string{"xiaomi-mimo", "dashscope", "volcengine-ark", "baichuan"} {
+		spec, ok := byID[id]
+		if !ok {
+			t.Fatalf("missing credit provider %s", id)
+		}
+		if spec.FreeKind == "" || spec.BillingWarning == "" {
+			t.Fatalf("credit provider %s must disclose its free kind and billing warning", id)
+		}
+	}
+}
+
 func TestBuiltinsHaveOfficialRegistrationURLs(t *testing.T) {
 	for _, spec := range builtins() {
 		parsed, err := url.Parse(spec.RegisterURL)

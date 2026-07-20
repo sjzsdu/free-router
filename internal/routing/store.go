@@ -13,11 +13,17 @@ import (
 	"github.com/sjzsdu/free-router/internal/catalog"
 )
 
-const CurrentVersion = 4
+const CurrentVersion = 5
+
+const (
+	StrategyOrdered    = "ordered"
+	StrategyRoundRobin = "round-robin"
+)
 
 type Route struct {
 	Comment     string   `json:"_comment,omitempty"`
 	Type        string   `json:"type"`
+	Strategy    string   `json:"strategy,omitempty"`
 	RequireTool bool     `json:"require_tool,omitempty"`
 	Models      []string `json:"models"`
 }
@@ -47,14 +53,14 @@ type Store struct {
 
 func DefaultConfig() Config {
 	return Config{Version: CurrentVersion, Models: map[string]ModelOverride{}, ProviderEnv: map[string][]string{}, Routes: map[string]Route{
-		"chat":       {Type: "chat", Models: []string{}},
-		"chat-tools": {Type: "chat-tools", RequireTool: true, Models: []string{}},
-		"embedding":  {Type: "embedding", Models: []string{}},
-		"audio":      {Type: "audio", Models: []string{}},
-		"image":      {Type: "image", Models: []string{}},
-		"video":      {Type: "video", Models: []string{}},
-		"rerank":     {Type: "rerank", Models: []string{}},
-		"moderation": {Type: "moderation", Models: []string{}},
+		"chat":       {Type: "chat", Strategy: StrategyOrdered, Models: []string{}},
+		"chat-tools": {Type: "chat-tools", Strategy: StrategyOrdered, RequireTool: true, Models: []string{}},
+		"embedding":  {Type: "embedding", Strategy: StrategyOrdered, Models: []string{}},
+		"audio":      {Type: "audio", Strategy: StrategyOrdered, Models: []string{}},
+		"image":      {Type: "image", Strategy: StrategyOrdered, Models: []string{}},
+		"video":      {Type: "video", Strategy: StrategyOrdered, Models: []string{}},
+		"rerank":     {Type: "rerank", Strategy: StrategyOrdered, Models: []string{}},
+		"moderation": {Type: "moderation", Strategy: StrategyOrdered, Models: []string{}},
 	}}
 }
 
@@ -269,6 +275,12 @@ func validate(config *Config) error {
 	for alias, route := range config.Routes {
 		if strings.TrimSpace(alias) == "" || strings.TrimSpace(route.Type) == "" {
 			return errors.New("route alias and type must not be empty")
+		}
+		if route.Strategy == "" {
+			route.Strategy = StrategyOrdered
+		}
+		if route.Strategy != StrategyOrdered && route.Strategy != StrategyRoundRobin {
+			return fmt.Errorf("route %q strategy must be %q or %q", alias, StrategyOrdered, StrategyRoundRobin)
 		}
 		seen := make(map[string]bool)
 		cleaned := make([]string, 0, len(route.Models))

@@ -40,6 +40,7 @@ export interface ModelOverride {
 export interface Route {
   _comment?: string
   type: RouteType
+  strategy?: 'ordered' | 'round-robin'
   require_tool?: boolean
   models: string[]
 }
@@ -62,6 +63,8 @@ export interface ProviderStatus {
   configured: boolean
   source: 'environment' | 'saved' | 'missing'
   tier: string
+  free_kind?: 'credit' | 'trial' | string
+  billing_warning?: string
   register_url?: string
   oauth?: boolean
 }
@@ -70,7 +73,7 @@ export interface Credential { provider: string; backend?: string }
 
 export interface HealthState {
   model: string
-  status: 'healthy' | 'cooling' | 'degraded' | 'unknown'
+  status: 'healthy' | 'failed' | 'unknown'
   requests: number
   successes: number
   failures: number
@@ -79,10 +82,23 @@ export interface HealthState {
   last_status?: number
   last_error?: string
   last_used_at?: string
-  cooldown_until?: string
+  checks: number
+  last_checked_at?: string
+  last_check_latency_ms?: number
 }
 
-export interface Summary { requests: number; successes: number; failures: number; cooling: number }
+export interface HealthProbeStatus {
+  status: 'idle' | 'running' | 'completed'
+  total: number
+  completed: number
+  healthy: number
+  failed: number
+  skipped: number
+  started_at?: string
+  finished_at?: string
+}
+
+export interface Summary { requests: number; successes: number; failures: number; failed: number }
 export interface CatalogStatus { count: number; updated_at?: string; cache_path: string }
 export interface RuntimeStatus {
   status: string
@@ -93,7 +109,7 @@ export interface RuntimeStatus {
   service_manager: 'launchd' | 'systemd' | 'manual'
   models: number
   requests: number
-  cooling: number
+  failed: number
 }
 
 export interface AppState {
@@ -105,6 +121,7 @@ export interface AppState {
   credentials: Credential[]
   health: HealthState[]
   summary: Summary
+  health_probe: HealthProbeStatus
   runtime: RuntimeStatus
 }
 

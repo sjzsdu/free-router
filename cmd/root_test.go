@@ -35,3 +35,23 @@ func TestLoadDaemonEnvironmentDoesNotOverrideProcess(t *testing.T) {
 		t.Fatalf("process environment was overwritten: %q", got)
 	}
 }
+
+func TestDefaultOptionsUseUnifiedDataDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("FREE_ROUTER_CACHE", "")
+	t.Setenv("FREE_ROUTER_CONFIG", "")
+	t.Setenv("FREE_ROUTER_CREDENTIALS", "")
+
+	opts := defaultOptions()
+	dataDir := filepath.Join(home, ".free-router")
+	if got, want := opts.cache, filepath.Join(dataDir, "models.json"); got != want {
+		t.Fatalf("cache path = %s, want %s", got, want)
+	}
+	if got, want := opts.config, filepath.Join(dataDir, "config.json"); got != want {
+		t.Fatalf("config path = %s, want %s", got, want)
+	}
+	if got, want := opts.credentials, filepath.Join(dataDir, "credentials.json"); got != want {
+		t.Fatalf("credentials path = %s, want %s", got, want)
+	}
+}

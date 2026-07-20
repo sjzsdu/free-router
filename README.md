@@ -20,11 +20,23 @@
 | SambaNova | `SAMBANOVA_API_KEY` | Free Tier | [SambaNova Cloud](https://cloud.sambanova.ai/apis) |
 | Ollama Cloud | `OLLAMA_API_KEY` | Free Tier | [Ollama Keys](https://ollama.com/settings/keys) |
 | ModelScope | `MODELSCOPE_API_KEY` | 免费推理额度 | [访问令牌](https://modelscope.cn/my/myaccesstoken) |
+| Xiaomi MiMo | `MIMO_API_KEY` | 账号赠送体验金 | [API Keys](https://platform.xiaomimimo.com/#/console/api-keys) |
+| 阿里云百炼 | `DASHSCOPE_API_KEY` | 新人模型免费额度 | [API Key](https://bailian.console.aliyun.com/?apiKey=1#/api-key) |
+| 火山方舟 | `ARK_API_KEY` | 各模型免费体验额度 | [API Key](https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey) |
+| 百川智能 | `BAICHUAN_API_KEY` | 新用户赠送金 | [开放平台](https://platform.baichuan-ai.com/) |
+| 智谱开放平台 | `BIGMODEL_API_KEY` | 官方 Flash 免费模型系列 | [API Keys](https://bigmodel.cn/usercenter/proj-mgmt/apikeys) |
+| 百度千帆 | `QIANFAN_API_KEY` | 长期免费的 ERNIE Speed / Lite / Tiny | [API Key 管理](https://console.bce.baidu.com/qianfan/ais/console/apiKey) |
 | SiliconFlow | `SILICONFLOW_API_KEY` | 官方标记免费的聊天模型 | [API 密钥](https://cloud.siliconflow.cn/account/ak) |
 | Z.AI | `ZAI_API_KEY` | GLM Flash 免费模型 | [API Keys](https://z.ai/manage-apikey/apikey-list) |
 | Cloudflare Workers AI | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | 每日 10,000 Neurons | [创建 API Token](https://dash.cloudflare.com/profile/api-tokens) |
 
 这些服务的条款、区域和额度会变化。除 OpenRouter 的零价模型筛选外，provider 通常不会通过 `/models` 告诉路由器账户是否启用了付费；要确保绝不扣费，请使用没有绑定计费方式的 Free Tier 账户。
+
+### 中国大陆免费源的筛选原则
+
+内置中国大陆来源目前包括 ModelScope、SiliconFlow、智谱开放平台、百度千帆、Xiaomi MiMo、阿里云百炼、火山方舟和百川智能。free-router 不会把永久免费平台返回的全部模型都当作免费模型：智谱只自动接收官方 `Flash` 系列，千帆只接收 `ernie-speed-8k`、`ernie-speed-128k`、`ernie-lite-8k`、`ernie-tiny-8k`，SiliconFlow 使用显式免费模型清单。模型列表在启动时同步一次，也可以在管理页面手动刷新。
+
+`gift-credits`、`new-user-free-quota`、`free-trial-quota` 都属于额度型来源，并非永久免费。只有用户配置对应 Key 后它们才会启用，管理页面会持续显示计费警告。百炼用户应先开启“免费额度用完即停”；其他额度型平台应关闭后付费或确保账户没有可扣余额。Kimi 当前按输入/输出计费，MiniMax 当前使用付费 Token Plan、Credits 或按量计费，因此没有作为免费来源内置。
 
 OpenRouter 还支持网页中的 **OAuth 登录**：点击后在 OpenRouter 完成授权，free-router 使用 PKCE 换取用户自己的 API Key，并直接保存到本机安全凭据存储。整个过程无需复制 Key，授权回调只允许 localhost，且 10 分钟后自动失效。其他 Provider 的官网社交登录不等于 API OAuth；需要预先注册 OAuth Client 的平台暂不内置公共 Client 凭据。
 
@@ -72,7 +84,7 @@ chmod +x free-router
 ~/.local/bin/free-router daemon status
 ```
 
-程序会自行复制到 `~/.local/bin/free-router`，因此安装完成后可以删除下载目录中的原文件。整个过程无需 `sudo`。macOS 使用 LaunchAgent，Linux 使用 systemd user service；登录后自动启动，异常退出后自动恢复。安装 daemon 时，程序会把当前已命中的 Provider 环境变量保存到权限为 `0600` 的本机快照，确保后台进程也能读取；环境变量变更后重新执行 `free-router daemon install` 即可更新快照并重启。
+程序会自行复制到 `~/.local/bin/free-router`，因此安装完成后可以删除下载目录中的原文件。整个过程无需 `sudo`。macOS 使用 LaunchAgent，Linux 使用 systemd user service；登录后自动启动，异常退出后自动恢复。安装 daemon 时，程序会把当前已命中的 Provider 环境变量保存到 `~/.free-router/daemon-env.json`（权限 `0600`），确保后台进程也能读取；环境变量变更后重新执行 `free-router daemon install` 即可更新快照并重启。
 
 从源码安装时也可以使用 `make daemon-install`。
 
@@ -162,15 +174,22 @@ OPENAI_API_KEY=任意非空字符串
 3. siliconflow/Qwen/Qwen3-8B
 ```
 
-数组中的模型会严格从上到下依次尝试。它们全部不可用后，路由器会从没有出现在数组中的同路由类型健康模型里轮换选择一个作为最终兜底。列表为空时，则完全根据缓存的类型、能力和健康状态自动选择。
+每条路由可选择两种策略：
 
-稳定版会跟踪每个模型的成功率、响应延迟和连续失败次数：
+- `ordered`（按顺序）：每次从数组中第一个健康模型开始，失败后严格向下 fallback；
+- `round-robin`（雨露均沾）：每次轮换一个健康模型作为首选，失败后继续沿数组 fallback，让免费额度和限流压力分散到多个来源。
 
-- 429 遵循上游 `Retry-After`，缺失时默认冷却 30 秒；
-- 401/403 默认冷却 5 分钟，避免持续使用无效凭据；
-- 连续网络错误或 5xx 会触发熔断；
-- 冷却中的模型不会进入正常 fallback 链；如果所有候选都在冷却，会选择一个模型进行恢复探测；
+两种策略下，数组中的模型全部不可用后，路由器都会从没有出现在数组中的同路由类型健康模型里轮换选择一个作为最终兜底。列表为空时，则完全根据缓存的类型、能力和健康状态自动选择。
+
+稳定版会跟踪每个模型的成功率、响应延迟、HTTP 状态和最近一次错误：
+
+- 自动路由遇到网络错误、429、鉴权/额度错误、模型不兼容或上游 5xx 时，立即 fallback 到下一个候选；
+- 失败模型会被标记为 `failed` 并退出后续自动路由，不会在下一次请求中再次命中；
+- Admin 模型页可筛选“故障（已隔离）”，查看最近状态和错误原因；
+- 排查完成后可点击“重新加入自动路由”；直接指定完整模型 ID 调用成功也会恢复其健康状态；
 - 健康统计保存在内存中，服务重启后重新统计。
+
+进入 Admin 的模型页时，系统会后台检测状态未知或检测缓存已超过 24 小时的轻量模型。Chat 使用 1 token 的最短请求，Embedding 使用短文本，Rerank 使用单条文档；同一 Provider 串行、全局最多并发 3 个，单模型超时 10 秒。图像、音频、视频不会被自动调用。页面会显示检测进度，也可以点击“重新检测全部”忽略 24 小时缓存强制重检。
 
 ## 直接指定模型
 
@@ -183,7 +202,7 @@ github-models/openai/gpt-4.1
 openrouter/openai/gpt-oss-20b:free
 ```
 
-指定完整 ID 时固定使用该源且不 fallback。使用固定能力名称时按照管理界面中的顺序 fallback。响应头会返回实际选择：
+指定完整 ID 时固定使用该源且不 fallback。使用固定能力名称时按照管理界面选择的 `ordered` 或 `round-robin` 策略调用，并在失败时 fallback。响应头会返回实际选择：
 
 ```text
 X-Free-Router-Provider: groq
@@ -213,7 +232,18 @@ curl -s http://localhost:1314/v1/models | jq '.data[] | select(.id != "auto") | 
 
 ## 配置文件
 
-首次启动会在操作系统用户配置目录生成 `free-router/config.json`。API Key 不在这个文件中，仍单独存储在 Keychain 或安全凭据文件。
+free-router 的全局配置与运行资料统一存放在 `~/.free-router`：
+
+```text
+~/.free-router/
+├── config.json       # 路由、Provider 环境变量映射和模型覆盖
+├── credentials.json  # Keychain 不可用时的仅限当前用户凭据文件
+├── models.json       # 自动维护的模型目录缓存
+├── daemon-env.json   # 守护进程环境快照
+└── free-router.log   # macOS 守护进程日志
+```
+
+这些文件按需创建。API Key 不写入 `config.json`；macOS 优先存入系统 Keychain，其他平台或 Keychain 不可用时才使用权限为 `0600` 的 `credentials.json`。
 
 推荐首次运行 `free-router onboard`。它会读取当前二进制中的默认配置，生成带 `_comment`、`_help` 和每条路由说明的标准 JSON 文件，同时展开全部内置 Provider 环境变量映射。说明字段不会参与运行；已有文件默认不会被覆盖。
 
@@ -226,7 +256,7 @@ free-router onboard --force            # 明确覆盖已有配置
 
 ```json
 {
-  "version": 4,
+  "version": 5,
   "provider_env": {
     "gemini": ["GEMINI_API_KEY", "MY_GEMINI_KEY"],
     "groq": ["GROQ_API_KEY"]
@@ -234,6 +264,7 @@ free-router onboard --force            # 明确覆盖已有配置
   "routes": {
     "chat": {
       "type": "chat",
+      "strategy": "ordered",
       "models": [
         "groq/openai/gpt-oss-120b",
         "siliconflow/Qwen/Qwen3-8B"
@@ -263,15 +294,15 @@ free-router onboard --force            # 明确覆盖已有配置
 
 `provider_env` 是 provider 到 API Key 环境变量名数组的映射。数组按顺序查找，第一个非空环境变量会作为该 Provider 的凭据并自动启用它；用户配置的名称会排在内置名称前面，合并后自动去重。配置文件只保存变量名，不保存变量值。Cloudflare 仍需额外提供 `CLOUDFLARE_ACCOUNT_ID`。
 
-旧版配置会自动迁移到 version 4：原来的 `normal` 聊天类型会转换成 `chat` 或 `chat-tools`，并立即写回配置文件。缺少的内置路由会自动补全。推荐通过 Web 界面修改；也可以停止服务后手工编辑。路径可用 `--config` 或 `FREE_ROUTER_CONFIG` 覆盖。
+旧版配置会自动迁移到 version 5：原来的 `normal` 聊天类型会转换成 `chat` 或 `chat-tools`，缺失的策略默认为 `ordered`，并立即写回配置文件。缺少的内置路由会自动补全。推荐通过 Web 界面修改；也可以停止服务后手工编辑。配置、缓存和凭据路径可分别用 `--config` / `FREE_ROUTER_CONFIG`、`--cache` / `FREE_ROUTER_CACHE`、`--credentials` / `FREE_ROUTER_CREDENTIALS` 覆盖。
 
 ## 模型缓存与自维护
 
 1. 首次启动并发请求所有已配置 provider 的 `/models`，生成本地缓存。
-2. 后续启动优先加载缓存，服务立即可用，然后在后台刷新，不阻塞启动。
-3. 普通推理请求只读取内存目录，绝不会为了选择模型临时请求 provider 的 `/models`。
-4. 默认每小时刷新；单个源失败时保留该源上一次成功的缓存，不影响其他源。
-5. 模型新增或下线不需要发布新版本；也可以在 Web 界面手动刷新。
+2. 后续启动优先加载缓存，服务立即可用，然后只在启动阶段后台同步一次。
+3. 不会定时轮询 `/models`；普通推理请求也绝不会为了选择模型访问模型目录。
+4. 新增 Provider 凭据时会同步一次；模型目录发生变化时可在 Web 界面点击“刷新模型”。
+5. 单个源同步失败时保留该源上一次成功的缓存，不影响其他源。
 6. 缓存保留类型、tool call、vision、context、输入输出模态等字段，用于能力匹配。
 
 ## 接入任意免费源
@@ -333,7 +364,7 @@ free-router serve
 
 浏览器会显示 HTTP Basic 登录框，用户名固定为 `admin`，密码是令牌。管理 API 也接受 `Authorization: Bearer <token>`。服务会拒绝没有令牌的远程管理模式，并对写操作执行同源检查；生产环境仍建议放在 HTTPS 反向代理或 VPN 后面。
 
-凭据文件路径遵循操作系统的用户配置目录，可用 `--credentials` 或 `FREE_ROUTER_CREDENTIALS` 覆盖。程序不会自动注册第三方账号、读取邮箱验证码或绕过 CAPTCHA；账户申请仍由用户在 provider 官方网站完成一次。
+凭据回退文件默认为 `~/.free-router/credentials.json`，可用 `--credentials` 或 `FREE_ROUTER_CREDENTIALS` 覆盖。程序不会自动注册第三方账号、读取邮箱验证码或绕过 CAPTCHA；账户申请仍由用户在 provider 官方网站完成一次。
 
 完整参数见 `free-router --help`。
 

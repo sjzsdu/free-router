@@ -165,8 +165,55 @@ func TestNamedRouteUsesConfiguredFallbackOrder(t *testing.T) {
 		t.Fatalf("status=%d calls=%v body=%s", recorder.Code, calls, recorder.Body.String())
 	}
 	states := tracker.Snapshot()
-	if len(states) != 2 || states[0].Status != "cooling" || states[1].Status != "healthy" {
+	if len(states) != 2 || states[0].Status != "failed" || states[1].Status != "healthy" {
 		t.Fatalf("health states = %#v", states)
+	}
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat","messages":[]}`)))
+	if recorder.Code != http.StatusOK || strings.Join(calls, ",") != "first,second,second" {
+		t.Fatalf("failed model was retried: status=%d calls=%v", recorder.Code, calls)
+	}
+}
+
+func TestNamedRouteRoundRobinBalancesHealthyModels(t *testing.T) {
+	clearBuiltinKeys(t)
+	var calls []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"first"},{"id":"second"},{"id":"third"}]}`))
+		case "/chat/completions":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			calls = append(calls, body["model"].(string))
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		}
+	}))
+	defer upstream.Close()
+	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","api_key":"test"}]`)
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	if err := store.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	config := routes.Config()
+	route := config.Routes["chat"]
+	route.Strategy = routing.StrategyRoundRobin
+	route.Models = []string{"test/first", "test/second", "test/third"}
+	config.Routes["chat"] = route
+	if err := routes.Update(config); err != nil {
+		t.Fatal(err)
+	}
+	handler := New(store, registry, Config{MaxAttempts: 3, Routes: routes}, upstream.Client())
+	for range 4 {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat","messages":[]}`)))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+	}
+	if got := strings.Join(calls, ","); got != "first,second,third,first" {
+		t.Fatalf("round-robin calls = %s", got)
 	}
 }
 

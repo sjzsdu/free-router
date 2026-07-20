@@ -73,8 +73,33 @@ func TestVersionTwoNormalRoutesMigrateToUserFacingTypes(t *testing.T) {
 		t.Fatalf("migrated config = %#v", config)
 	}
 	persisted, err := os.ReadFile(path)
-	if err != nil || !strings.Contains(string(persisted), `"version": 4`) {
+	if err != nil || !strings.Contains(string(persisted), `"version": 5`) {
 		t.Fatalf("migration was not persisted: %s, %v", persisted, err)
+	}
+}
+
+func TestRouteStrategyDefaultsAndValidation(t *testing.T) {
+	store, err := New(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := store.Config()
+	route := config.Routes["chat"]
+	if route.Strategy != StrategyOrdered {
+		t.Fatalf("default strategy = %q", route.Strategy)
+	}
+	route.Strategy = StrategyRoundRobin
+	config.Routes["chat"] = route
+	if err := store.Update(config); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.Route("chat"); got.Strategy != StrategyRoundRobin {
+		t.Fatalf("saved strategy = %q", got.Strategy)
+	}
+	route.Strategy = "random"
+	config.Routes["chat"] = route
+	if err := store.Update(config); err == nil {
+		t.Fatal("invalid strategy was accepted")
 	}
 }
 

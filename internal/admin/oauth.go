@@ -140,7 +140,7 @@ func (h *Handler) finishOpenRouterOAuth(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 	}
-	_ = h.catalog.Refresh(r.Context())
+	h.refreshProviderAsync("openrouter")
 	h.oauthRedirect(w, r, true, "")
 }
 

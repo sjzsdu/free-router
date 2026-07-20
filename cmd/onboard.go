@@ -16,6 +16,7 @@ import (
 type documentedRoute struct {
 	Comment     string   `json:"_comment"`
 	Type        string   `json:"type"`
+	Strategy    string   `json:"strategy"`
 	RequireTool bool     `json:"require_tool,omitempty"`
 	Models      []string `json:"models"`
 }
@@ -86,7 +87,7 @@ func documentedDefaultConfig() ([]byte, error) {
 			description = fmt.Sprintf("%s 类型的能力路由。", route.Type)
 		}
 		routes[alias] = documentedRoute{
-			Comment: description, Type: route.Type,
+			Comment: description, Type: route.Type, Strategy: route.Strategy,
 			RequireTool: route.RequireTool, Models: append([]string{}, route.Models...),
 		}
 	}
@@ -95,7 +96,7 @@ func documentedDefaultConfig() ([]byte, error) {
 		Help: map[string]string{
 			"version":      "配置格式版本，由程序维护；不要手工降级。",
 			"provider_env": "Provider 到 API Key 环境变量名数组的映射，按顺序使用第一个非空变量。这里只写变量名，不写 Key；用户映射会与内置映射合并。Cloudflare 还需要 CLOUDFLARE_ACCOUNT_ID。",
-			"routes":       "稳定的功能路由名。每个 models 数组按从高到低排列；依次失败后，路由器会从该类型剩余的健康模型中选择。空数组表示完全自动选择。",
+			"routes":       "稳定的功能路由名。strategy 可选 ordered（严格按 models 顺序）或 round-robin（健康模型轮流作为首选）；失败时都会继续 fallback。空数组表示完全自动选择。",
 			"models":       "按 provider/model ID 覆盖上游元数据。可设置 disabled、type、tool_call、vision、reasoning；默认没有覆盖。",
 		},
 		Version: defaults.Version, ProviderEnv: provider.DefaultEnvMap(), Routes: routes, Models: defaults.Models,

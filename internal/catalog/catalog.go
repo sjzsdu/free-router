@@ -1,14 +1,19 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
+	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -18,6 +23,9 @@ import (
 
 	"github.com/sjzsdu/free-router/internal/provider"
 )
+
+//go:embed assets/probe.wav.b64
+var probeWAVBase64 string
 
 type Model struct {
 	ID                  string       `json:"id"`
@@ -54,6 +62,17 @@ type Pricing struct {
 	Prompt     string `json:"prompt,omitempty"`
 	Completion string `json:"completion,omitempty"`
 }
+
+type ModelProbeResult struct {
+	Status int
+}
+
+type ModelProbeError struct {
+	Status  int
+	Message string
+}
+
+func (e *ModelProbeError) Error() string { return e.Message }
 
 type upstreamModel struct {
 	ID                  string       `json:"id"`
@@ -178,6 +197,48 @@ func (s *Store) Refresh(ctx context.Context) error {
 	return nil
 }
 
+// RefreshProvider updates one provider without waiting on or contacting the others.
+func (s *Store) RefreshProvider(ctx context.Context, providerID string) error {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	spec, ok := s.registry.Get(providerID)
+	if !ok {
+		return fmt.Errorf("provider %q is not configured", providerID)
+	}
+	models, err := s.fetch(ctx, spec)
+	if err != nil {
+		return err
+	}
+	merged := make([]Model, 0, len(s.Models())+len(models))
+	for _, model := range s.Models() {
+		if model.Provider != providerID {
+			merged = append(merged, model)
+		}
+	}
+	merged = append(merged, models...)
+	sort.Slice(merged, func(i, j int) bool { return merged[i].ID < merged[j].ID })
+	s.set(merged, time.Now())
+	if err := s.saveCache(merged); err != nil {
+		return fmt.Errorf("save model cache: %w", err)
+	}
+	return nil
+}
+
+// PruneDisabled removes cached models whose provider is no longer configured.
+func (s *Store) PruneDisabled() error {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	current := s.Models()
+	models := make([]Model, 0, len(current))
+	for _, model := range current {
+		if _, enabled := s.registry.Get(model.Provider); enabled {
+			models = append(models, model)
+		}
+	}
+	s.set(models, time.Now())
+	return s.saveCache(models)
+}
+
 func (s *Store) fetch(ctx context.Context, spec provider.Spec) ([]Model, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, spec.ModelsEndpoint(), nil)
 	if err != nil {
@@ -216,7 +277,7 @@ func (s *Store) fetch(ctx context.Context, spec provider.Spec) ([]Model, error) 
 		if spec.UseNameAsID && candidate.Name != "" {
 			candidate.ID = candidate.Name
 		}
-		if candidate.ID == "" || !allowed(spec.AllowedModels, candidate.ID) || (spec.Filter == provider.FilterZeroPrice && !zeroPriced(candidate)) {
+		if candidate.ID == "" || !allowed(spec.AllowedModels, spec.AllowedModelPatterns, candidate.ID) || (spec.Filter == provider.FilterZeroPrice && !zeroPriced(candidate)) {
 			continue
 		}
 		input := candidate.InputModalities
@@ -283,30 +344,6 @@ func truncateDetail(value string) string {
 	return value
 }
 
-func (s *Store) Start(ctx context.Context, interval time.Duration) <-chan struct{} {
-	done := make(chan struct{})
-	if interval <= 0 {
-		close(done)
-		return done
-	}
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if err := s.Refresh(ctx); err != nil {
-					slog.Warn("model catalog refresh failed", "error", err)
-				}
-			}
-		}
-	}()
-	return done
-}
-
 func (s *Store) Probe(ctx context.Context, providerID string) (int, error) {
 	spec, ok := s.registry.Get(providerID)
 	if !ok {
@@ -317,6 +354,119 @@ func (s *Store) Probe(ctx context.Context, providerID string) (int, error) {
 		return 0, err
 	}
 	return len(models), nil
+}
+
+// ProbeModel sends the smallest useful inference request for lightweight model types.
+func (s *Store) ProbeModel(ctx context.Context, modelID string) (ModelProbeResult, error) {
+	model, ok := s.Find(modelID)
+	if !ok {
+		return ModelProbeResult{}, fmt.Errorf("model %q is not in the catalog", modelID)
+	}
+	spec, ok := s.registry.Get(model.Provider)
+	if !ok {
+		return ModelProbeResult{}, fmt.Errorf("provider %q is not configured", model.Provider)
+	}
+	var endpoint string
+	var payload []byte
+	contentType := "application/json"
+	var input map[string]any
+	switch model.Type {
+	case "normal":
+		endpoint = "/chat/completions"
+		input = map[string]any{"model": model.UpstreamID, "messages": []map[string]string{{"role": "user", "content": "ping"}}, "max_tokens": 1, "stream": false}
+	case "embedding":
+		endpoint = "/embeddings"
+		input = map[string]any{"model": model.UpstreamID, "input": "ping"}
+	case "rerank":
+		endpoint = "/rerank"
+		input = map[string]any{"model": model.UpstreamID, "query": "ping", "documents": []string{"ping"}, "top_n": 1}
+	case "audio":
+		if audioUsesTranscription(model) {
+			endpoint = "/audio/transcriptions"
+			var err error
+			payload, contentType, err = audioProbePayload(model.UpstreamID)
+			if err != nil {
+				return ModelProbeResult{}, err
+			}
+		} else {
+			endpoint = "/audio/speech"
+			input = map[string]any{"model": model.UpstreamID, "input": "ping", "voice": "alloy", "response_format": "mp3"}
+		}
+	case "image":
+		endpoint = "/images/generations"
+		input = map[string]any{"model": model.UpstreamID, "prompt": "a dot", "n": 1}
+	case "video":
+		endpoint = "/videos/generations"
+		input = map[string]any{"model": model.UpstreamID, "prompt": "a still black dot", "duration": 1}
+	default:
+		return ModelProbeResult{}, fmt.Errorf("automatic probing is disabled for model type %q", model.Type)
+	}
+	if payload == nil {
+		var err error
+		payload, err = json.Marshal(input)
+		if err != nil {
+			return ModelProbeResult{}, err
+		}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, spec.APIEndpoint(endpoint), bytes.NewReader(payload))
+	if err != nil {
+		return ModelProbeResult{}, err
+	}
+	req.Header.Set("Content-Type", contentType)
+	headers := cloneMap(spec.Headers)
+	spec.ApplyAuth(headers)
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return ModelProbeResult{}, err
+	}
+	defer resp.Body.Close()
+	result := ModelProbeResult{Status: resp.StatusCode}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		detail := upstreamErrorDetail(resp.Body)
+		message := resp.Status
+		if detail != "" {
+			message += ": " + detail
+		}
+		return result, &ModelProbeError{Status: resp.StatusCode, Message: message}
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	return result, nil
+}
+
+func audioUsesTranscription(model Model) bool {
+	for _, endpoint := range model.SupportedEndpoints {
+		if strings.Contains(strings.ToLower(endpoint), "transcription") || strings.Contains(strings.ToLower(endpoint), "translation") {
+			return true
+		}
+	}
+	id := strings.ToLower(model.UpstreamID)
+	return strings.Contains(id, "whisper") || strings.Contains(id, "transcri") || strings.Contains(id, "speech-to-text") || strings.Contains(id, "stt")
+}
+
+func audioProbePayload(model string) ([]byte, string, error) {
+	audio, err := base64.StdEncoding.DecodeString(strings.TrimSpace(probeWAVBase64))
+	if err != nil {
+		return nil, "", fmt.Errorf("decode embedded probe audio: %w", err)
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("model", model); err != nil {
+		return nil, "", err
+	}
+	file, err := writer.CreateFormFile("file", "probe.wav")
+	if err != nil {
+		return nil, "", err
+	}
+	if _, err := file.Write(audio); err != nil {
+		return nil, "", err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, "", err
+	}
+	return body.Bytes(), writer.FormDataContentType(), nil
 }
 
 func (s *Store) Models() []Model {
@@ -447,8 +597,23 @@ func contains(values []string, wanted string) bool {
 	return false
 }
 
-func allowed(allowlist []string, model string) bool {
-	return len(allowlist) == 0 || contains(allowlist, model)
+func allowed(allowlist, patterns []string, model string) bool {
+	if len(allowlist) == 0 && len(patterns) == 0 {
+		return true
+	}
+	for _, allowedModel := range allowlist {
+		if strings.EqualFold(allowedModel, model) {
+			return true
+		}
+	}
+	model = strings.ToLower(model)
+	for _, pattern := range patterns {
+		matched, err := path.Match(strings.ToLower(pattern), model)
+		if err == nil && matched {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneMap(source map[string]string) map[string]string {

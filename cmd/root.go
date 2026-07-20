@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/sjzsdu/free-router/internal/admin"
+	"github.com/sjzsdu/free-router/internal/appdirs"
 	"github.com/sjzsdu/free-router/internal/catalog"
 	"github.com/sjzsdu/free-router/internal/credentials"
 	"github.com/sjzsdu/free-router/internal/gateway"
@@ -40,7 +41,6 @@ type options struct {
 	credentials      string
 	adminAllowRemote bool
 	adminToken       string
-	refreshInterval  time.Duration
 	maxAttempts      int
 }
 
@@ -113,23 +113,15 @@ func Execute() error {
 }
 
 func defaultOptions() options {
-	cacheDir, err := os.UserCacheDir()
-	if err != nil {
-		cacheDir = os.TempDir()
-	}
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		configDir = cacheDir
-	}
+	dataDir := appdirs.Default()
 	return options{
 		addr:             envOr("FREE_ROUTER_ADDR", ":1314"),
 		providers:        os.Getenv("FREE_ROUTER_PROVIDERS"),
-		cache:            filepath.Join(cacheDir, "free-router", "models.json"),
-		config:           envOr("FREE_ROUTER_CONFIG", filepath.Join(configDir, "free-router", "config.json")),
-		credentials:      envOr("FREE_ROUTER_CREDENTIALS", filepath.Join(configDir, "free-router", "credentials.json")),
+		cache:            envOr("FREE_ROUTER_CACHE", filepath.Join(dataDir, "models.json")),
+		config:           envOr("FREE_ROUTER_CONFIG", filepath.Join(dataDir, "config.json")),
+		credentials:      envOr("FREE_ROUTER_CREDENTIALS", filepath.Join(dataDir, "credentials.json")),
 		adminAllowRemote: envBool("FREE_ROUTER_ADMIN_ALLOW_REMOTE"),
 		adminToken:       os.Getenv("FREE_ROUTER_ADMIN_TOKEN"),
-		refreshInterval:  time.Hour,
 		maxAttempts:      6,
 	}
 }
@@ -141,7 +133,6 @@ func bindFlags(command *cobra.Command, opts *options) {
 	command.PersistentFlags().StringVar(&opts.config, "config", opts.config, "route configuration file")
 	command.PersistentFlags().StringVar(&opts.credentials, "credentials", opts.credentials, "saved provider credentials file")
 	command.PersistentFlags().BoolVar(&opts.adminAllowRemote, "admin-allow-remote", opts.adminAllowRemote, "allow the admin UI outside localhost")
-	command.PersistentFlags().DurationVar(&opts.refreshInterval, "refresh", opts.refreshInterval, "model catalog refresh interval")
 	command.PersistentFlags().IntVar(&opts.maxAttempts, "max-attempts", opts.maxAttempts, "maximum upstream attempts for model=auto")
 }
 
@@ -167,7 +158,6 @@ func runServer(ctx context.Context, opts options) error {
 			return fmt.Errorf("load free model catalog: %w", err)
 		}
 	}
-	store.Start(ctx, opts.refreshInterval)
 
 	tracker := health.New()
 	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts, Routes: routes, Health: tracker}, http.DefaultClient)

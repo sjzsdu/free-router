@@ -2,12 +2,12 @@ package catalog
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/sjzsdu/free-router/internal/provider"
 )
@@ -44,32 +44,15 @@ func TestRefreshKeepsOnlyZeroPricedModels(t *testing.T) {
 	}
 }
 
-func TestPeriodicRefreshStartsBeforeFirstProviderIsConfigured(t *testing.T) {
-	clearBuiltinKeys(t)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"data":[{"id":"chat-model"}]}`))
-	}))
-	defer server.Close()
-	registry, err := provider.NewRegistryAllowEmpty("")
-	if err != nil {
-		t.Fatal(err)
+func TestAllowedModelPatternsAreCaseInsensitive(t *testing.T) {
+	if !allowed(nil, []string{"*flash*"}, "GLM-4.7-Flash") {
+		t.Fatal("free Flash model should match")
 	}
-	store := New(registry, filepath.Join(t.TempDir(), "models.json"), server.Client())
-	ctx, cancel := context.WithCancel(context.Background())
-	done := store.Start(ctx, 10*time.Millisecond)
-	defer func() {
-		cancel()
-		<-done
-	}()
-	if err := registry.Reload(`[{"id":"test","base_url":"` + server.URL + `","no_auth":true}]`); err != nil {
-		t.Fatal(err)
+	if allowed(nil, []string{"*flash*"}, "glm-5") {
+		t.Fatal("paid model should not match")
 	}
-	deadline := time.Now().Add(time.Second)
-	for len(store.Models()) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if len(store.Models()) != 1 {
-		t.Fatal("periodic refresh did not discover provider added after startup")
+	if !allowed([]string{"hunyuan-lite"}, nil, "HUNYUAN-LITE") {
+		t.Fatal("exact allowlist should be case-insensitive")
 	}
 }
 
@@ -85,6 +68,69 @@ func TestProbeIncludesSafeUpstreamErrorDetail(t *testing.T) {
 	_, err := store.Probe(context.Background(), "test")
 	if err == nil || !strings.Contains(err.Error(), "organization permission denied") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRefreshProviderOnlyContactsRequestedProvider(t *testing.T) {
+	clearBuiltinKeys(t)
+	requestedCalls := 0
+	requested := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestedCalls++
+		_, _ = w.Write([]byte(`{"data":[{"id":"chat-model"}]}`))
+	}))
+	defer requested.Close()
+	otherCalls := 0
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		otherCalls++
+		_, _ = w.Write([]byte(`{"data":[{"id":"other-model"}]}`))
+	}))
+	defer other.Close()
+	custom := `[{"id":"requested","base_url":"` + requested.URL + `","no_auth":true},{"id":"other","base_url":"` + other.URL + `","no_auth":true}]`
+	registry, _ := provider.NewRegistry(custom)
+	store := New(registry, filepath.Join(t.TempDir(), "models.json"), requested.Client())
+	if err := store.RefreshProvider(context.Background(), "requested"); err != nil {
+		t.Fatal(err)
+	}
+	if requestedCalls != 1 || otherCalls != 0 || len(store.Models()) != 1 {
+		t.Fatalf("requested_calls=%d other_calls=%d models=%d", requestedCalls, otherCalls, len(store.Models()))
+	}
+}
+
+func TestAudioProbeUsesEmbeddedWAVMultipart(t *testing.T) {
+	clearBuiltinKeys(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"whisper-test","type":"audio","supported_endpoints":["/audio/transcriptions"]}]}`))
+		case "/audio/transcriptions":
+			if err := r.ParseMultipartForm(32 << 10); err != nil {
+				t.Fatal(err)
+			}
+			if r.FormValue("model") != "whisper-test" {
+				t.Fatalf("model=%q", r.FormValue("model"))
+			}
+			file, _, err := r.FormFile("file")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			header := make([]byte, 4)
+			if _, err := io.ReadFull(file, header); err != nil || string(header) != "RIFF" {
+				t.Fatalf("invalid WAV header %q: %v", header, err)
+			}
+			_, _ = w.Write([]byte(`{"text":""}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + server.URL + `","no_auth":true}]`)
+	store := New(registry, filepath.Join(t.TempDir(), "models.json"), server.Client())
+	if err := store.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ProbeModel(context.Background(), "test/whisper-test"); err != nil {
+		t.Fatal(err)
 	}
 }
 

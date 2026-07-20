@@ -49,6 +49,22 @@ func TestWriteEnvironmentUsesPrivateFile(t *testing.T) {
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("environment permissions = %o", info.Mode().Perm())
 	}
+	if got, want := manager.daemonEnvPath(), filepath.Join(home, ".free-router", "daemon-env.json"); got != want {
+		t.Fatalf("daemon environment path = %s, want %s", got, want)
+	}
+}
+
+func TestProjectFilesUseUnifiedDataDirectory(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	for _, goos := range []string{"darwin", "linux"} {
+		manager := &Manager{goos: goos, home: home}
+		if got, want := manager.daemonEnvPath(), filepath.Join(home, ".free-router", "daemon-env.json"); got != want {
+			t.Fatalf("%s daemon environment path = %s, want %s", goos, got, want)
+		}
+		if got, want := manager.logPath(), filepath.Join(home, ".free-router", "free-router.log"); got != want {
+			t.Fatalf("%s log path = %s, want %s", goos, got, want)
+		}
+	}
 }
 
 func TestParseLaunchdPID(t *testing.T) {

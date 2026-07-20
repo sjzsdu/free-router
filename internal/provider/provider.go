@@ -17,24 +17,27 @@ const (
 )
 
 type Spec struct {
-	ID            string            `json:"id"`
-	BaseURL       string            `json:"base_url"`
-	ModelsURL     string            `json:"models_url,omitempty"`
-	ChatURL       string            `json:"chat_url,omitempty"`
-	Endpoints     map[string]string `json:"endpoints,omitempty"`
-	APIKey        string            `json:"api_key,omitempty"`
-	APIKeyEnv     string            `json:"api_key_env,omitempty"`
-	NoAuth        bool              `json:"no_auth,omitempty"`
-	AuthHeader    string            `json:"auth_header,omitempty"`
-	AuthPrefix    string            `json:"auth_prefix,omitempty"`
-	Headers       map[string]string `json:"headers,omitempty"`
-	Filter        Filter            `json:"filter,omitempty"`
-	Tier          string            `json:"tier,omitempty"`
-	RegisterURL   string            `json:"register_url,omitempty"`
-	OAuth         bool              `json:"oauth,omitempty"`
-	UseNameAsID   bool              `json:"use_name_as_id,omitempty"`
-	AllowedModels []string          `json:"allowed_models,omitempty"`
-	RequiredEnvs  []string          `json:"-"`
+	ID                   string            `json:"id"`
+	BaseURL              string            `json:"base_url"`
+	ModelsURL            string            `json:"models_url,omitempty"`
+	ChatURL              string            `json:"chat_url,omitempty"`
+	Endpoints            map[string]string `json:"endpoints,omitempty"`
+	APIKey               string            `json:"api_key,omitempty"`
+	APIKeyEnv            string            `json:"api_key_env,omitempty"`
+	NoAuth               bool              `json:"no_auth,omitempty"`
+	AuthHeader           string            `json:"auth_header,omitempty"`
+	AuthPrefix           string            `json:"auth_prefix,omitempty"`
+	Headers              map[string]string `json:"headers,omitempty"`
+	Filter               Filter            `json:"filter,omitempty"`
+	Tier                 string            `json:"tier,omitempty"`
+	FreeKind             string            `json:"free_kind,omitempty"`
+	BillingWarning       string            `json:"billing_warning,omitempty"`
+	RegisterURL          string            `json:"register_url,omitempty"`
+	OAuth                bool              `json:"oauth,omitempty"`
+	UseNameAsID          bool              `json:"use_name_as_id,omitempty"`
+	AllowedModels        []string          `json:"allowed_models,omitempty"`
+	AllowedModelPatterns []string          `json:"allowed_model_patterns,omitempty"`
+	RequiredEnvs         []string          `json:"-"`
 }
 
 func (spec Spec) ModelsEndpoint() string {
@@ -277,7 +280,8 @@ func BuiltinStatusWithEnv(envMap EnvMap, resolvers ...KeyResolver) []map[string]
 		result = append(result, map[string]any{
 			"id": spec.ID, "envs": effectiveEnvNames(spec, envMap), "matched_env": matchedEnv,
 			"requires": spec.RequiredEnvs, "missing_required": missingRequired,
-			"configured": configured, "source": source, "tier": spec.Tier, "register_url": spec.RegisterURL, "oauth": spec.OAuth,
+			"configured": configured, "source": source, "tier": spec.Tier, "free_kind": spec.FreeKind,
+			"billing_warning": spec.BillingWarning, "register_url": spec.RegisterURL, "oauth": spec.OAuth,
 		})
 	}
 	return result
@@ -345,6 +349,36 @@ func builtins() []Spec {
 		{ID: "sambanova", BaseURL: "https://api.sambanova.ai/v1", APIKeyEnv: "SAMBANOVA_API_KEY", Tier: "free-tier", RegisterURL: "https://cloud.sambanova.ai/apis"},
 		{ID: "ollama-cloud", BaseURL: "https://api.ollama.com/v1", APIKeyEnv: "OLLAMA_API_KEY", Tier: "free-tier", RegisterURL: "https://ollama.com/settings/keys"},
 		{ID: "modelscope", BaseURL: "https://api-inference.modelscope.cn/v1", APIKeyEnv: "MODELSCOPE_API_KEY", Tier: "free-tier", RegisterURL: "https://modelscope.cn/my/myaccesstoken"},
+		{
+			ID: "xiaomi-mimo", BaseURL: "https://api.xiaomimimo.com/v1", APIKeyEnv: "MIMO_API_KEY",
+			Tier: "gift-credits", FreeKind: "credit", BillingWarning: "赠送额度用完后停止使用或按账户计费设置执行，请先确认余额。",
+			RegisterURL: "https://platform.xiaomimimo.com/#/console/api-keys",
+		},
+		{
+			ID: "dashscope", BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", APIKeyEnv: "DASHSCOPE_API_KEY",
+			Tier: "new-user-free-quota", FreeKind: "trial", BillingWarning: "新人额度通常仅 30～90 天；请在百炼控制台开启免费额度用完即停。",
+			RegisterURL: "https://bailian.console.aliyun.com/?apiKey=1#/api-key",
+		},
+		{
+			ID: "volcengine-ark", BaseURL: "https://ark.cn-beijing.volces.com/api/v3", APIKeyEnv: "ARK_API_KEY",
+			Tier: "free-trial-quota", FreeKind: "trial", BillingWarning: "免费额度按模型限量发放，耗尽后可能转为计费。",
+			RegisterURL: "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey",
+		},
+		{
+			ID: "baichuan", BaseURL: "https://api.baichuan-ai.com/v1", APIKeyEnv: "BAICHUAN_API_KEY",
+			Tier: "new-user-gift-credit", FreeKind: "credit", BillingWarning: "新用户赠送金有效期有限，余额耗尽后接口按平台价格计费。",
+			RegisterURL: "https://platform.baichuan-ai.com/console/apikey",
+		},
+		{
+			ID: "bigmodel", BaseURL: "https://open.bigmodel.cn/api/paas/v4",
+			APIKeyEnv: "BIGMODEL_API_KEY", Tier: "free-flash-models", RegisterURL: "https://bigmodel.cn/usercenter/proj-mgmt/apikeys",
+			AllowedModelPatterns: []string{"*flash*"},
+		},
+		{
+			ID: "qianfan", BaseURL: "https://qianfan.baidubce.com/v2",
+			APIKeyEnv: "QIANFAN_API_KEY", Tier: "long-term-free-models", RegisterURL: "https://console.bce.baidu.com/qianfan/ais/console/apiKey",
+			AllowedModels: []string{"ernie-speed-8k", "ernie-speed-128k", "ernie-lite-8k", "ernie-tiny-8k"},
+		},
 		{
 			ID: "siliconflow", BaseURL: "https://api.siliconflow.cn/v1",
 			ModelsURL: "https://api.siliconflow.cn/v1/models?type=text&sub_type=chat",

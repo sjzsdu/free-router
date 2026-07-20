@@ -1,10 +1,12 @@
 package admin
 
 import (
+	"context"
 	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"io/fs"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -30,6 +32,7 @@ type Handler struct {
 	config             Config
 	reload             func() error
 	health             *health.Tracker
+	probes             *probeManager
 	static             http.Handler
 	started            time.Time
 	oauthFlows         *oauthFlows
@@ -61,7 +64,7 @@ func New(routes *routing.Store, models *catalog.Store, vault *credentials.Vault,
 	if tokenURL == "" {
 		tokenURL = "https://openrouter.ai/api/v1/auth/keys"
 	}
-	return &Handler{routes: routes, catalog: models, vault: vault, health: tracker, config: config, reload: reload, static: http.FileServer(http.FS(staticFS)), started: time.Now(), oauthFlows: newOAuthFlows(), oauthHTTPClient: client, openRouterAuthURL: authURL, openRouterTokenURL: tokenURL}
+	return &Handler{routes: routes, catalog: models, vault: vault, health: tracker, probes: newProbeManager(), config: config, reload: reload, static: http.FileServer(http.FS(staticFS)), started: time.Now(), oauthFlows: newOAuthFlows(), oauthHTTPClient: client, openRouterAuthURL: authURL, openRouterTokenURL: tokenURL}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -90,6 +93,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.updateConfig(w, r)
 	case r.Method == http.MethodPost && path == "/api/refresh":
 		h.refresh(w, r)
+	case r.Method == http.MethodPost && path == "/api/health/reset":
+		h.resetHealth(w, r)
+	case r.Method == http.MethodPost && path == "/api/health/probe":
+		h.startHealthProbe(w, r)
+	case r.Method == http.MethodPost && path == "/api/health/probe/model":
+		h.startModelHealthProbe(w, r)
 	case r.Method == http.MethodPost && path == "/api/oauth/openrouter/start":
 		h.startOpenRouterOAuth(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/oauth/openrouter/callback/"):
@@ -125,7 +134,7 @@ func (h *Handler) state(w http.ResponseWriter) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"config": h.routes.Config(), "config_path": h.routes.Path(), "models": h.catalog.Models(),
 		"catalog": h.catalog.Status(), "providers": provider.BuiltinStatusWithEnv(provider.EnvMap(h.routes.Config().ProviderEnv), h.vault.Get), "credentials": entries,
-		"health": h.health.Snapshot(), "summary": h.health.Summary(), "runtime": h.runtimeState(),
+		"health": h.health.Snapshot(), "summary": h.health.Summary(), "health_probe": h.probes.Snapshot(), "runtime": h.runtimeState(),
 	})
 }
 
@@ -142,7 +151,7 @@ func (h *Handler) runtimeState() map[string]any {
 		"status": "running", "pid": os.Getpid(), "version": h.config.Version,
 		"started_at": h.started, "uptime_seconds": int64(time.Since(h.started).Seconds()),
 		"service_manager": manager, "models": len(h.catalog.Models()),
-		"requests": h.health.Summary().Requests, "cooling": h.health.Summary().Cooling,
+		"requests": h.health.Summary().Requests, "failed": h.health.Summary().Failed,
 	}
 }
 
@@ -158,10 +167,11 @@ func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !reflect.DeepEqual(previousProviderEnv, h.routes.Config().ProviderEnv) {
-		if err := h.reloadProviders(r); err != nil {
+		if err := h.reloadProviders(); err != nil {
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
+		h.refreshAllAsync()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"saved": true, "config": h.routes.Config()})
 }
@@ -172,6 +182,18 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"refreshed": true, "models": len(h.catalog.Models())})
+}
+
+func (h *Handler) resetHealth(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Model string `json:"model"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&input); err != nil || strings.TrimSpace(input.Model) == "" {
+		writeError(w, http.StatusBadRequest, "model is required")
+		return
+	}
+	h.health.Reset(input.Model)
+	writeJSON(w, http.StatusOK, map[string]any{"reset": true, "model": input.Model})
 }
 
 func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request, escapedID string) {
@@ -207,10 +229,11 @@ func (h *Handler) saveCredential(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.reloadProviders(r); err != nil {
+	if err := h.reloadProviders(); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.refreshProviderAsync(input.Provider)
 	writeJSON(w, http.StatusOK, map[string]any{"saved": true, "backend": backend, "models": len(h.catalog.Models())})
 }
 
@@ -223,20 +246,40 @@ func (h *Handler) deleteCredential(w http.ResponseWriter, r *http.Request, provi
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	if err := h.reloadProviders(r); err != nil {
+	if err := h.reloadProviders(); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"removed": true, "models": len(h.catalog.Models())})
 }
 
-func (h *Handler) reloadProviders(r *http.Request) error {
+func (h *Handler) reloadProviders() error {
 	if h.reload != nil {
 		if err := h.reload(); err != nil {
 			return err
 		}
 	}
-	return h.catalog.Refresh(r.Context())
+	return h.catalog.PruneDisabled()
+}
+
+func (h *Handler) refreshProviderAsync(providerID string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := h.catalog.RefreshProvider(ctx, providerID); err != nil {
+			slog.Warn("provider model refresh failed", "provider", providerID, "error", err)
+		}
+	}()
+}
+
+func (h *Handler) refreshAllAsync() {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := h.catalog.Refresh(ctx); err != nil {
+			slog.Warn("background model catalog refresh failed", "error", err)
+		}
+	}()
 }
 
 func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {

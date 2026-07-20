@@ -15,6 +15,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/sjzsdu/free-router/internal/appdirs"
 )
 
 const (
@@ -221,7 +223,7 @@ func (m *Manager) installLaunchd(ctx context.Context) error {
 	if err := os.MkdirAll(filepath.Dir(m.launchdPath()), 0o755); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(m.logPath()), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(m.logPath()), 0o700); err != nil {
 		return err
 	}
 	content := launchdPlist(m.executable, m.logPath(), m.daemonEnvPath())
@@ -335,7 +337,7 @@ func (m *Manager) launchdPath() string {
 	return filepath.Join(m.home, "Library", "LaunchAgents", launchdLabel+".plist")
 }
 func (m *Manager) logPath() string {
-	return filepath.Join(m.home, "Library", "Logs", "free-router.log")
+	return filepath.Join(appdirs.ForHome(m.home), "free-router.log")
 }
 func (m *Manager) launchdDomain() string { return "gui/" + m.uid }
 func (m *Manager) launchdTarget() string { return m.launchdDomain() + "/" + launchdLabel }
@@ -343,10 +345,7 @@ func (m *Manager) systemdPath() string {
 	return filepath.Join(m.home, ".config", "systemd", "user", systemdUnit)
 }
 func (m *Manager) daemonEnvPath() string {
-	if m.goos == "darwin" {
-		return filepath.Join(m.home, "Library", "Application Support", "free-router", "daemon-env.json")
-	}
-	return filepath.Join(m.home, ".config", "free-router", "daemon-env.json")
+	return filepath.Join(appdirs.ForHome(m.home), "daemon-env.json")
 }
 
 func (m *Manager) unsupported() error {

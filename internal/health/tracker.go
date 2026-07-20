@@ -17,14 +17,16 @@ type State struct {
 	LastStatus          int       `json:"last_status,omitempty"`
 	LastError           string    `json:"last_error,omitempty"`
 	LastUsedAt          time.Time `json:"last_used_at,omitempty"`
-	CooldownUntil       time.Time `json:"cooldown_until,omitempty"`
+	Checks              uint64    `json:"checks"`
+	LastCheckedAt       time.Time `json:"last_checked_at,omitempty"`
+	LastCheckLatencyMS  float64   `json:"last_check_latency_ms,omitempty"`
 }
 
 type Summary struct {
 	Requests  uint64 `json:"requests"`
 	Successes uint64 `json:"successes"`
 	Failures  uint64 `json:"failures"`
-	Cooling   int    `json:"cooling"`
+	Failed    int    `json:"failed"`
 }
 
 type Tracker struct {
@@ -41,7 +43,7 @@ func (t *Tracker) Available(model string) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	state := t.states[model]
-	return state == nil || state.CooldownUntil.IsZero() || !t.now().Before(state.CooldownUntil)
+	return state == nil || state.Status == "unknown" || state.Status == "healthy"
 }
 
 func (t *Tracker) Success(model string, latency time.Duration, status int) {
@@ -54,12 +56,11 @@ func (t *Tracker) Success(model string, latency time.Duration, status int) {
 	state.LastStatus = status
 	state.LastError = ""
 	state.LastUsedAt = t.now()
-	state.CooldownUntil = time.Time{}
 	state.Status = "healthy"
 	state.AverageLatencyMS = rollingAverage(state.AverageLatencyMS, state.Requests, float64(latency.Microseconds())/1000)
 }
 
-func (t *Tracker) Failure(model string, latency time.Duration, status int, message string, retryAfter time.Duration) {
+func (t *Tracker) Failure(model string, latency time.Duration, status int, message string, _ time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	state := t.state(model)
@@ -71,35 +72,48 @@ func (t *Tracker) Failure(model string, latency time.Duration, status int, messa
 	state.LastUsedAt = t.now()
 	state.AverageLatencyMS = rollingAverage(state.AverageLatencyMS, state.Requests, float64(latency.Microseconds())/1000)
 
-	cooldown := retryAfter
-	switch {
-	case cooldown > 0:
-	case status == 401 || status == 403:
-		cooldown = 5 * time.Minute
-	case status == 429:
-		cooldown = 30 * time.Second
-	case state.ConsecutiveFailures >= 2:
-		cooldown = 30 * time.Second
-	}
-	if cooldown > 0 {
-		state.Status = "cooling"
-		state.CooldownUntil = t.now().Add(cooldown)
-	} else {
-		state.Status = "degraded"
-	}
+	state.Status = "failed"
+}
+
+func (t *Tracker) ProbeSuccess(model string, latency time.Duration) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	state := t.state(model)
+	state.Checks++
+	state.LastCheckedAt = t.now()
+	state.LastCheckLatencyMS = float64(latency.Microseconds()) / 1000
+	state.LastStatus = 200
+	state.LastError = ""
+	state.ConsecutiveFailures = 0
+	state.Status = "healthy"
+}
+
+func (t *Tracker) ProbeFailure(model string, latency time.Duration, status int, message string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	state := t.state(model)
+	state.Checks++
+	state.LastCheckedAt = t.now()
+	state.LastCheckLatencyMS = float64(latency.Microseconds()) / 1000
+	state.LastStatus = status
+	state.LastError = message
+	state.ConsecutiveFailures++
+	state.Status = "failed"
+}
+
+func (t *Tracker) ProbeDue(model string, ttl time.Duration) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	state := t.states[model]
+	return state == nil || state.LastCheckedAt.IsZero() || t.now().Sub(state.LastCheckedAt) >= ttl
 }
 
 func (t *Tracker) Snapshot() []State {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	now := t.now()
 	result := make([]State, 0, len(t.states))
 	for _, state := range t.states {
 		copy := *state
-		if copy.Status == "cooling" && !now.Before(copy.CooldownUntil) {
-			copy.Status = "degraded"
-			copy.CooldownUntil = time.Time{}
-		}
 		result = append(result, copy)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Model < result[j].Model })
@@ -113,8 +127,8 @@ func (t *Tracker) Summary() Summary {
 		summary.Requests += state.Requests
 		summary.Successes += state.Successes
 		summary.Failures += state.Failures
-		if state.Status == "cooling" {
-			summary.Cooling++
+		if state.Status == "failed" {
+			summary.Failed++
 		}
 	}
 	return summary

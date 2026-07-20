@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sjzsdu/free-router/internal/catalog"
 	"github.com/sjzsdu/free-router/internal/credentials"
@@ -120,8 +123,57 @@ func TestCredentialSaveHotReloadsProviderAndCatalog(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if _, ok := registry.Get("test"); !ok || len(models.Models()) != 1 {
-		t.Fatalf("provider enabled=%v models=%d", ok, len(models.Models()))
+	if _, ok := registry.Get("test"); !ok {
+		t.Fatal("provider was not enabled immediately")
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(models.Models()) != 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(models.Models()) != 1 {
+		t.Fatalf("models=%d", len(models.Models()))
+	}
+}
+
+func TestCredentialSaveDoesNotWaitForProviderNetwork(t *testing.T) {
+	for _, key := range provider.SupportedKeyEnvs() {
+		t.Setenv(key, "")
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		_, _ = w.Write([]byte(`{"data":[{"id":"chat-a"}]}`))
+	}))
+	defer upstream.Close()
+	custom := `[{"id":"test","base_url":"` + upstream.URL + `"}]`
+	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
+	registry, _ := provider.NewRegistryAllowEmpty(custom, vault.Get)
+	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	handler := New(routes, models, vault, health.New(), Config{}, func() error { return registry.Reload(custom, vault.Get) })
+	request := httptest.NewRequest(http.MethodPost, "/admin/api/credentials", bytes.NewBufferString(`{"provider":"test","api_key":"secret"}`))
+	request.RemoteAddr = "127.0.0.1:1234"
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		close(release)
+		t.Fatalf("save waited for or failed with provider network: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("background provider refresh did not start")
+	}
+	close(release)
+	deadline := time.Now().Add(time.Second)
+	for len(models.Models()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(models.Models()) != 1 {
+		t.Fatal("background provider refresh did not finish")
 	}
 }
 
@@ -235,5 +287,80 @@ func TestAdminRejectsCrossOriginMutation(t *testing.T) {
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("status=%d", recorder.Code)
+	}
+}
+
+func TestAdminResetsFailedModelHealth(t *testing.T) {
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	registry, _ := provider.NewRegistryAllowEmpty("")
+	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
+	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
+	tracker := health.New()
+	tracker.Failure("provider/model", 0, http.StatusTooManyRequests, "rate limited", 0)
+	handler := New(routes, models, vault, tracker, Config{}, nil)
+	request := httptest.NewRequest(http.MethodPost, "/admin/api/health/reset", strings.NewReader(`{"model":"provider/model"}`))
+	request.RemoteAddr = "127.0.0.1:1234"
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !tracker.Available("provider/model") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestModelHealthProbeUses24HourCacheAndSupportsForce(t *testing.T) {
+	for _, key := range provider.SupportedKeyEnvs() {
+		t.Setenv(key, "")
+	}
+	var chatCalls atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"chat-a"}]}`))
+		case "/chat/completions":
+			chatCalls.Add(1)
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","no_auth":true}]`)
+	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	if err := models.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
+	tracker := health.New()
+	handler := New(routes, models, vault, tracker, Config{}, nil)
+
+	probe := func(force bool) {
+		request := httptest.NewRequest(http.MethodPost, "/admin/api/health/probe", strings.NewReader(fmt.Sprintf(`{"force":%t}`, force)))
+		request.RemoteAddr = "127.0.0.1:1234"
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusAccepted && recorder.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		deadline := time.Now().Add(time.Second)
+		for handler.probes.Snapshot().Status == "running" && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		if handler.probes.Snapshot().Status != "completed" {
+			t.Fatal("health probe did not complete")
+		}
+	}
+
+	probe(false)
+	if chatCalls.Load() != 1 || tracker.Snapshot()[0].Status != "healthy" {
+		t.Fatalf("chat_calls=%d health=%#v", chatCalls.Load(), tracker.Snapshot())
+	}
+	probe(false)
+	if chatCalls.Load() != 1 {
+		t.Fatalf("fresh cached model was probed again: calls=%d", chatCalls.Load())
+	}
+	probe(true)
+	if chatCalls.Load() != 2 {
+		t.Fatalf("forced probe did not run: calls=%d", chatCalls.Load())
 	}
 }

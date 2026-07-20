@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -29,13 +30,14 @@ type Config struct {
 }
 
 type Gateway struct {
-	catalog  *catalog.Store
-	registry *provider.Registry
-	config   Config
-	client   *http.Client
-	next     atomic.Uint64
-	tracker  *health.Tracker
-	mux      *http.ServeMux
+	catalog   *catalog.Store
+	registry  *provider.Registry
+	config    Config
+	client    *http.Client
+	next      atomic.Uint64
+	routeNext sync.Map
+	tracker   *health.Tracker
+	mux       *http.ServeMux
 }
 
 func New(store *catalog.Store, registry *provider.Registry, config Config, client *http.Client) *Gateway {
@@ -96,7 +98,7 @@ func (g *Gateway) models(w http.ResponseWriter, _ *http.Request) {
 			route := config.Routes[alias]
 			data = append(data, map[string]any{
 				"id": alias, "object": "model", "owned_by": "free-router", "type": route.Type,
-				"free": true, "route": true, "fallback_models": route.Models,
+				"free": true, "route": true, "strategy": route.Strategy, "fallback_models": route.Models,
 				"capabilities": catalog.Capabilities{ToolCall: route.RequireTool, ToolCallKnown: route.RequireTool, Streaming: true},
 			})
 		}
@@ -148,7 +150,11 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 	}
 	candidates, fallback := g.candidates(requested, needsTools)
 	if len(candidates) == 0 {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("free model %q was not found", requested))
+		if fallback {
+			writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("route %q has no healthy models; inspect failed models in the admin UI", requested))
+		} else {
+			writeError(w, http.StatusNotFound, fmt.Sprintf("free model %q was not found", requested))
+		}
 		return
 	}
 
@@ -205,7 +211,11 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 	}
 	candidates, fallback := g.candidates(requested, false)
 	if len(candidates) == 0 {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("free model %q was not found", requested))
+		if fallback {
+			writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("route %q has no healthy models; inspect failed models in the admin UI", requested))
+		} else {
+			writeError(w, http.StatusNotFound, fmt.Sprintf("free model %q was not found", requested))
+		}
 		return
 	}
 	for index, model := range candidates {
@@ -323,15 +333,11 @@ func (g *Gateway) candidates(requested string, needsTools bool) ([]catalog.Model
 					priority = append(priority, model)
 				}
 				result := g.strictlyAvailable(priority)
+				if route.Strategy == routing.StrategyRoundRobin {
+					result = rotateCandidates(result, g.nextForRoute(requested))
+				}
 				if remaining, ok := g.pickRemaining(effectiveRoute, configured, true); ok {
 					result = append(result, remaining)
-				}
-				if len(result) == 0 {
-					if len(priority) > 0 {
-						result = append(result, priority[0])
-					} else if remaining, ok := g.pickRemaining(effectiveRoute, configured, false); ok {
-						result = append(result, remaining)
-					}
 				}
 				return result, true
 			}
@@ -348,6 +354,22 @@ func (g *Gateway) candidates(requested string, needsTools bool) ([]catalog.Model
 		return []catalog.Model{model}, false
 	}
 	return nil, false
+}
+
+func (g *Gateway) nextForRoute(alias string) uint64 {
+	counter, _ := g.routeNext.LoadOrStore(alias, &atomic.Uint64{})
+	return counter.(*atomic.Uint64).Add(1) - 1
+}
+
+func rotateCandidates(models []catalog.Model, offset uint64) []catalog.Model {
+	if len(models) < 2 {
+		return models
+	}
+	start := int(offset % uint64(len(models)))
+	result := make([]catalog.Model, 0, len(models))
+	result = append(result, models[start:]...)
+	result = append(result, models[:start]...)
+	return result
 }
 
 func (g *Gateway) dynamicCandidates(route routing.Route, needsTools bool) []catalog.Model {
@@ -447,9 +469,6 @@ func (g *Gateway) availableCandidates(models []catalog.Model) []catalog.Model {
 		if g.tracker.Available(model.ID) {
 			available = append(available, model)
 		}
-	}
-	if len(available) == 0 && len(models) > 0 {
-		return models[:1]
 	}
 	return available
 }
