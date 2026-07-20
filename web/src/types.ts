@@ -1,4 +1,4 @@
-export type RouteType = 'chat' | 'chat-tools' | 'embedding' | 'audio' | 'image' | 'video' | 'rerank' | 'moderation'
+export type RouteType = 'chat' | 'chat-tools' | 'image-understanding' | 'image-generation' | 'video-understanding' | 'video-generation' | 'audio-understanding' | 'speech-to-text' | 'text-to-speech' | 'embedding' | 'rerank' | 'moderation'
 
 export interface Capabilities {
   tool_call: boolean
@@ -18,6 +18,7 @@ export interface Model {
   description?: string
   owned_by?: string
   type: string
+  functions: RouteType[]
   free: boolean
   tier?: string
   context_length?: number
@@ -31,7 +32,7 @@ export interface Model {
 
 export interface ModelOverride {
   disabled?: boolean
-  type?: string
+  functions?: RouteType[]
   tool_call?: boolean
   vision?: boolean
   reasoning?: boolean
@@ -39,7 +40,7 @@ export interface ModelOverride {
 
 export interface Route {
   _comment?: string
-  type: RouteType
+  capability: RouteType
   strategy?: 'ordered' | 'round-robin'
   require_tool?: boolean
   models: string[]
@@ -73,6 +74,7 @@ export interface Credential { provider: string; backend?: string }
 
 export interface HealthState {
   model: string
+  capability: RouteType
   status: 'healthy' | 'failed' | 'unknown'
   requests: number
   successes: number

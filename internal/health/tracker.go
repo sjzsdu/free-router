@@ -8,6 +8,7 @@ import (
 
 type State struct {
 	Model               string    `json:"model"`
+	Capability          string    `json:"capability"`
 	Status              string    `json:"status"`
 	Requests            uint64    `json:"requests"`
 	Successes           uint64    `json:"successes"`
@@ -39,17 +40,17 @@ func New() *Tracker {
 	return &Tracker{states: make(map[string]*State), now: time.Now}
 }
 
-func (t *Tracker) Available(model string) bool {
+func (t *Tracker) Available(model, capability string) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	state := t.states[model]
+	state := t.states[stateKey(model, capability)]
 	return state == nil || state.Status == "unknown" || state.Status == "healthy"
 }
 
-func (t *Tracker) Success(model string, latency time.Duration, status int) {
+func (t *Tracker) Success(model, capability string, latency time.Duration, status int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	state := t.state(model)
+	state := t.state(model, capability)
 	state.Requests++
 	state.Successes++
 	state.ConsecutiveFailures = 0
@@ -60,10 +61,10 @@ func (t *Tracker) Success(model string, latency time.Duration, status int) {
 	state.AverageLatencyMS = rollingAverage(state.AverageLatencyMS, state.Requests, float64(latency.Microseconds())/1000)
 }
 
-func (t *Tracker) Failure(model string, latency time.Duration, status int, message string, _ time.Duration) {
+func (t *Tracker) Failure(model, capability string, latency time.Duration, status int, message string, _ time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	state := t.state(model)
+	state := t.state(model, capability)
 	state.Requests++
 	state.Failures++
 	state.ConsecutiveFailures++
@@ -75,10 +76,10 @@ func (t *Tracker) Failure(model string, latency time.Duration, status int, messa
 	state.Status = "failed"
 }
 
-func (t *Tracker) ProbeSuccess(model string, latency time.Duration) {
+func (t *Tracker) ProbeSuccess(model, capability string, latency time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	state := t.state(model)
+	state := t.state(model, capability)
 	state.Checks++
 	state.LastCheckedAt = t.now()
 	state.LastCheckLatencyMS = float64(latency.Microseconds()) / 1000
@@ -88,10 +89,10 @@ func (t *Tracker) ProbeSuccess(model string, latency time.Duration) {
 	state.Status = "healthy"
 }
 
-func (t *Tracker) ProbeFailure(model string, latency time.Duration, status int, message string) {
+func (t *Tracker) ProbeFailure(model, capability string, latency time.Duration, status int, message string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	state := t.state(model)
+	state := t.state(model, capability)
 	state.Checks++
 	state.LastCheckedAt = t.now()
 	state.LastCheckLatencyMS = float64(latency.Microseconds()) / 1000
@@ -101,10 +102,10 @@ func (t *Tracker) ProbeFailure(model string, latency time.Duration, status int, 
 	state.Status = "failed"
 }
 
-func (t *Tracker) ProbeDue(model string, ttl time.Duration) bool {
+func (t *Tracker) ProbeDue(model, capability string, ttl time.Duration) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	state := t.states[model]
+	state := t.states[stateKey(model, capability)]
 	return state == nil || state.LastCheckedAt.IsZero() || t.now().Sub(state.LastCheckedAt) >= ttl
 }
 
@@ -116,7 +117,12 @@ func (t *Tracker) Snapshot() []State {
 		copy := *state
 		result = append(result, copy)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Model < result[j].Model })
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Model == result[j].Model {
+			return result[i].Capability < result[j].Capability
+		}
+		return result[i].Model < result[j].Model
+	})
 	return result
 }
 
@@ -134,20 +140,31 @@ func (t *Tracker) Summary() Summary {
 	return summary
 }
 
-func (t *Tracker) Reset(model string) {
+func (t *Tracker) Reset(model, capability string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.states, model)
+	if capability != "" {
+		delete(t.states, stateKey(model, capability))
+		return
+	}
+	for key, state := range t.states {
+		if state.Model == model {
+			delete(t.states, key)
+		}
+	}
 }
 
-func (t *Tracker) state(model string) *State {
-	state := t.states[model]
+func (t *Tracker) state(model, capability string) *State {
+	key := stateKey(model, capability)
+	state := t.states[key]
 	if state == nil {
-		state = &State{Model: model, Status: "unknown"}
-		t.states[model] = state
+		state = &State{Model: model, Capability: capability, Status: "unknown"}
+		t.states[key] = state
 	}
 	return state
 }
+
+func stateKey(model, capability string) string { return model + "\x00" + capability }
 
 func rollingAverage(current float64, count uint64, value float64) float64 {
 	if count <= 1 {

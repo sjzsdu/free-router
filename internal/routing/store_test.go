@@ -44,13 +44,13 @@ func TestModelOverridesDisableAndCorrectCapabilities(t *testing.T) {
 	}
 	config := store.Config()
 	toolCall := true
-	config.Models["provider/model"] = ModelOverride{Type: "chat", ToolCall: &toolCall}
+	config.Models["provider/model"] = ModelOverride{Functions: []string{catalog.FunctionChat, catalog.FunctionChatTools}, ToolCall: &toolCall}
 	config.Models["provider/disabled"] = ModelOverride{Disabled: true}
 	if err := store.Update(config); err != nil {
 		t.Fatal(err)
 	}
-	model, enabled := store.Apply(catalog.Model{ID: "provider/model", Type: "embedding"})
-	if !enabled || model.Type != "normal" || !model.Capabilities.ToolCall || !model.Capabilities.ToolCallKnown {
+	model, enabled := store.Apply(catalog.Model{ID: "provider/model", Type: "embedding", Functions: []string{catalog.FunctionEmbedding}})
+	if !enabled || !reflect.DeepEqual(model.Functions, []string{catalog.FunctionChat, catalog.FunctionChatTools}) || !model.Capabilities.ToolCall || !model.Capabilities.ToolCallKnown {
 		t.Fatalf("overridden model = %#v, enabled=%v", model, enabled)
 	}
 	if _, enabled := store.Apply(catalog.Model{ID: "provider/disabled"}); enabled {
@@ -69,12 +69,34 @@ func TestVersionTwoNormalRoutesMigrateToUserFacingTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := store.Config()
-	if config.Version != CurrentVersion || config.Routes["chat"].Type != "chat" || config.Routes["chat-tools"].Type != "chat-tools" || config.Models["provider/model"].Type != "chat" {
+	if config.Version != CurrentVersion || config.Routes["chat"].Capability != "chat" || config.Routes["chat-tools"].Capability != "chat-tools" || !reflect.DeepEqual(config.Models["provider/model"].Functions, []string{"chat"}) {
 		t.Fatalf("migrated config = %#v", config)
 	}
 	persisted, err := os.ReadFile(path)
-	if err != nil || !strings.Contains(string(persisted), `"version": 5`) {
+	if err != nil || !strings.Contains(string(persisted), `"version": 6`) {
 		t.Fatalf("migration was not persisted: %s, %v", persisted, err)
+	}
+}
+
+func TestVersionFiveMediaRoutesMigrateToExplicitCapabilities(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	content := []byte(`{"version":5,"routes":{"image":{"type":"image","models":["p/image"]},"video":{"type":"video","models":["p/video"]},"audio":{"type":"audio","models":["p/audio"]}},"models":{}}`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := store.Config()
+	if _, exists := config.Routes["image"]; exists {
+		t.Fatal("ambiguous image route survived migration")
+	}
+	if !reflect.DeepEqual(config.Routes[catalog.FunctionImageGeneration].Models, []string{"p/image"}) || !reflect.DeepEqual(config.Routes[catalog.FunctionVideoGeneration].Models, []string{"p/video"}) {
+		t.Fatalf("media generation routes were not migrated: %#v", config.Routes)
+	}
+	if !reflect.DeepEqual(config.Routes[catalog.FunctionSpeechToText].Models, []string{"p/audio"}) || !reflect.DeepEqual(config.Routes[catalog.FunctionTextToSpeech].Models, []string{"p/audio"}) {
+		t.Fatalf("audio route was not split: %#v", config.Routes)
 	}
 }
 

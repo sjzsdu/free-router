@@ -35,6 +35,11 @@ type probeManager struct {
 	status ProbeStatus
 }
 
+type probeJob struct {
+	Model      catalog.Model
+	Capability string
+}
+
 func newProbeManager() *probeManager {
 	return &probeManager{status: ProbeStatus{Status: "idle"}}
 }
@@ -90,18 +95,18 @@ func (manager *probeManager) Start(h *Handler, force bool) (ProbeStatus, bool) {
 	if manager.status.Status == "running" {
 		return manager.status, false
 	}
-	models, skipped := probeCandidates(h, force)
-	if len(models) == 0 && !force && manager.status.Status == "completed" {
+	jobs, skipped := probeCandidates(h, force)
+	if len(jobs) == 0 && !force && manager.status.Status == "completed" {
 		return manager.status, false
 	}
 	now := time.Now()
-	manager.status = ProbeStatus{Status: "running", Total: len(models), Skipped: skipped, StartedAt: now}
-	if len(models) == 0 {
+	manager.status = ProbeStatus{Status: "running", Total: len(jobs), Skipped: skipped, StartedAt: now}
+	if len(jobs) == 0 {
 		manager.status.Status = "completed"
 		manager.status.FinishedAt = now
 		return manager.status, false
 	}
-	go manager.run(h, models)
+	go manager.run(h, jobs)
 	return manager.status, true
 }
 
@@ -120,54 +125,63 @@ func (manager *probeManager) StartModel(h *Handler, modelID string, allowExpensi
 	if !enabled {
 		return manager.status, false, errors.New("disabled model cannot be probed")
 	}
-	if (model.Type == "image" || model.Type == "video") && !allowExpensive {
+	jobs := make([]probeJob, 0, len(model.Functions))
+	for _, capability := range model.Functions {
+		jobs = append(jobs, probeJob{Model: model, Capability: capability})
+	}
+	if hasExpensiveProbe(jobs) && !allowExpensive {
 		return manager.status, false, errors.New("image and video probes require explicit cost confirmation")
 	}
-	if model.Type != "normal" && model.Type != "embedding" && model.Type != "rerank" && model.Type != "audio" && model.Type != "image" && model.Type != "video" {
-		return manager.status, false, errors.New("this model type does not have a safe probe")
+	if len(jobs) == 0 {
+		return manager.status, false, errors.New("this model does not advertise a probeable capability")
 	}
-	manager.status = ProbeStatus{Status: "running", Total: 1, StartedAt: time.Now()}
-	go manager.run(h, []catalog.Model{model})
+	manager.status = ProbeStatus{Status: "running", Total: len(jobs), StartedAt: time.Now()}
+	go manager.run(h, jobs)
 	return manager.status, true, nil
 }
 
-func probeCandidates(h *Handler, force bool) ([]catalog.Model, int) {
-	models := make([]catalog.Model, 0)
+func probeCandidates(h *Handler, force bool) ([]probeJob, int) {
+	jobs := make([]probeJob, 0)
 	skipped := 0
 	for _, model := range h.catalog.Models() {
 		var enabled bool
 		model, enabled = h.routes.Apply(model)
-		if !enabled || (model.Type != "normal" && model.Type != "embedding" && model.Type != "rerank" && model.Type != "audio" && model.Type != "image" && model.Type != "video") {
+		if !enabled || len(model.Functions) == 0 {
 			skipped++
 			continue
 		}
-		if !force && !h.health.ProbeDue(model.ID, healthProbeTTL) {
-			skipped++
-			continue
+		for _, capability := range model.Functions {
+			if !force && !h.health.ProbeDue(model.ID, capability, healthProbeTTL) {
+				skipped++
+				continue
+			}
+			jobs = append(jobs, probeJob{Model: model, Capability: capability})
 		}
-		models = append(models, model)
 	}
-	sort.SliceStable(models, func(i, j int) bool {
-		if models[i].Provider == models[j].Provider {
-			return models[i].ID < models[j].ID
+	sort.SliceStable(jobs, func(i, j int) bool {
+		if jobs[i].Model.Provider == jobs[j].Model.Provider {
+			if jobs[i].Model.ID == jobs[j].Model.ID {
+				return jobs[i].Capability < jobs[j].Capability
+			}
+			return jobs[i].Model.ID < jobs[j].Model.ID
 		}
-		return models[i].Provider < models[j].Provider
+		return jobs[i].Model.Provider < jobs[j].Model.Provider
 	})
-	return interleaveProviders(models), skipped
+	return interleaveProviders(jobs), skipped
 }
 
-func interleaveProviders(models []catalog.Model) []catalog.Model {
-	groups := make(map[string][]catalog.Model)
+func interleaveProviders(jobs []probeJob) []probeJob {
+	groups := make(map[string][]probeJob)
 	providers := make([]string, 0)
-	for _, model := range models {
-		if _, ok := groups[model.Provider]; !ok {
-			providers = append(providers, model.Provider)
+	for _, job := range jobs {
+		if _, ok := groups[job.Model.Provider]; !ok {
+			providers = append(providers, job.Model.Provider)
 		}
-		groups[model.Provider] = append(groups[model.Provider], model)
+		groups[job.Model.Provider] = append(groups[job.Model.Provider], job)
 	}
 	sort.Strings(providers)
-	result := make([]catalog.Model, 0, len(models))
-	for round := 0; len(result) < len(models); round++ {
+	result := make([]probeJob, 0, len(jobs))
+	for round := 0; len(result) < len(jobs); round++ {
 		for _, providerID := range providers {
 			if round < len(groups[providerID]) {
 				result = append(result, groups[providerID][round])
@@ -177,34 +191,47 @@ func interleaveProviders(models []catalog.Model) []catalog.Model {
 	return result
 }
 
-func (manager *probeManager) run(h *Handler, models []catalog.Model) {
-	jobs := make(chan catalog.Model)
+func expensiveCapability(capability string) bool {
+	return capability == catalog.FunctionImageGeneration || capability == catalog.FunctionVideoGeneration
+}
+
+func hasExpensiveProbe(jobs []probeJob) bool {
+	for _, job := range jobs {
+		if expensiveCapability(job.Capability) {
+			return true
+		}
+	}
+	return false
+}
+
+func (manager *probeManager) run(h *Handler, models []probeJob) {
+	jobs := make(chan probeJob)
 	var workers sync.WaitGroup
 	providerLocks := make(map[string]chan struct{})
-	for _, model := range models {
-		if providerLocks[model.Provider] == nil {
-			providerLocks[model.Provider] = make(chan struct{}, 1)
+	for _, job := range models {
+		if providerLocks[job.Model.Provider] == nil {
+			providerLocks[job.Model.Provider] = make(chan struct{}, 1)
 		}
 	}
 	for range min(healthProbeConcurrency, len(models)) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			for model := range jobs {
-				lock := providerLocks[model.Provider]
+			for job := range jobs {
+				lock := providerLocks[job.Model.Provider]
 				lock <- struct{}{}
 				started := time.Now()
 				timeout := healthProbeTimeout
-				if model.Type == "image" || model.Type == "video" {
+				if expensiveCapability(job.Capability) {
 					timeout = expensiveProbeTimeout
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
-				result, err := h.catalog.ProbeModel(ctx, model.ID)
+				result, err := h.catalog.ProbeModel(ctx, job.Model.ID, job.Capability)
 				cancel()
 				<-lock
 				latency := time.Since(started)
 				if err == nil {
-					h.health.ProbeSuccess(model.ID, latency)
+					h.health.ProbeSuccess(job.Model.ID, job.Capability, latency)
 					manager.record(true)
 					continue
 				}
@@ -213,13 +240,13 @@ func (manager *probeManager) run(h *Handler, models []catalog.Model) {
 				if errors.As(err, &probeError) {
 					status = probeError.Status
 				}
-				h.health.ProbeFailure(model.ID, latency, status, err.Error())
+				h.health.ProbeFailure(job.Model.ID, job.Capability, latency, status, err.Error())
 				manager.record(false)
 			}
 		}()
 	}
-	for _, model := range models {
-		jobs <- model
+	for _, job := range models {
+		jobs <- job
 	}
 	close(jobs)
 	workers.Wait()

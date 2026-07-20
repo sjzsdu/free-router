@@ -296,13 +296,13 @@ func TestAdminResetsFailedModelHealth(t *testing.T) {
 	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
 	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
 	tracker := health.New()
-	tracker.Failure("provider/model", 0, http.StatusTooManyRequests, "rate limited", 0)
+	tracker.Failure("provider/model", catalog.FunctionChat, 0, http.StatusTooManyRequests, "rate limited", 0)
 	handler := New(routes, models, vault, tracker, Config{}, nil)
 	request := httptest.NewRequest(http.MethodPost, "/admin/api/health/reset", strings.NewReader(`{"model":"provider/model"}`))
 	request.RemoteAddr = "127.0.0.1:1234"
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK || !tracker.Available("provider/model") {
+	if recorder.Code != http.StatusOK || !tracker.Available("provider/model", catalog.FunctionChat) {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }

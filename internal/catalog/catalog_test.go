@@ -43,6 +43,50 @@ func TestRefreshKeepsOnlyZeroPricedModels(t *testing.T) {
 	if !model.Capabilities.ToolCall || !model.Capabilities.Reasoning || !model.Capabilities.Vision {
 		t.Fatalf("unexpected capabilities: %#v", model.Capabilities)
 	}
+	for _, function := range []string{FunctionChat, FunctionChatTools, FunctionImageUnderstanding} {
+		if !model.SupportsFunction(function) {
+			t.Fatalf("model functions %v do not contain %q", model.Functions, function)
+		}
+	}
+}
+
+func TestMultimodalUnderstandingProbeUsesOpenAIContentParts(t *testing.T) {
+	clearBuiltinKeys(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"vision-model","architecture":{"input_modalities":["text","image"],"output_modalities":["text"]}}]}`))
+		case "/chat/completions":
+			var input struct {
+				Messages []struct {
+					Content []struct {
+						Type     string `json:"type"`
+						ImageURL struct {
+							URL string `json:"url"`
+						} `json:"image_url"`
+					} `json:"content"`
+				} `json:"messages"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Fatal(err)
+			}
+			if len(input.Messages) != 1 || len(input.Messages[0].Content) != 2 || !strings.HasPrefix(input.Messages[0].Content[1].ImageURL.URL, "data:image/png;base64,iVBOR") {
+				t.Fatalf("invalid OpenAI multimodal payload: %#v", input)
+			}
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"white"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + server.URL + `","no_auth":true}]`)
+	store := New(registry, filepath.Join(t.TempDir(), "models.json"), server.Client())
+	if err := store.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ProbeModel(context.Background(), "test/vision-model", FunctionImageUnderstanding); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestAllowedModelPatternsAreCaseInsensitive(t *testing.T) {
@@ -130,7 +174,7 @@ func TestAudioProbeUsesEmbeddedWAVMultipart(t *testing.T) {
 	if err := store.Refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ProbeModel(context.Background(), "test/whisper-test"); err != nil {
+	if _, err := store.ProbeModel(context.Background(), "test/whisper-test", FunctionSpeechToText); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -165,7 +209,7 @@ func TestImageEditProbeUsesEmbeddedPNGMultipart(t *testing.T) {
 	if err := store.Refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ProbeModel(context.Background(), "test/image-edit-test"); err != nil {
+	if _, err := store.ProbeModel(context.Background(), "test/image-edit-test", FunctionImageGeneration); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -196,7 +240,7 @@ func TestImageToVideoProbeIncludesEmbeddedPNG(t *testing.T) {
 	if err := store.Refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ProbeModel(context.Background(), "test/tiny-i2v"); err != nil {
+	if _, err := store.ProbeModel(context.Background(), "test/tiny-i2v", FunctionVideoGeneration); err != nil {
 		t.Fatal(err)
 	}
 }

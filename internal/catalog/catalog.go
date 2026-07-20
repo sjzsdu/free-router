@@ -30,6 +30,24 @@ var probeWAVBase64 string
 //go:embed assets/probe.png.b64
 var probePNGBase64 string
 
+//go:embed assets/probe.mp4.b64
+var probeMP4Base64 string
+
+const (
+	FunctionChat               = "chat"
+	FunctionChatTools          = "chat-tools"
+	FunctionImageUnderstanding = "image-understanding"
+	FunctionImageGeneration    = "image-generation"
+	FunctionVideoUnderstanding = "video-understanding"
+	FunctionVideoGeneration    = "video-generation"
+	FunctionAudioUnderstanding = "audio-understanding"
+	FunctionSpeechToText       = "speech-to-text"
+	FunctionTextToSpeech       = "text-to-speech"
+	FunctionEmbedding          = "embedding"
+	FunctionRerank             = "rerank"
+	FunctionModeration         = "moderation"
+)
+
 type Model struct {
 	ID                  string       `json:"id"`
 	Provider            string       `json:"provider"`
@@ -39,6 +57,7 @@ type Model struct {
 	OwnedBy             string       `json:"owned_by,omitempty"`
 	Created             int64        `json:"created,omitempty"`
 	Type                string       `json:"type"`
+	Functions           []string     `json:"functions"`
 	Free                bool         `json:"free"`
 	Tier                string       `json:"tier,omitempty"`
 	ContextLength       int          `json:"context_length,omitempty"`
@@ -299,10 +318,11 @@ func (s *Store) fetch(ctx context.Context, spec provider.Spec) ([]Model, error) 
 		maxOutputTokens := firstPositive(candidate.MaxOutputTokens, candidate.MaxCompletionTokens, candidate.TopProvider.MaxCompletionTokens)
 		modelType := classifyModel(candidate, input, output)
 		capabilities := inferCapabilities(candidate, modelType, input, parameters)
+		functions := inferFunctions(candidate, modelType, input, output, parameters)
 		models = append(models, Model{
 			ID: spec.ID + "/" + candidate.ID, Provider: spec.ID, UpstreamID: candidate.ID,
 			Name: candidate.Name, Description: candidate.Description, OwnedBy: candidate.OwnedBy, Created: candidate.Created,
-			Type: modelType, Free: true, Tier: spec.Tier,
+			Type: modelType, Functions: functions, Free: true, Tier: spec.Tier,
 			ContextLength: contextLength, MaxOutputTokens: maxOutputTokens,
 			InputModalities: input, OutputModalities: output, SupportedParameters: parameters,
 			SupportedEndpoints: candidate.SupportedEndpoints, Capabilities: capabilities,
@@ -359,8 +379,8 @@ func (s *Store) Probe(ctx context.Context, providerID string) (int, error) {
 	return len(models), nil
 }
 
-// ProbeModel sends the smallest useful inference request supported for each model type.
-func (s *Store) ProbeModel(ctx context.Context, modelID string) (ModelProbeResult, error) {
+// ProbeModel sends the smallest useful inference request for one advertised function.
+func (s *Store) ProbeModel(ctx context.Context, modelID, function string) (ModelProbeResult, error) {
 	model, ok := s.Find(modelID)
 	if !ok {
 		return ModelProbeResult{}, fmt.Errorf("model %q is not in the catalog", modelID)
@@ -373,29 +393,39 @@ func (s *Store) ProbeModel(ctx context.Context, modelID string) (ModelProbeResul
 	var payload []byte
 	contentType := "application/json"
 	var input map[string]any
-	switch model.Type {
-	case "normal":
+	switch function {
+	case FunctionChat:
 		endpoint = "/chat/completions"
 		input = map[string]any{"model": model.UpstreamID, "messages": []map[string]string{{"role": "user", "content": "ping"}}, "max_tokens": 1, "stream": false}
-	case "embedding":
+	case FunctionChatTools:
+		endpoint = "/chat/completions"
+		input = map[string]any{"model": model.UpstreamID, "messages": []map[string]string{{"role": "user", "content": "say ping"}}, "max_tokens": 1, "stream": false, "tools": []map[string]any{{"type": "function", "function": map[string]any{"name": "ping", "description": "return ping", "parameters": map[string]any{"type": "object", "properties": map[string]any{}}}}}}
+	case FunctionImageUnderstanding:
+		endpoint = "/chat/completions"
+		input = multimodalProbeInput(model.UpstreamID, "image_url", "data:image/png;base64,"+strings.TrimSpace(probePNGBase64))
+	case FunctionVideoUnderstanding:
+		endpoint = "/chat/completions"
+		input = multimodalProbeInput(model.UpstreamID, "video_url", "data:video/mp4;base64,"+strings.TrimSpace(probeMP4Base64))
+	case FunctionAudioUnderstanding:
+		endpoint = "/chat/completions"
+		input = map[string]any{"model": model.UpstreamID, "messages": []map[string]any{{"role": "user", "content": []map[string]any{{"type": "text", "text": "Reply with one word."}, {"type": "input_audio", "input_audio": map[string]any{"data": strings.TrimSpace(probeWAVBase64), "format": "wav"}}}}}, "max_tokens": 1, "stream": false}
+	case FunctionEmbedding:
 		endpoint = "/embeddings"
 		input = map[string]any{"model": model.UpstreamID, "input": "ping"}
-	case "rerank":
+	case FunctionRerank:
 		endpoint = "/rerank"
 		input = map[string]any{"model": model.UpstreamID, "query": "ping", "documents": []string{"ping"}, "top_n": 1}
-	case "audio":
-		if audioUsesTranscription(model) {
-			endpoint = "/audio/transcriptions"
-			var err error
-			payload, contentType, err = audioProbePayload(model.UpstreamID)
-			if err != nil {
-				return ModelProbeResult{}, err
-			}
-		} else {
-			endpoint = "/audio/speech"
-			input = map[string]any{"model": model.UpstreamID, "input": "ping", "voice": "alloy", "response_format": "mp3"}
+	case FunctionSpeechToText:
+		endpoint = "/audio/transcriptions"
+		var err error
+		payload, contentType, err = audioProbePayload(model.UpstreamID)
+		if err != nil {
+			return ModelProbeResult{}, err
 		}
-	case "image":
+	case FunctionTextToSpeech:
+		endpoint = "/audio/speech"
+		input = map[string]any{"model": model.UpstreamID, "input": "ping", "voice": "alloy", "response_format": "mp3"}
+	case FunctionImageGeneration:
 		if imageUsesEdit(model) {
 			endpoint = "/images/edits"
 			var err error
@@ -407,14 +437,17 @@ func (s *Store) ProbeModel(ctx context.Context, modelID string) (ModelProbeResul
 			endpoint = "/images/generations"
 			input = map[string]any{"model": model.UpstreamID, "prompt": "a dot", "n": 1}
 		}
-	case "video":
+	case FunctionVideoGeneration:
 		endpoint = "/videos/generations"
 		input = map[string]any{"model": model.UpstreamID, "prompt": "a still black dot", "duration": 1}
 		if videoUsesImage(model) {
 			input["image"] = "data:image/png;base64," + strings.TrimSpace(probePNGBase64)
 		}
+	case FunctionModeration:
+		endpoint = "/moderations"
+		input = map[string]any{"model": model.UpstreamID, "input": "ping"}
 	default:
-		return ModelProbeResult{}, fmt.Errorf("automatic probing is disabled for model type %q", model.Type)
+		return ModelProbeResult{}, fmt.Errorf("automatic probing is disabled for function %q", function)
 	}
 	if payload == nil {
 		var err error
@@ -459,6 +492,21 @@ func audioUsesTranscription(model Model) bool {
 	}
 	id := strings.ToLower(model.UpstreamID)
 	return strings.Contains(id, "whisper") || strings.Contains(id, "transcri") || strings.Contains(id, "speech-to-text") || strings.Contains(id, "stt")
+}
+
+func multimodalProbeInput(model, contentType, dataURL string) map[string]any {
+	return map[string]any{
+		"model": model,
+		"messages": []map[string]any{{
+			"role": "user",
+			"content": []map[string]any{
+				{"type": "text", "text": "Describe this in one word."},
+				{"type": contentType, contentType: map[string]any{"url": dataURL}},
+			},
+		}},
+		"max_tokens": 1,
+		"stream":     false,
+	}
 }
 
 func audioProbePayload(model string) ([]byte, string, error) {
@@ -582,6 +630,10 @@ func (model Model) Supports(parameter string) bool {
 	return contains(model.SupportedParameters, parameter)
 }
 
+func (model Model) SupportsFunction(function string) bool {
+	return contains(model.Functions, function)
+}
+
 func (s *Store) set(models []Model, updated time.Time) {
 	s.mu.Lock()
 	s.models = models
@@ -609,6 +661,9 @@ func (s *Store) loadCache() error {
 				model.Type = classifyID(model.UpstreamID)
 				model.Free = true
 				model.Capabilities = inferCachedCapabilities(model)
+			}
+			if len(model.Functions) == 0 {
+				model.Functions = inferCachedFunctions(model)
 			}
 			models = append(models, model)
 		}
@@ -761,6 +816,98 @@ func inferCapabilities(candidate upstreamModel, modelType string, input, paramet
 		Vision:         candidate.Vision.Value || contains(input, "image") || contains(input, "video") || strings.Contains(id, "vision") || strings.Contains(id, "-vl"),
 		VisionKnown:    candidate.Vision.Known || len(input) > 0,
 		Streaming:      modelType == "normal",
+	}
+}
+
+func inferFunctions(candidate upstreamModel, modelType string, input, output, parameters []string) []string {
+	functions := make(map[string]bool)
+	add := func(function string) { functions[function] = true }
+	for _, endpoint := range candidate.SupportedEndpoints {
+		value := strings.ToLower(endpoint)
+		switch {
+		case strings.Contains(value, "chat/completions") || strings.Contains(value, "responses"):
+			add(FunctionChat)
+		case strings.Contains(value, "embedding"):
+			add(FunctionEmbedding)
+		case strings.Contains(value, "rerank"):
+			add(FunctionRerank)
+		case strings.Contains(value, "audio/transcription") || strings.Contains(value, "audio/translation"):
+			add(FunctionSpeechToText)
+		case strings.Contains(value, "audio/speech"):
+			add(FunctionTextToSpeech)
+		case strings.Contains(value, "video"):
+			add(FunctionVideoGeneration)
+		case strings.Contains(value, "image"):
+			add(FunctionImageGeneration)
+		case strings.Contains(value, "moderation") || strings.Contains(value, "safety"):
+			add(FunctionModeration)
+		}
+	}
+	textOutput := contains(output, "text") || (modelType == "normal" && len(output) == 0)
+	if modelType == "normal" {
+		add(FunctionChat)
+	}
+	if textOutput && contains(input, "image") {
+		add(FunctionImageUnderstanding)
+	}
+	if textOutput && contains(input, "video") {
+		add(FunctionVideoUnderstanding)
+	}
+	if textOutput && contains(input, "audio") && functions[FunctionChat] {
+		add(FunctionAudioUnderstanding)
+	}
+	if contains(output, "image") {
+		add(FunctionImageGeneration)
+	}
+	if contains(output, "video") {
+		add(FunctionVideoGeneration)
+	}
+	if contains(output, "audio") {
+		add(FunctionTextToSpeech)
+	}
+	id := strings.ToLower(candidate.ID)
+	switch modelType {
+	case "embedding":
+		add(FunctionEmbedding)
+	case "rerank":
+		add(FunctionRerank)
+	case "image":
+		add(FunctionImageGeneration)
+	case "video":
+		add(FunctionVideoGeneration)
+	case "audio":
+		switch {
+		case strings.Contains(id, "whisper"), strings.Contains(id, "transcri"), strings.Contains(id, "speech-to-text"), strings.Contains(id, "stt"), strings.Contains(id, "asr"):
+			add(FunctionSpeechToText)
+		case strings.Contains(id, "tts"), strings.Contains(id, "text-to-speech"), strings.Contains(id, "speech-synth"), strings.Contains(id, "voice"):
+			add(FunctionTextToSpeech)
+		}
+	case "moderation":
+		add(FunctionModeration)
+	}
+	if functions[FunctionChat] && (candidate.Tools.Value || candidate.ToolCall.Value || contains(parameters, "tools") || contains(parameters, "tool_choice")) {
+		add(FunctionChatTools)
+	}
+	result := make([]string, 0, len(functions))
+	for _, function := range AllFunctions() {
+		if functions[function] {
+			result = append(result, function)
+		}
+	}
+	return result
+}
+
+func inferCachedFunctions(model Model) []string {
+	candidate := upstreamModel{ID: model.UpstreamID, Type: model.Type, SupportedEndpoints: model.SupportedEndpoints}
+	candidate.Tools = flexibleBool{Value: model.Capabilities.ToolCall, Known: model.Capabilities.ToolCallKnown}
+	return inferFunctions(candidate, model.Type, model.InputModalities, model.OutputModalities, model.SupportedParameters)
+}
+
+func AllFunctions() []string {
+	return []string{
+		FunctionChat, FunctionChatTools, FunctionImageUnderstanding, FunctionImageGeneration,
+		FunctionVideoUnderstanding, FunctionVideoGeneration, FunctionAudioUnderstanding,
+		FunctionSpeechToText, FunctionTextToSpeech, FunctionEmbedding, FunctionRerank, FunctionModeration,
 	}
 }
 

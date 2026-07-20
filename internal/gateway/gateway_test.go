@@ -72,8 +72,8 @@ func TestAutoRetriesNextFreeModel(t *testing.T) {
 	if err := json.NewDecoder(modelsRecorder.Body).Decode(&list); err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Data) < 2 || list.Data[1]["type"] != "normal" || list.Data[1]["capabilities"] == nil {
-		t.Fatalf("model metadata is missing: %#v", list.Data)
+	if len(list.Data) != 1 || list.Data[0]["id"] != catalog.FunctionChat || list.Data[0]["owned_by"] != "free-router" {
+		t.Fatalf("stable capability models are missing: %#v", list.Data)
 	}
 }
 
@@ -93,7 +93,7 @@ func TestModelsEndpointHidesFailedModels(t *testing.T) {
 		t.Fatal(err)
 	}
 	tracker := health.New()
-	tracker.Failure("test/failed", 0, http.StatusBadGateway, "broken", 0)
+	tracker.Failure("test/failed", catalog.FunctionChat, 0, http.StatusBadGateway, "broken", 0)
 	handler := New(store, registry, Config{Health: tracker}, upstream.Client())
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
@@ -105,8 +105,94 @@ func TestModelsEndpointHidesFailedModels(t *testing.T) {
 	if err := json.NewDecoder(recorder.Body).Decode(&list); err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Data) != 2 || list.Data[0].ID != "auto" || list.Data[1].ID != "test/healthy" {
+	if len(list.Data) != 1 || list.Data[0].ID != catalog.FunctionChat {
 		t.Fatalf("unexpected discoverable models: %#v", list.Data)
+	}
+	for _, model := range list.Data {
+		if strings.HasPrefix(model.ID, "test/") {
+			t.Fatalf("physical model leaked through public catalog: %#v", list.Data)
+		}
+	}
+}
+
+func TestModelsEndpointOmitsCapabilityWithoutHealthyCandidates(t *testing.T) {
+	clearBuiltinKeys(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/models" {
+			_, _ = w.Write([]byte(`{"data":[{"id":"only-chat"}]}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer upstream.Close()
+	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","no_auth":true}]`)
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	if err := store.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	tracker := health.New()
+	tracker.Failure("test/only-chat", catalog.FunctionChat, 0, http.StatusBadGateway, "broken", 0)
+	handler := New(store, registry, Config{Health: tracker}, upstream.Client())
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	var list struct {
+		Data []any `json:"data"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Data) != 0 {
+		t.Fatalf("failed capability remained discoverable: %#v", list.Data)
+	}
+}
+
+func TestCapabilityFailureDoesNotDisableAnotherFunctionOnSameModel(t *testing.T) {
+	clearBuiltinKeys(t)
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"multimodal","architecture":{"input_modalities":["text","image"],"output_modalities":["text"]}}]}`))
+		case "/chat/completions":
+			calls.Add(1)
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","no_auth":true}]`)
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	if err := store.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	tracker := health.New()
+	tracker.Failure("test/multimodal", catalog.FunctionImageUnderstanding, 0, http.StatusBadRequest, "image failed", 0)
+	handler := New(store, registry, Config{Routes: routes, Health: tracker, MaxAttempts: 2}, upstream.Client())
+
+	chat := httptest.NewRecorder()
+	handler.ServeHTTP(chat, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat","messages":[]}`)))
+	if chat.Code != http.StatusOK || calls.Load() != 1 {
+		t.Fatalf("chat capability was incorrectly isolated: status=%d body=%s", chat.Code, chat.Body.String())
+	}
+	vision := httptest.NewRecorder()
+	handler.ServeHTTP(vision, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"image-understanding","messages":[]}`)))
+	if vision.Code != http.StatusServiceUnavailable || calls.Load() != 1 {
+		t.Fatalf("failed image capability was routed: status=%d calls=%d body=%s", vision.Code, calls.Load(), vision.Body.String())
+	}
+}
+
+func TestCapabilityAliasMustMatchOpenAIEndpoint(t *testing.T) {
+	clearBuiltinKeys(t)
+	registry, _ := provider.NewRegistryAllowEmpty("")
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	handler := New(store, registry, Config{Routes: routes}, http.DefaultClient)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"image-generation","messages":[]}`)))
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "not compatible") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

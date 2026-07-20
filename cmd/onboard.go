@@ -15,7 +15,7 @@ import (
 
 type documentedRoute struct {
 	Comment     string   `json:"_comment"`
-	Type        string   `json:"type"`
+	Capability  string   `json:"capability"`
 	Strategy    string   `json:"strategy"`
 	RequireTool bool     `json:"require_tool,omitempty"`
 	Models      []string `json:"models"`
@@ -31,14 +31,18 @@ type documentedConfig struct {
 }
 
 var routeDescriptions = map[string]string{
-	"chat":       "通用文本对话。models 按从高到低排列 fallback 优先级。",
-	"chat-tools": "需要 tool/function call 的对话；候选模型必须支持工具调用。",
-	"embedding":  "文本向量与语义检索模型。",
-	"audio":      "语音合成、转录或翻译模型。",
-	"image":      "图像生成与图像处理模型。",
-	"video":      "视频生成与处理模型。",
-	"rerank":     "检索结果重排序模型。",
-	"moderation": "内容审核与安全分类模型。",
+	"chat":                "通用文本对话。models 按从高到低排列 fallback 优先级。",
+	"chat-tools":          "需要 tool/function call 的对话；候选模型必须支持工具调用。",
+	"image-understanding": "图片输入、文本输出的视觉理解。",
+	"image-generation":    "文本或图片输入、图片输出的生成与编辑。",
+	"video-understanding": "视频输入、文本输出的内容理解。",
+	"video-generation":    "文本或图片输入、视频输出的生成。",
+	"audio-understanding": "音频输入、文本回答的内容理解。",
+	"speech-to-text":      "语音转录与翻译。",
+	"text-to-speech":      "文本转语音。",
+	"embedding":           "文本向量与语义检索模型。",
+	"rerank":              "检索结果重排序模型。",
+	"moderation":          "内容审核与安全分类模型。",
 }
 
 func addOnboardCommand(root *cobra.Command, opts *options) {
@@ -84,10 +88,10 @@ func documentedDefaultConfig() ([]byte, error) {
 	for alias, route := range defaults.Routes {
 		description := routeDescriptions[alias]
 		if description == "" {
-			description = fmt.Sprintf("%s 类型的能力路由。", route.Type)
+			description = fmt.Sprintf("%s 能力路由。", route.Capability)
 		}
 		routes[alias] = documentedRoute{
-			Comment: description, Type: route.Type, Strategy: route.Strategy,
+			Comment: description, Capability: route.Capability, Strategy: route.Strategy,
 			RequireTool: route.RequireTool, Models: append([]string{}, route.Models...),
 		}
 	}
@@ -97,7 +101,7 @@ func documentedDefaultConfig() ([]byte, error) {
 			"version":      "配置格式版本，由程序维护；不要手工降级。",
 			"provider_env": "Provider 到 API Key 环境变量名数组的映射，按顺序使用第一个非空变量。这里只写变量名，不写 Key；用户映射会与内置映射合并。Cloudflare 还需要 CLOUDFLARE_ACCOUNT_ID。",
 			"routes":       "稳定的功能路由名。strategy 可选 ordered（严格按 models 顺序）或 round-robin（健康模型轮流作为首选）；失败时都会继续 fallback。空数组表示完全自动选择。",
-			"models":       "按 provider/model ID 覆盖上游元数据。可设置 disabled、type、tool_call、vision、reasoning；默认没有覆盖。",
+			"models":       "按 provider/model ID 覆盖上游元数据。可设置 disabled、functions、tool_call、vision、reasoning；一个模型可以配置多个 functions。",
 		},
 		Version: defaults.Version, ProviderEnv: provider.DefaultEnvMap(), Routes: routes, Models: defaults.Models,
 	}

@@ -13,7 +13,7 @@ import (
 	"github.com/sjzsdu/free-router/internal/catalog"
 )
 
-const CurrentVersion = 5
+const CurrentVersion = 6
 
 const (
 	StrategyOrdered    = "ordered"
@@ -22,7 +22,8 @@ const (
 
 type Route struct {
 	Comment     string   `json:"_comment,omitempty"`
-	Type        string   `json:"type"`
+	Capability  string   `json:"capability"`
+	LegacyType  string   `json:"type,omitempty"`
 	Strategy    string   `json:"strategy,omitempty"`
 	RequireTool bool     `json:"require_tool,omitempty"`
 	Models      []string `json:"models"`
@@ -38,11 +39,12 @@ type Config struct {
 }
 
 type ModelOverride struct {
-	Disabled  bool   `json:"disabled,omitempty"`
-	Type      string `json:"type,omitempty"`
-	ToolCall  *bool  `json:"tool_call,omitempty"`
-	Vision    *bool  `json:"vision,omitempty"`
-	Reasoning *bool  `json:"reasoning,omitempty"`
+	Disabled   bool     `json:"disabled,omitempty"`
+	Functions  []string `json:"functions,omitempty"`
+	LegacyType string   `json:"type,omitempty"`
+	ToolCall   *bool    `json:"tool_call,omitempty"`
+	Vision     *bool    `json:"vision,omitempty"`
+	Reasoning  *bool    `json:"reasoning,omitempty"`
 }
 
 type Store struct {
@@ -53,14 +55,18 @@ type Store struct {
 
 func DefaultConfig() Config {
 	return Config{Version: CurrentVersion, Models: map[string]ModelOverride{}, ProviderEnv: map[string][]string{}, Routes: map[string]Route{
-		"chat":       {Type: "chat", Strategy: StrategyOrdered, Models: []string{}},
-		"chat-tools": {Type: "chat-tools", Strategy: StrategyOrdered, RequireTool: true, Models: []string{}},
-		"embedding":  {Type: "embedding", Strategy: StrategyOrdered, Models: []string{}},
-		"audio":      {Type: "audio", Strategy: StrategyOrdered, Models: []string{}},
-		"image":      {Type: "image", Strategy: StrategyOrdered, Models: []string{}},
-		"video":      {Type: "video", Strategy: StrategyOrdered, Models: []string{}},
-		"rerank":     {Type: "rerank", Strategy: StrategyOrdered, Models: []string{}},
-		"moderation": {Type: "moderation", Strategy: StrategyOrdered, Models: []string{}},
+		catalog.FunctionChat:               {Capability: catalog.FunctionChat, Strategy: StrategyOrdered, Models: []string{}},
+		catalog.FunctionChatTools:          {Capability: catalog.FunctionChatTools, Strategy: StrategyOrdered, RequireTool: true, Models: []string{}},
+		catalog.FunctionImageUnderstanding: {Capability: catalog.FunctionImageUnderstanding, Strategy: StrategyOrdered, Models: []string{}},
+		catalog.FunctionImageGeneration:    {Capability: catalog.FunctionImageGeneration, Strategy: StrategyOrdered, Models: []string{}},
+		catalog.FunctionVideoUnderstanding: {Capability: catalog.FunctionVideoUnderstanding, Strategy: StrategyOrdered, Models: []string{}},
+		catalog.FunctionVideoGeneration:    {Capability: catalog.FunctionVideoGeneration, Strategy: StrategyOrdered, Models: []string{}},
+		catalog.FunctionAudioUnderstanding: {Capability: catalog.FunctionAudioUnderstanding, Strategy: StrategyOrdered, Models: []string{}},
+		catalog.FunctionSpeechToText:       {Capability: catalog.FunctionSpeechToText, Strategy: StrategyOrdered, Models: []string{}},
+		catalog.FunctionTextToSpeech:       {Capability: catalog.FunctionTextToSpeech, Strategy: StrategyOrdered, Models: []string{}},
+		catalog.FunctionEmbedding:          {Capability: catalog.FunctionEmbedding, Strategy: StrategyOrdered, Models: []string{}},
+		catalog.FunctionRerank:             {Capability: catalog.FunctionRerank, Strategy: StrategyOrdered, Models: []string{}},
+		catalog.FunctionModeration:         {Capability: catalog.FunctionModeration, Strategy: StrategyOrdered, Models: []string{}},
 	}}
 }
 
@@ -74,16 +80,18 @@ func (s *Store) Apply(model catalog.Model) (catalog.Model, bool) {
 	if override.Disabled {
 		return model, false
 	}
-	if override.Type != "" {
-		model.Type = InternalModelType(override.Type)
-		if override.Type == "chat-tools" {
-			model.Capabilities.ToolCall = true
-			model.Capabilities.ToolCallKnown = true
-		}
+	if len(override.Functions) > 0 {
+		model.Functions = append([]string{}, override.Functions...)
 	}
 	if override.ToolCall != nil {
 		model.Capabilities.ToolCall = *override.ToolCall
 		model.Capabilities.ToolCallKnown = true
+		if *override.ToolCall && model.SupportsFunction(catalog.FunctionChat) && !model.SupportsFunction(catalog.FunctionChatTools) {
+			model.Functions = append(model.Functions, catalog.FunctionChatTools)
+		}
+		if !*override.ToolCall {
+			model.Functions = withoutFunction(model.Functions, catalog.FunctionChatTools)
+		}
 	}
 	if override.Vision != nil {
 		model.Capabilities.Vision = *override.Vision
@@ -96,31 +104,25 @@ func (s *Store) Apply(model catalog.Model) (catalog.Model, bool) {
 	return model, true
 }
 
-func InternalModelType(routeType string) string {
-	switch routeType {
-	case "chat", "chat-tools":
-		return "normal"
-	default:
-		return routeType
+func withoutFunction(functions []string, excluded string) []string {
+	result := make([]string, 0, len(functions))
+	for _, function := range functions {
+		if function != excluded {
+			result = append(result, function)
+		}
 	}
+	return result
 }
 
 func Accepts(route Route, model catalog.Model) bool {
-	if model.Type != InternalModelType(route.Type) {
+	if !model.SupportsFunction(route.Capability) {
 		return false
 	}
-	return !(route.RequireTool || route.Type == "chat-tools") || model.Supports("tools")
+	return !(route.RequireTool || route.Capability == catalog.FunctionChatTools) || model.Supports("tools")
 }
 
 func ModelRouteTypes(model catalog.Model) []string {
-	if model.Type != "normal" {
-		return []string{model.Type}
-	}
-	result := []string{"chat"}
-	if model.Supports("tools") {
-		result = append(result, "chat-tools")
-	}
-	return result
+	return append([]string{}, model.Functions...)
 }
 
 func New(path string) (*Store, error) {
@@ -241,27 +243,50 @@ func mergeDefaults(config Config) Config {
 	if config.ProviderEnv == nil {
 		config.ProviderEnv = make(map[string][]string)
 	}
+	if previousVersion < 6 {
+		migrated := make(map[string]Route)
+		for alias, route := range config.Routes {
+			capability := route.Capability
+			if capability == "" {
+				capability = route.LegacyType
+			}
+			if capability == "normal" {
+				capability = catalog.FunctionChat
+				if route.RequireTool || alias == catalog.FunctionChatTools {
+					capability = catalog.FunctionChatTools
+				}
+			}
+			route.LegacyType = ""
+			switch capability {
+			case "image":
+				route.Capability = catalog.FunctionImageGeneration
+				migrated[catalog.FunctionImageGeneration] = route
+			case "video":
+				route.Capability = catalog.FunctionVideoGeneration
+				migrated[catalog.FunctionVideoGeneration] = route
+			case "audio":
+				for _, target := range []string{catalog.FunctionSpeechToText, catalog.FunctionTextToSpeech} {
+					copy := route
+					copy.Capability = target
+					migrated[target] = copy
+				}
+			default:
+				route.Capability = capability
+				migrated[alias] = route
+			}
+		}
+		config.Routes = migrated
+		for id, override := range config.Models {
+			if len(override.Functions) == 0 && override.LegacyType != "" {
+				override.Functions = legacyFunctions(override.LegacyType)
+			}
+			override.LegacyType = ""
+			config.Models[id] = override
+		}
+	}
 	for alias, route := range defaults.Routes {
 		if _, ok := config.Routes[alias]; !ok {
 			config.Routes[alias] = route
-		}
-	}
-	if previousVersion < 3 {
-		for alias, route := range config.Routes {
-			if route.Type == "normal" {
-				if route.RequireTool || alias == "chat-tools" {
-					route.Type = "chat-tools"
-				} else {
-					route.Type = "chat"
-				}
-				config.Routes[alias] = route
-			}
-		}
-		for id, override := range config.Models {
-			if override.Type == "normal" {
-				override.Type = "chat"
-				config.Models[id] = override
-			}
 		}
 	}
 	config.Version = CurrentVersion
@@ -273,8 +298,11 @@ func validate(config *Config) error {
 		return errors.New("at least one route is required")
 	}
 	for alias, route := range config.Routes {
-		if strings.TrimSpace(alias) == "" || strings.TrimSpace(route.Type) == "" {
-			return errors.New("route alias and type must not be empty")
+		if strings.TrimSpace(alias) == "" || strings.TrimSpace(route.Capability) == "" {
+			return errors.New("route alias and capability must not be empty")
+		}
+		if alias != route.Capability || !knownFunction(route.Capability) {
+			return fmt.Errorf("route %q must use the same built-in capability name", alias)
 		}
 		if route.Strategy == "" {
 			route.Strategy = StrategyOrdered
@@ -301,7 +329,8 @@ func validate(config *Config) error {
 		if model == "" {
 			continue
 		}
-		override.Type = strings.TrimSpace(override.Type)
+		override.Functions = cleanFunctions(override.Functions)
+		override.LegacyType = ""
 		cleanedOverrides[model] = override
 	}
 	config.Models = cleanedOverrides
@@ -332,6 +361,49 @@ func validate(config *Config) error {
 	return nil
 }
 
+func knownFunction(function string) bool {
+	for _, candidate := range catalog.AllFunctions() {
+		if function == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func cleanFunctions(functions []string) []string {
+	seen := make(map[string]bool)
+	cleaned := make([]string, 0, len(functions))
+	for _, function := range functions {
+		function = strings.TrimSpace(function)
+		if function == "" || seen[function] || !knownFunction(function) {
+			continue
+		}
+		seen[function] = true
+		cleaned = append(cleaned, function)
+	}
+	return cleaned
+}
+
+func legacyFunctions(modelType string) []string {
+	switch modelType {
+	case "normal", "chat":
+		return []string{catalog.FunctionChat}
+	case "chat-tools":
+		return []string{catalog.FunctionChat, catalog.FunctionChatTools}
+	case "image":
+		return []string{catalog.FunctionImageGeneration}
+	case "video":
+		return []string{catalog.FunctionVideoGeneration}
+	case "audio":
+		return []string{catalog.FunctionSpeechToText, catalog.FunctionTextToSpeech}
+	default:
+		if knownFunction(modelType) {
+			return []string{modelType}
+		}
+		return nil
+	}
+}
+
 func cloneConfig(config Config) Config {
 	clone := Config{Comment: config.Comment, Version: config.Version, Routes: make(map[string]Route, len(config.Routes)), Models: make(map[string]ModelOverride, len(config.Models)), ProviderEnv: make(map[string][]string, len(config.ProviderEnv))}
 	if config.Help != nil {
@@ -345,6 +417,7 @@ func cloneConfig(config Config) Config {
 		clone.Routes[alias] = route
 	}
 	for model, override := range config.Models {
+		override.Functions = append([]string{}, override.Functions...)
 		clone.Models[model] = override
 	}
 	for providerID, names := range config.ProviderEnv {

@@ -108,7 +108,7 @@ free-router daemon uninstall
 http://localhost:1314/admin/
 ```
 
-可以在网页中直接打开每个免费源的官方注册 / Key 页面，录入 API Key、测试 Provider 连接、刷新缓存、查看模型健康和请求成功率，并拖动配置每条路由的 fallback 顺序。还可以禁用单个模型，或手工覆盖模型类型、tools、vision、reasoning 能力。配置保存后立即生效；新增或删除凭据也会热加载，不需要重启。
+可以在网页中直接打开每个免费源的官方注册 / Key 页面，录入 API Key、测试 Provider 连接、刷新缓存、查看每个模型功能的健康状态和请求成功率，并拖动配置每条路由的 fallback 顺序。还可以禁用单个模型，或手工覆盖模型的多功能集合、tools、vision、reasoning 能力。配置保存后立即生效；新增或删除凭据也会热加载，不需要重启。
 
 管理界面使用 React、TypeScript、Vite、Tailwind CSS、React Query、Radix UI 和 dnd-kit 构建，生产静态资源会通过 Go Embed 打入同一个二进制。普通用户不需要安装 Node；只有修改管理界面源码时才需要运行：
 
@@ -137,7 +137,7 @@ curl http://localhost:1314/v1/embeddings \
   }'
 
 curl http://localhost:1314/v1/audio/transcriptions \
-  -F 'model=audio' \
+  -F 'model=speech-to-text' \
   -F 'file=@speech.wav'
 ```
 
@@ -157,10 +157,14 @@ OPENAI_API_KEY=任意非空字符串
 | --- | --- | --- |
 | `chat` | 普通聊天 | `/v1/chat/completions` |
 | `chat-tools` | 支持 tool call 的聊天 | `/v1/chat/completions` |
+| `image-understanding` | 图片理解（图片输入、文本输出） | `/v1/chat/completions` |
+| `image-generation` | 图片生成与编辑 | `/v1/images/generations`、`/v1/images/edits`、`/v1/images/variations` |
+| `video-understanding` | 视频理解（视频输入、文本输出） | `/v1/chat/completions` |
+| `video-generation` | 视频生成 | `/v1/videos/generations` |
+| `audio-understanding` | 音频理解（音频输入、文本回答） | `/v1/chat/completions` |
+| `speech-to-text` | 语音转文字、翻译 | `/v1/audio/transcriptions`、`/v1/audio/translations` |
+| `text-to-speech` | 文字转语音 | `/v1/audio/speech` |
 | `embedding` | 向量嵌入 | `/v1/embeddings` |
-| `audio` | 语音合成、转录、翻译 | `/v1/audio/speech`、`/v1/audio/transcriptions`、`/v1/audio/translations` |
-| `image` | 图像生成 | `/v1/images/generations` |
-| `video` | 视频生成 | `/v1/videos/generations` |
 | `rerank` | 文本重排序 | `/v1/rerank` |
 | `moderation` | 内容审核 | `/v1/moderations` |
 
@@ -181,17 +185,17 @@ OPENAI_API_KEY=任意非空字符串
 
 两种策略下，数组中的模型全部不可用后，路由器都会从没有出现在数组中的同路由类型健康模型里轮换选择一个作为最终兜底。列表为空时，则完全根据缓存的类型、能力和健康状态自动选择。
 
-稳定版会跟踪每个模型的成功率、响应延迟、HTTP 状态和最近一次错误：
+稳定版会按“真实模型 + 固定能力”跟踪成功率、响应延迟、HTTP 状态和最近一次错误：
 
 - 自动路由遇到网络错误、429、鉴权/额度错误、模型不兼容或上游 5xx 时，立即 fallback 到下一个候选；
-- 失败模型会被标记为 `failed` 并退出后续自动路由，不会在下一次请求中再次命中；
+- 失败能力会被标记为 `failed` 并退出对应能力路由，不会影响同一模型的其他健康能力；
 - Admin 模型页可筛选“故障（已隔离）”，查看最近状态和错误原因；
 - 排查完成后可点击“重新加入自动路由”；直接指定完整模型 ID 调用成功也会恢复其健康状态；
 - 健康统计保存在内存中，服务重启后重新统计。
 
-进入 Admin 的模型页时，系统会后台检测状态未知或检测缓存已超过 24 小时的全部可探测模型。Chat 使用 1 token 的最短请求，Embedding 使用短文本，Rerank 使用单条文档；Audio transcription 使用内嵌于二进制的 0.1 秒微型 WAV，TTS 使用最短文本；Image 和 Video 使用最小生成任务，需要输入素材的模型会使用内嵌的 8×8 PNG。同一 Provider 串行、全局最多并发 3 个，普通模型单次超时 10 秒，Image/Video 最长等待 2 分钟。测试素材通过 Go Embed 打入同一个二进制，用户不需要额外维护资源文件。
+进入 Admin 的模型页时，系统会后台检测状态未知或检测缓存已超过 24 小时的全部“模型 + 能力”组合。文本能力使用 1 token 的最短请求；图片、音频、视频理解分别使用内嵌的 8×8 PNG、0.1 秒 WAV 和极小 MP4；生成能力使用最小真实任务。同一 Provider 串行、全局最多并发 3 个，普通能力单次超时 10 秒，图片/视频生成最长等待 2 分钟。测试素材通过 Go Embed 打入同一个二进制，用户不需要额外维护资源文件。
 
-检测结果缓存 24 小时；点击“重新检测全部”会在确认后忽略缓存强制重检，Image/Video 的真实任务可能消耗少量免费额度。Video 接口返回任务已受理即视为探测成功，不等待完整成片。被判定为故障的模型仍保留在 Admin 的模型诊断页，但会从路由候选列表、自动兜底和 `/v1/models` 的可发现模型中隔离；重新检测成功或手动重置后才会恢复。
+检测结果缓存 24 小时；点击“重新检测全部”会在确认后忽略缓存强制重检，图片/视频生成任务可能消耗少量免费额度。Video 接口返回任务已受理即视为探测成功，不等待完整成片。故障能力仍保留在 Admin 诊断页，但会从对应路由候选和自动兜底中隔离；重新检测成功或手动重置后恢复。
 
 ## 直接指定模型
 
@@ -213,10 +217,10 @@ X-Free-Router-Model: openai/gpt-oss-120b
 
 ## 模型元数据
 
-`GET /v1/models` 在 OpenAI 标准字段之外统一提供以下信息：
+`GET /v1/models` 只返回当前至少有一个健康候选的稳定能力名称，保证 Agent 不依赖具体 Provider 或真实模型；某项能力全部故障时会暂时从列表消失。完整物理模型目录只通过本机 Admin API/UI 展示，其中包括：
 
-- `type`：`normal`、`embedding`、`rerank`、`audio`、`image`、`video`、`moderation`；
-- `route_types`：用户可配置的统一路由类型；聊天模型至少包含 `chat`，支持或可能支持 tools 时还包含 `chat-tools`；
+- `type`：上游模型的宽泛媒体分类，仅用于诊断；实际路由以 `functions` 为准；
+- `functions`：模型可参与的固定能力数组；一个模型可以同时支持文本对话、图片理解和工具调用等多个能力；
 - `capabilities`：tool call、reasoning、vision、streaming，以及能力是否有明确元数据；
 - `context_length` 和 `max_output_tokens`；
 - `input_modalities`、`output_modalities`；
@@ -226,10 +230,7 @@ X-Free-Router-Model: openai/gpt-oss-120b
 不同 provider 返回的信息完整度不同。`*_known: false` 表示上游没有提供明确数据，不等同于确定不支持。
 
 ```bash
-curl -s http://localhost:1314/v1/models | jq '.data[] | select(.id != "auto") | {
-  id, type, capabilities, context_length, max_output_tokens,
-  input_modalities, output_modalities, tier
-}'
+curl -s http://localhost:1314/v1/models | jq '.data[].id'
 ```
 
 ## 配置文件
@@ -258,14 +259,14 @@ free-router onboard --force            # 明确覆盖已有配置
 
 ```json
 {
-  "version": 5,
+  "version": 6,
   "provider_env": {
     "gemini": ["GEMINI_API_KEY", "MY_GEMINI_KEY"],
     "groq": ["GROQ_API_KEY"]
   },
   "routes": {
     "chat": {
-      "type": "chat",
+      "capability": "chat",
       "strategy": "ordered",
       "models": [
         "groq/openai/gpt-oss-120b",
@@ -273,18 +274,18 @@ free-router onboard --force            # 明确覆盖已有配置
       ]
     },
     "chat-tools": {
-      "type": "chat-tools",
+      "capability": "chat-tools",
       "require_tool": true,
       "models": []
     },
     "embedding": {
-      "type": "embedding",
+      "capability": "embedding",
       "models": []
     }
   },
   "models": {
     "provider/model-with-wrong-metadata": {
-      "type": "chat",
+      "functions": ["chat", "chat-tools", "image-understanding"],
       "tool_call": true
     },
     "provider/model-to-disable": {
@@ -296,7 +297,7 @@ free-router onboard --force            # 明确覆盖已有配置
 
 `provider_env` 是 provider 到 API Key 环境变量名数组的映射。数组按顺序查找，第一个非空环境变量会作为该 Provider 的凭据并自动启用它；用户配置的名称会排在内置名称前面，合并后自动去重。配置文件只保存变量名，不保存变量值。Cloudflare 仍需额外提供 `CLOUDFLARE_ACCOUNT_ID`。
 
-旧版配置会自动迁移到 version 5：原来的 `normal` 聊天类型会转换成 `chat` 或 `chat-tools`，缺失的策略默认为 `ordered`，并立即写回配置文件。缺少的内置路由会自动补全。推荐通过 Web 界面修改；也可以停止服务后手工编辑。配置、缓存和凭据路径可分别用 `--config` / `FREE_ROUTER_CONFIG`、`--cache` / `FREE_ROUTER_CACHE`、`--credentials` / `FREE_ROUTER_CREDENTIALS` 覆盖。
+旧版配置会一次性迁移到 version 6：`image`、`video` 分别迁移到生成能力；旧 `audio` 优先级复制到 `speech-to-text` 与 `text-to-speech`，随后可在 Admin 中按真实能力调整。运行时不再保留含义模糊的旧别名。缺失策略默认为 `ordered`，缺失的固定能力路由会自动补全并写回配置。推荐通过 Web 界面修改；也可以停止服务后手工编辑。
 
 ## 模型缓存与自维护
 
@@ -305,7 +306,7 @@ free-router onboard --force            # 明确覆盖已有配置
 3. 不会定时轮询 `/models`；普通推理请求也绝不会为了选择模型访问模型目录。
 4. 新增 Provider 凭据时会同步一次；模型目录发生变化时可在 Web 界面点击“刷新模型”。
 5. 单个源同步失败时保留该源上一次成功的缓存，不影响其他源。
-6. 缓存保留类型、tool call、vision、context、输入输出模态等字段，用于能力匹配。
+6. 缓存保留 `functions`、tool call、vision、context、输入输出模态和 endpoint 等字段，用于多能力匹配。
 
 ## 接入任意免费源
 

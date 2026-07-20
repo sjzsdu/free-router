@@ -41,6 +41,9 @@ type Gateway struct {
 }
 
 func New(store *catalog.Store, registry *provider.Registry, config Config, client *http.Client) *Gateway {
+	if config.MaxAttempts <= 0 {
+		config.MaxAttempts = 3
+	}
 	if config.Health == nil {
 		config.Health = health.New()
 	}
@@ -54,19 +57,25 @@ func New(store *catalog.Store, registry *provider.Registry, config Config, clien
 		gateway.proxyJSON(w, r, "/embeddings", "embedding")
 	})
 	gateway.mux.HandleFunc("POST /v1/audio/speech", func(w http.ResponseWriter, r *http.Request) {
-		gateway.proxyJSON(w, r, "/audio/speech", "audio")
+		gateway.proxyJSON(w, r, "/audio/speech", catalog.FunctionTextToSpeech)
 	})
 	gateway.mux.HandleFunc("POST /v1/audio/transcriptions", func(w http.ResponseWriter, r *http.Request) {
-		gateway.proxyMultipart(w, r, "/audio/transcriptions", "audio")
+		gateway.proxyMultipart(w, r, "/audio/transcriptions", catalog.FunctionSpeechToText)
 	})
 	gateway.mux.HandleFunc("POST /v1/audio/translations", func(w http.ResponseWriter, r *http.Request) {
-		gateway.proxyMultipart(w, r, "/audio/translations", "audio")
+		gateway.proxyMultipart(w, r, "/audio/translations", catalog.FunctionSpeechToText)
 	})
 	gateway.mux.HandleFunc("POST /v1/images/generations", func(w http.ResponseWriter, r *http.Request) {
-		gateway.proxyJSON(w, r, "/images/generations", "image")
+		gateway.proxyJSON(w, r, "/images/generations", catalog.FunctionImageGeneration)
+	})
+	gateway.mux.HandleFunc("POST /v1/images/edits", func(w http.ResponseWriter, r *http.Request) {
+		gateway.proxyMultipart(w, r, "/images/edits", catalog.FunctionImageGeneration)
+	})
+	gateway.mux.HandleFunc("POST /v1/images/variations", func(w http.ResponseWriter, r *http.Request) {
+		gateway.proxyMultipart(w, r, "/images/variations", catalog.FunctionImageGeneration)
 	})
 	gateway.mux.HandleFunc("POST /v1/videos/generations", func(w http.ResponseWriter, r *http.Request) {
-		gateway.proxyJSON(w, r, "/videos/generations", "video")
+		gateway.proxyJSON(w, r, "/videos/generations", catalog.FunctionVideoGeneration)
 	})
 	gateway.mux.HandleFunc("POST /v1/rerank", func(w http.ResponseWriter, r *http.Request) {
 		gateway.proxyJSON(w, r, "/rerank", "rerank")
@@ -89,29 +98,42 @@ func (g *Gateway) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (g *Gateway) models(w http.ResponseWriter, _ *http.Request) {
-	models := g.catalog.Models()
-	data := make([]map[string]any, 0, len(models)+10)
+	data := make([]map[string]any, 0, len(catalog.AllFunctions()))
 	if g.config.Routes != nil {
 		config := g.config.Routes.Config()
 		aliases := g.config.Routes.Aliases()
 		for _, alias := range aliases {
 			route := config.Routes[alias]
+			if !g.routeAvailable(route) {
+				continue
+			}
 			fallbackModels := make([]string, 0, len(route.Models))
 			for _, modelID := range route.Models {
-				if g.tracker.Available(modelID) {
+				if g.tracker.Available(modelID, route.Capability) {
 					fallbackModels = append(fallbackModels, modelID)
 				}
 			}
 			data = append(data, map[string]any{
-				"id": alias, "object": "model", "owned_by": "free-router", "type": route.Type,
+				"id": alias, "object": "model", "owned_by": "free-router", "type": route.Capability,
 				"free": true, "route": true, "strategy": route.Strategy, "fallback_models": fallbackModels,
 				"capabilities": catalog.Capabilities{ToolCall: route.RequireTool, ToolCallKnown: route.RequireTool, Streaming: true},
 			})
 		}
 	} else {
-		data = append(data, map[string]any{"id": "auto", "object": "model", "owned_by": "free-router", "type": "normal", "free": true})
+		for _, alias := range catalog.AllFunctions() {
+			route := routing.DefaultConfig().Routes[alias]
+			if !g.routeAvailable(route) {
+				continue
+			}
+			data = append(data, map[string]any{"id": alias, "object": "model", "owned_by": "free-router", "type": alias, "free": true, "route": true})
+		}
 	}
-	for _, model := range models {
+	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
+}
+
+func (g *Gateway) routeAvailable(route routing.Route) bool {
+	for _, source := range g.catalog.Models() {
+		model := source
 		if g.config.Routes != nil {
 			var enabled bool
 			model, enabled = g.config.Routes.Apply(model)
@@ -119,21 +141,11 @@ func (g *Gateway) models(w http.ResponseWriter, _ *http.Request) {
 				continue
 			}
 		}
-		if !g.tracker.Available(model.ID) {
-			continue
+		if routing.Accepts(route, model) && g.tracker.Available(model.ID, route.Capability) {
+			return true
 		}
-		data = append(data, map[string]any{
-			"id": model.ID, "object": "model", "owned_by": model.Provider, "provider": model.Provider,
-			"upstream_id": model.UpstreamID, "upstream_owned_by": model.OwnedBy,
-			"name": model.Name, "description": model.Description, "created": model.Created,
-			"type": model.Type, "route_types": routing.ModelRouteTypes(model), "free": model.Free, "tier": model.Tier,
-			"context_length": model.ContextLength, "max_output_tokens": model.MaxOutputTokens,
-			"input_modalities": model.InputModalities, "output_modalities": model.OutputModalities,
-			"capabilities": model.Capabilities, "supported_parameters": model.SupportedParameters,
-			"supported_endpoints": model.SupportedEndpoints, "pricing": model.Pricing,
-		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
+	return false
 }
 
 func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, defaultAlias string) {
@@ -152,10 +164,15 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 		requested = defaultAlias
 	}
 	_, needsTools := request["tools"]
-	if (requested == "auto" || requested == "free") && defaultAlias == "chat" && needsTools {
+	if (requested == "auto" || requested == "free" || requested == catalog.FunctionChat) && defaultAlias == catalog.FunctionChat && needsTools {
 		requested = "chat-tools"
 	} else if requested == "auto" || requested == "free" {
 		requested = defaultAlias
+	}
+	capability := g.requestCapability(requested, defaultAlias)
+	if !endpointSupports(defaultAlias, capability) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("model capability %q is not compatible with this OpenAI endpoint", capability))
+		return
 	}
 	candidates, fallback := g.candidates(requested, needsTools)
 	if len(candidates) == 0 {
@@ -177,7 +194,7 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 		started := time.Now()
 		resp, err := g.forward(r, model, payload, endpoint, "application/json")
 		if err != nil {
-			g.tracker.Failure(model.ID, time.Since(started), 0, err.Error(), 0)
+			g.tracker.Failure(model.ID, capability, time.Since(started), 0, err.Error(), 0)
 			slog.Warn("provider request failed", "provider", model.Provider, "model", model.UpstreamID, "error", err)
 			if index+1 < len(candidates) {
 				continue
@@ -186,13 +203,13 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 			return
 		}
 		if retryable(resp.StatusCode, fallback) && index+1 < len(candidates) {
-			g.tracker.Failure(model.ID, time.Since(started), resp.StatusCode, resp.Status, parseRetryAfter(resp.Header.Get("Retry-After")))
+			g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, resp.Status, parseRetryAfter(resp.Header.Get("Retry-After")))
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
 			slog.Info("free provider unavailable; trying next", "provider", model.Provider, "model", model.UpstreamID, "status", resp.StatusCode)
 			continue
 		}
-		g.recordResponse(model.ID, time.Since(started), resp)
+		g.recordResponse(model.ID, capability, time.Since(started), resp)
 		copyResponse(w, resp, model)
 		return
 	}
@@ -218,6 +235,11 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 	if requested == "" || requested == "auto" || requested == "free" {
 		requested = defaultAlias
 	}
+	capability := g.requestCapability(requested, defaultAlias)
+	if !endpointSupports(defaultAlias, capability) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("model capability %q is not compatible with this OpenAI endpoint", capability))
+		return
+	}
 	candidates, fallback := g.candidates(requested, false)
 	if len(candidates) == 0 {
 		if fallback {
@@ -236,7 +258,7 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 		started := time.Now()
 		resp, err := g.forward(r, model, payload, endpoint, contentType)
 		if err != nil {
-			g.tracker.Failure(model.ID, time.Since(started), 0, err.Error(), 0)
+			g.tracker.Failure(model.ID, capability, time.Since(started), 0, err.Error(), 0)
 			if index+1 < len(candidates) {
 				continue
 			}
@@ -244,12 +266,12 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 			return
 		}
 		if retryable(resp.StatusCode, fallback) && index+1 < len(candidates) {
-			g.tracker.Failure(model.ID, time.Since(started), resp.StatusCode, resp.Status, parseRetryAfter(resp.Header.Get("Retry-After")))
+			g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, resp.Status, parseRetryAfter(resp.Header.Get("Retry-After")))
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
 			continue
 		}
-		g.recordResponse(model.ID, time.Since(started), resp)
+		g.recordResponse(model.ID, capability, time.Since(started), resp)
 		copyResponse(w, resp, model)
 		return
 	}
@@ -341,7 +363,7 @@ func (g *Gateway) candidates(requested string, needsTools bool) ([]catalog.Model
 					}
 					priority = append(priority, model)
 				}
-				result := g.strictlyAvailable(priority)
+				result := g.strictlyAvailable(priority, effectiveRoute.Capability)
 				if route.Strategy == routing.StrategyRoundRobin {
 					result = rotateCandidates(result, g.nextForRoute(requested))
 				}
@@ -368,6 +390,27 @@ func (g *Gateway) candidates(requested string, needsTools bool) ([]catalog.Model
 func (g *Gateway) nextForRoute(alias string) uint64 {
 	counter, _ := g.routeNext.LoadOrStore(alias, &atomic.Uint64{})
 	return counter.(*atomic.Uint64).Add(1) - 1
+}
+
+func (g *Gateway) requestCapability(requested, fallback string) string {
+	if g.config.Routes != nil {
+		if route, ok := g.config.Routes.Route(requested); ok {
+			return route.Capability
+		}
+	} else if route, ok := routing.DefaultConfig().Routes[requested]; ok {
+		return route.Capability
+	}
+	return fallback
+}
+
+func endpointSupports(endpointCapability, requestedCapability string) bool {
+	if endpointCapability == catalog.FunctionChat {
+		switch requestedCapability {
+		case catalog.FunctionChat, catalog.FunctionChatTools, catalog.FunctionImageUnderstanding, catalog.FunctionVideoUnderstanding, catalog.FunctionAudioUnderstanding:
+			return true
+		}
+	}
+	return endpointCapability == requestedCapability
 }
 
 func rotateCandidates(models []catalog.Model, offset uint64) []catalog.Model {
@@ -416,7 +459,7 @@ func (g *Gateway) dynamicCandidates(route routing.Route, needsTools bool) []cata
 		result = append(result, *preferred)
 	}
 	if len(providerIDs) == 0 || len(result) == g.config.MaxAttempts {
-		return g.limitCandidates(g.availableCandidates(result))
+		return g.limitCandidates(g.availableCandidates(result, route.Capability))
 	}
 	seed := int(g.next.Add(1) - 1)
 	for round := 0; ; round++ {
@@ -434,13 +477,13 @@ func (g *Gateway) dynamicCandidates(route routing.Route, needsTools bool) []cata
 			break
 		}
 	}
-	return g.limitCandidates(g.availableCandidates(result))
+	return g.limitCandidates(g.availableCandidates(result, route.Capability))
 }
 
-func (g *Gateway) strictlyAvailable(models []catalog.Model) []catalog.Model {
+func (g *Gateway) strictlyAvailable(models []catalog.Model, capability string) []catalog.Model {
 	result := make([]catalog.Model, 0, len(models))
 	for _, model := range models {
-		if g.tracker.Available(model.ID) {
+		if g.tracker.Available(model.ID, capability) {
 			result = append(result, model)
 		}
 	}
@@ -460,7 +503,7 @@ func (g *Gateway) pickRemaining(route routing.Route, excluded map[string]bool, h
 				continue
 			}
 		}
-		if !routing.Accepts(route, model) || (healthyOnly && !g.tracker.Available(model.ID)) {
+		if !routing.Accepts(route, model) || (healthyOnly && !g.tracker.Available(model.ID, route.Capability)) {
 			continue
 		}
 		models = append(models, model)
@@ -472,10 +515,10 @@ func (g *Gateway) pickRemaining(route routing.Route, excluded map[string]bool, h
 	return models[index], true
 }
 
-func (g *Gateway) availableCandidates(models []catalog.Model) []catalog.Model {
+func (g *Gateway) availableCandidates(models []catalog.Model, capability string) []catalog.Model {
 	available := make([]catalog.Model, 0, len(models))
 	for _, model := range models {
-		if g.tracker.Available(model.ID) {
+		if g.tracker.Available(model.ID, capability) {
 			available = append(available, model)
 		}
 	}
@@ -489,12 +532,12 @@ func (g *Gateway) limitCandidates(models []catalog.Model) []catalog.Model {
 	return models
 }
 
-func (g *Gateway) recordResponse(model string, latency time.Duration, resp *http.Response) {
+func (g *Gateway) recordResponse(model, capability string, latency time.Duration, resp *http.Response) {
 	if resp.StatusCode >= 400 {
-		g.tracker.Failure(model, latency, resp.StatusCode, resp.Status, parseRetryAfter(resp.Header.Get("Retry-After")))
+		g.tracker.Failure(model, capability, latency, resp.StatusCode, resp.Status, parseRetryAfter(resp.Header.Get("Retry-After")))
 		return
 	}
-	g.tracker.Success(model, latency, resp.StatusCode)
+	g.tracker.Success(model, capability, latency, resp.StatusCode)
 }
 
 func parseRetryAfter(value string) time.Duration {

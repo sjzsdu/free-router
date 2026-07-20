@@ -186,14 +186,15 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) resetHealth(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Model string `json:"model"`
+		Model      string `json:"model"`
+		Capability string `json:"capability"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&input); err != nil || strings.TrimSpace(input.Model) == "" {
 		writeError(w, http.StatusBadRequest, "model is required")
 		return
 	}
-	h.health.Reset(input.Model)
-	writeJSON(w, http.StatusOK, map[string]any{"reset": true, "model": input.Model})
+	h.health.Reset(input.Model, input.Capability)
+	writeJSON(w, http.StatusOK, map[string]any{"reset": true, "model": input.Model, "capability": input.Capability})
 }
 
 func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request, escapedID string) {
