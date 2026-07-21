@@ -84,7 +84,9 @@ chmod +x free-router
 ~/.local/bin/free-router daemon status
 ```
 
-程序会自行复制到 `~/.local/bin/free-router`，因此安装完成后可以删除下载目录中的原文件。整个过程无需 `sudo`。macOS 使用 LaunchAgent，Linux 使用 systemd user service；登录后自动启动，异常退出后自动恢复。安装 daemon 时，程序会把当前已命中的 Provider 环境变量保存到 `~/.free-router/daemon-env.json`（权限 `0600`），确保后台进程也能读取；环境变量变更后重新执行 `free-router daemon install` 即可更新快照并重启。
+程序会自行复制到 `~/.local/bin/free-router`，因此安装完成后可以删除下载目录中的原文件。整个过程无需 `sudo`。macOS 使用两个 LaunchAgent：一个运行路由服务，另一个显示原生顶部菜单栏图标；Linux 使用 systemd user service。它们会在登录后自动启动，服务异常退出后自动恢复。安装 daemon 时，程序会把当前已命中的 Provider 环境变量保存到 `~/.free-router/daemon-env.json`（权限 `0600`），确保后台进程也能读取；环境变量变更后重新执行 `free-router daemon install` 即可更新快照并重启。
+
+macOS 菜单栏会持续显示服务状态，并提供“Open Console”“Restart Service”和“Quit Menu Bar”。退出菜单栏不会停止路由服务；重新执行 `free-router daemon start` 或 `free-router daemon install` 可再次显示。
 
 从源码安装时也可以使用 `make daemon-install`。
 

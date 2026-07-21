@@ -75,23 +75,29 @@ jobs:
   build:
     needs: [prepare, test]
     if: needs.prepare.outputs.needed == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - goos: linux
             goarch: amd64
+            runner: ubuntu-latest
           - goos: linux
             goarch: arm64
+            runner: ubuntu-latest
           - goos: darwin
             goarch: amd64
+            runner: macos-14
           - goos: darwin
             goarch: arm64
+            runner: macos-14
           - goos: windows
             goarch: amd64
+            runner: ubuntu-latest
           - goos: windows
             goarch: arm64
+            runner: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -108,7 +114,13 @@ jobs:
           mkdir -p build dist
           binary="free-router"
           if [[ "$GOOS" == "windows" ]]; then binary="free-router.exe"; fi
-          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "build/$binary" .
+          if [[ "$GOOS" == "darwin" ]]; then
+            export CGO_ENABLED=1
+            export CC="clang -arch $([[ "$GOARCH" == "arm64" ]] && echo arm64 || echo x86_64)"
+          else
+            export CGO_ENABLED=0
+          fi
+          go build -trimpath -ldflags="-s -w" -o "build/$binary" .
           archive="free-router_${VERSION}_${GOOS}_${GOARCH}"
           if [[ "$GOOS" == "windows" ]]; then
             (cd build && zip -9 "../dist/${archive}.zip" "$binary")

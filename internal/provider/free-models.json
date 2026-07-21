@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-21T06:22:05Z",
+  "generated_at": "2026-07-21T11:56:55Z",
   "providers": {
     "baichuan": {
       "billing_warning": "新用户赠送金有效期有限，余额耗尽后接口按平台价格计费。",
@@ -218,7 +218,319 @@
     },
     "nvidia": {
       "free_basis": "Build API access is provided with rate-limited evaluation credits.",
-      "policy": "all-listed",
+      "models": [
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "abacusai/dracarys-llama-3.1-70b-instruct",
+          "owned_by": "abacusai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "deepseek-ai/deepseek-v4-pro",
+          "owned_by": "deepseek-ai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "google/diffusiongemma-26b-a4b-it",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "google/gemma-2-2b-it",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "google/gemma-3n-e2b-it",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "google/gemma-3n-e4b-it",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "meta/llama-3.1-70b-instruct",
+          "owned_by": "meta",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "meta/llama-3.1-8b-instruct",
+          "owned_by": "meta",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "meta/llama-3.2-11b-vision-instruct",
+          "owned_by": "meta",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "meta/llama-3.2-3b-instruct",
+          "owned_by": "meta",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "mistralai/mistral-nemotron",
+          "owned_by": "mistralai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "mistralai/mistral-small-4-119b-2603",
+          "owned_by": "mistralai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "mistralai/mixtral-8x7b-instruct-v0.1",
+          "owned_by": "mistralai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/gliner-pii",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/ising-calibration-1-35b-a3b",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "embedding"
+          ],
+          "id": "nvidia/nemotron-3-embed-1b",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "embedding",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/nemotron-3-nano-30b-a3b",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/nemotron-3-super-120b-a12b",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/nemotron-mini-4b-instruct",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "embedding"
+          ],
+          "id": "nvidia/nv-embed-v1",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "embedding",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/nvidia-nemotron-nano-9b-v2",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/riva-translate-4b-instruct-v1.1",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "openai/gpt-oss-20b",
+          "owned_by": "openai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "poolside/laguna-xs-2.1",
+          "owned_by": "poolside",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "sarvamai/sarvam-m",
+          "owned_by": "sarvamai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "stepfun-ai/step-3.5-flash",
+          "owned_by": "stepfun-ai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "stepfun-ai/step-3.7-flash",
+          "owned_by": "stepfun-ai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "upstage/solar-10.7b-instruct",
+          "owned_by": "upstage",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T11:56:55Z"
+        }
+      ],
+      "policy": "inventory",
       "source_urls": [
         "https://build.nvidia.com/"
       ]

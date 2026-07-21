@@ -389,7 +389,23 @@ function ProviderCard({ provider, modelCount, saved, refresh, toast }: { provide
   const [visible, setVisible] = useState(false)
   const [busy, setBusy] = useState('')
   const [probe, setProbe] = useState<{ status: 'healthy' | 'error'; models?: number; latency?: number; message?: string } | null>(null)
-  const run = async (action: string, task: () => Promise<unknown>, success: string) => { setBusy(action); try { await task(); setProbe(null); toast({ message: success }); refresh(); setKey('') } catch (error) { toast({ message: (error as Error).message, error: true }) } finally { setBusy('') } }
+  const [credentialResult, setCredentialResult] = useState<{ ok: boolean; message: string } | null>(null)
+  const run = async (action: string, task: () => Promise<unknown>, success: string) => {
+    setBusy(action)
+    setCredentialResult(null)
+    try {
+      await task()
+      setProbe(null)
+      setCredentialResult({ ok: true, message: success })
+      toast({ message: success })
+      refresh()
+      setKey('')
+    } catch (error) {
+      const message = (error as Error).message
+      setCredentialResult({ ok: false, message })
+      toast({ message, error: true })
+    } finally { setBusy('') }
+  }
   const login = async () => { setBusy('oauth'); try { const result = await api.startOpenRouterOAuth(); window.location.assign(result.authorization_url) } catch (error) { toast({ message: (error as Error).message, error: true }); setBusy('') } }
   const testConnection = async () => {
     setBusy('test')
@@ -408,8 +424,9 @@ function ProviderCard({ provider, modelCount, saved, refresh, toast }: { provide
   const source = provider.matched_env || (provider.source === 'saved' ? '安全存储' : '—')
   const placeholder = provider.envs?.length ? provider.envs.join(' / ') : 'API Key'
   const state = !provider.configured ? 'inactive' : probe?.status === 'error' ? 'error' : probe?.status === 'healthy' ? (Number(probe.models) > 0 ? 'available' : 'pending') : modelCount > 0 ? 'available' : 'pending'
-  const stateTitle = state === 'available' ? '服务可用' : state === 'pending' ? '等待 Formula 准入' : state === 'error' ? '连接异常' : '尚未接入'
-  const stateDetail = probe?.status === 'healthy' ? `${probe.models} 个官方目录模型 · ${probe.latency}ms` : probe?.status === 'error' ? '最近一次连接测试失败' : state === 'available' ? 'Formula 模型已缓存，可参与路由' : state === 'pending' ? '凭据已配置，尚无 Formula 准入模型' : '配置凭据后等待 Formula 核验'
+  const admittedByFormula = provider.discovery_policy === 'inventory'
+  const stateTitle = state === 'available' ? '服务可用' : state === 'pending' ? (admittedByFormula ? '等待缓存同步' : '未通过 Formula 准入') : state === 'error' ? '连接异常' : '尚未接入'
+  const stateDetail = probe?.status === 'healthy' ? `${probe.models} 个官方目录模型 · ${probe.latency}ms` : probe?.status === 'error' ? '最近一次连接测试失败' : state === 'available' ? 'Formula 模型已缓存，可参与路由' : state === 'pending' ? (admittedByFormula ? '清单已有 inventory，等待本地缓存加载' : '凭据有效，但当前清单没有通过真实调用验证的模型') : '配置凭据后等待 Formula 核验'
   return <article className={cx('provider-card', state)}>
     <div className="provider-card-head"><div className="provider-logo">{provider.id.slice(0, 2).toUpperCase()}</div><div><h3>{provider.id}</h3><p>{provider.tier}</p></div><StatusBadge status={provider.configured ? 'configured' : 'missing'} /></div>
     <div className={cx('provider-runtime', state)}><div className="provider-runtime-icon">{state === 'available' ? <Check size={17} /> : state === 'error' ? <AlertTriangle size={17} /> : state === 'pending' ? <RefreshCw size={17} /> : <Unplug size={17} />}</div><div><span>运行状态</span><strong>{stateTitle}</strong><small title={probe?.message}>{stateDetail}</small></div><div className="provider-model-count"><strong>{modelCount}</strong><span>缓存模型</span></div></div>
@@ -419,6 +436,7 @@ function ProviderCard({ provider, modelCount, saved, refresh, toast }: { provide
     {missingRequired.length > 0 && <div className="provider-warning"><AlertTriangle size={14} />还需要 {missingRequired.join(', ')}</div>}
     {provider.billing_warning && <div className="provider-warning"><AlertTriangle size={14} />{provider.billing_warning}</div>}
     <div className="credential-input"><input type={visible ? 'text' : 'password'} value={key} onChange={event => setKey(event.target.value)} placeholder={provider.configured ? '输入新 Key 可替换当前凭据' : `粘贴 ${placeholder}`} autoComplete="new-password" /><button onClick={() => setVisible(value => !value)} aria-label={visible ? '隐藏密钥' : '显示密钥'}>{visible ? <EyeOff size={16} /> : <Eye size={16} />}</button></div>
+    {credentialResult && <div className={cx('credential-result', credentialResult.ok ? 'success' : 'error')} role="status">{credentialResult.ok ? <Check size={13} /> : <AlertTriangle size={13} />}<span>{credentialResult.message}</span></div>}
     <div className="provider-actions">{provider.oauth && <button className="button small" disabled={Boolean(busy)} onClick={login}><LogIn size={14} />{busy === 'oauth' ? '跳转中…' : provider.configured ? '重新登录' : 'OAuth 登录'}</button>}<button className={cx('button small', provider.oauth && 'secondary')} disabled={!key || Boolean(busy)} onClick={() => run('save', () => api.saveCredential(provider.id, key), `${provider.id} 凭据已保存并热加载`)}>{busy === 'save' ? '保存中…' : provider.configured ? '更新 Key' : '保存凭据'}</button>{provider.configured && <button className="button secondary small" disabled={Boolean(busy)} onClick={testConnection}>{busy === 'test' ? '测试中…' : '测试连接'}</button>}{provider.register_url && <a className="button secondary small provider-register" href={provider.register_url} target="_blank" rel="noreferrer">获取 Key<ExternalLink size={14} /></a>}{saved && <IconButton label="删除保存的凭据" disabled={Boolean(busy)} onClick={() => run('delete', () => api.deleteCredential(provider.id), `${provider.id} 凭据已删除`)}><Trash2 size={15} /></IconButton>}</div>
   </article>
 }

@@ -21,6 +21,7 @@ import (
 
 const (
 	launchdLabel = "io.github.sjzsdu.free-router"
+	trayLabel    = "io.github.sjzsdu.free-router.tray"
 	systemdUnit  = "free-router.service"
 )
 
@@ -96,7 +97,13 @@ func (m *Manager) Start(ctx context.Context) error {
 				return err
 			}
 		}
-		return m.run(ctx, "launchctl", "kickstart", "-k", m.launchdTarget())
+		if err := m.run(ctx, "launchctl", "kickstart", "-k", m.launchdTarget()); err != nil {
+			return err
+		}
+		if fileExists(m.trayLaunchdPath()) {
+			_ = m.run(ctx, "launchctl", "kickstart", m.trayLaunchdTarget())
+		}
+		return nil
 	case "linux":
 		return m.run(ctx, "systemctl", "--user", "start", systemdUnit)
 	default:
@@ -136,10 +143,15 @@ func (m *Manager) Restart(ctx context.Context) error {
 func (m *Manager) Uninstall(ctx context.Context) error {
 	switch m.goos {
 	case "darwin":
+		_ = m.run(ctx, "launchctl", "bootout", m.trayLaunchdTarget())
+		_ = m.run(ctx, "launchctl", "disable", m.trayLaunchdTarget())
 		_ = m.run(ctx, "launchctl", "bootout", m.launchdTarget())
 		_ = m.run(ctx, "launchctl", "disable", m.launchdTarget())
 		if err := os.Remove(m.launchdPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove LaunchAgent: %w", err)
+		}
+		if err := os.Remove(m.trayLaunchdPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove menu bar LaunchAgent: %w", err)
 		}
 		_ = os.Remove(m.daemonEnvPath())
 		return nil
@@ -235,7 +247,23 @@ func (m *Manager) installLaunchd(ctx context.Context) error {
 	if err := m.run(ctx, "launchctl", "bootstrap", m.launchdDomain(), m.launchdPath()); err != nil {
 		return err
 	}
-	return m.run(ctx, "launchctl", "kickstart", "-k", m.launchdTarget())
+	if err := m.run(ctx, "launchctl", "kickstart", "-k", m.launchdTarget()); err != nil {
+		return err
+	}
+	return m.installTrayLaunchd(ctx)
+}
+
+func (m *Manager) installTrayLaunchd(ctx context.Context) error {
+	content := launchdTrayPlist(m.executable, m.trayLogPath(), m.daemonEnvPath())
+	if err := os.WriteFile(m.trayLaunchdPath(), []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write menu bar LaunchAgent: %w", err)
+	}
+	_ = m.run(ctx, "launchctl", "bootout", m.trayLaunchdTarget())
+	_ = m.run(ctx, "launchctl", "enable", m.trayLaunchdTarget())
+	if err := m.run(ctx, "launchctl", "bootstrap", m.launchdDomain(), m.trayLaunchdPath()); err != nil {
+		return err
+	}
+	return m.run(ctx, "launchctl", "kickstart", "-k", m.trayLaunchdTarget())
 }
 
 func (m *Manager) installSystemd(ctx context.Context) error {
@@ -336,11 +364,20 @@ func (m *Manager) output(ctx context.Context, name string, args ...string) (stri
 func (m *Manager) launchdPath() string {
 	return filepath.Join(m.home, "Library", "LaunchAgents", launchdLabel+".plist")
 }
+func (m *Manager) trayLaunchdPath() string {
+	return filepath.Join(m.home, "Library", "LaunchAgents", trayLabel+".plist")
+}
 func (m *Manager) logPath() string {
 	return filepath.Join(appdirs.ForHome(m.home), "free-router.log")
 }
+func (m *Manager) trayLogPath() string {
+	return filepath.Join(appdirs.ForHome(m.home), "free-router-tray.log")
+}
 func (m *Manager) launchdDomain() string { return "gui/" + m.uid }
 func (m *Manager) launchdTarget() string { return m.launchdDomain() + "/" + launchdLabel }
+func (m *Manager) trayLaunchdTarget() string {
+	return m.launchdDomain() + "/" + trayLabel
+}
 func (m *Manager) systemdPath() string {
 	return filepath.Join(m.home, ".config", "systemd", "user", systemdUnit)
 }
@@ -392,6 +429,33 @@ func launchdPlist(executable, logPath, envPath string) string {
 </dict>
 </plist>
 `, launchdLabel, escape(executable), escape(envPath), escape(logPath), escape(logPath))
+}
+
+func launchdTrayPlist(executable, logPath, envPath string) string {
+	escape := func(value string) string {
+		var output strings.Builder
+		_ = xml.EscapeText(&output, []byte(value))
+		return output.String()
+	}
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>%s</string>
+  <key>ProgramArguments</key><array><string>%s</string><string>tray</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>EnvironmentVariables</key><dict>
+    <key>FREE_ROUTER_SERVICE_MANAGER</key><string>launchd</string>
+    <key>FREE_ROUTER_DAEMON_ENV_FILE</key><string>%s</string>
+  </dict>
+  <key>StandardOutPath</key><string>%s</string>
+  <key>StandardErrorPath</key><string>%s</string>
+</dict>
+</plist>
+`, trayLabel, escape(executable), escape(envPath), escape(logPath), escape(logPath))
 }
 
 func systemdService(executable, envPath string) string {

@@ -16,6 +16,15 @@ func TestLaunchdPlistEscapesPathsAndSetsManager(t *testing.T) {
 	}
 }
 
+func TestLaunchdTrayPlistRunsInteractiveMenuBar(t *testing.T) {
+	content := launchdTrayPlist("/tmp/free & router", "/tmp/tray <log>.txt", "/tmp/daemon & env.json")
+	for _, expected := range []string{"io.github.sjzsdu.free-router.tray", "<string>tray</string>", "Interactive", "Aqua", "SuccessfulExit", "/tmp/free &amp; router", "/tmp/tray &lt;log&gt;.txt"} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("tray plist does not contain %q: %s", expected, content)
+		}
+	}
+}
+
 func TestSystemdServiceQuotesExecutable(t *testing.T) {
 	content := systemdService(`/opt/free router/free-router`, `/home/test user/daemon-env.json`)
 	if !strings.Contains(content, `ExecStart="/opt/free router/free-router" serve`) {
@@ -63,6 +72,9 @@ func TestProjectFilesUseUnifiedDataDirectory(t *testing.T) {
 		}
 		if got, want := manager.logPath(), filepath.Join(home, ".free-router", "free-router.log"); got != want {
 			t.Fatalf("%s log path = %s, want %s", goos, got, want)
+		}
+		if got, want := manager.trayLogPath(), filepath.Join(home, ".free-router", "free-router-tray.log"); got != want {
+			t.Fatalf("%s tray log path = %s, want %s", goos, got, want)
 		}
 	}
 }

@@ -63,6 +63,7 @@ func Execute() error {
 	bindFlags(root, &opts)
 	addAuthCommands(root, &opts)
 	addDaemonCommands(root, &opts)
+	addTrayCommand(root, &opts)
 	addOnboardCommand(root, &opts)
 	addDiscoveryCommand(root, &opts)
 

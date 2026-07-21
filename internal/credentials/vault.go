@@ -1,6 +1,7 @@
 package credentials
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,9 +12,12 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 const keychainService = "free-router"
+
+const keychainCommandTimeout = 8 * time.Second
 
 type record struct {
 	Backend string `json:"backend"`
@@ -191,16 +195,30 @@ func keychainSet(provider, secret string) error {
 	}
 	// Leaving -w as the final argument makes security read the password instead
 	// of exposing it in the process argument list.
-	command := exec.Command("/usr/bin/security", "add-generic-password", "-U", "-a", provider, "-s", keychainService, "-w")
-	command.Stdin = strings.NewReader(secret + "\n")
-	return command.Run()
+	_, err := runCredentialCommand("/usr/bin/security", []string{"add-generic-password", "-U", "-a", provider, "-s", keychainService, "-w"}, secret+"\n", keychainCommandTimeout)
+	return err
 }
 
 func keychainGet(provider string) (string, error) {
-	output, err := exec.Command("/usr/bin/security", "find-generic-password", "-a", provider, "-s", keychainService, "-w").Output()
+	output, err := runCredentialCommand("/usr/bin/security", []string{"find-generic-password", "-a", provider, "-s", keychainService, "-w"}, "", keychainCommandTimeout)
 	return strings.TrimSpace(string(output)), err
 }
 
 func keychainDelete(provider string) error {
-	return exec.Command("/usr/bin/security", "delete-generic-password", "-a", provider, "-s", keychainService).Run()
+	_, err := runCredentialCommand("/usr/bin/security", []string{"delete-generic-password", "-a", provider, "-s", keychainService}, "", keychainCommandTimeout)
+	return err
+}
+
+func runCredentialCommand(path string, args []string, stdin string, timeout time.Duration) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, path, args...)
+	if stdin != "" {
+		command.Stdin = strings.NewReader(stdin)
+	}
+	output, err := command.Output()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return nil, fmt.Errorf("credential store command timed out after %s", timeout)
+	}
+	return output, err
 }
