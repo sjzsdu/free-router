@@ -31,9 +31,7 @@ func TestAdminUpdatesRouteConfiguration(t *testing.T) {
 	defer upstream.Close()
 	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","api_key":"key"}]`)
 	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
-	if err := models.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	discoverModelsForTest(t, models)
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
 	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
 	handler := New(routes, models, vault, health.New(), Config{}, nil)
@@ -99,7 +97,7 @@ func TestAdminServesEmbeddedReactApp(t *testing.T) {
 	}
 }
 
-func TestCredentialSaveHotReloadsProviderAndCatalog(t *testing.T) {
+func TestCredentialSaveEnablesProviderWithoutDiscoveringModels(t *testing.T) {
 	for _, key := range provider.SupportedKeyEnvs() {
 		t.Setenv(key, "")
 	}
@@ -126,16 +124,12 @@ func TestCredentialSaveHotReloadsProviderAndCatalog(t *testing.T) {
 	if _, ok := registry.Get("test"); !ok {
 		t.Fatal("provider was not enabled immediately")
 	}
-	deadline := time.Now().Add(time.Second)
-	for len(models.Models()) != 1 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if len(models.Models()) != 1 {
-		t.Fatalf("models=%d", len(models.Models()))
+	if len(models.Models()) != 0 {
+		t.Fatalf("credential save bypassed Formula inventory: models=%d", len(models.Models()))
 	}
 }
 
-func TestCredentialSaveDoesNotWaitForProviderNetwork(t *testing.T) {
+func TestCredentialSaveDoesNotContactProviderCatalog(t *testing.T) {
 	for _, key := range provider.SupportedKeyEnvs() {
 		t.Setenv(key, "")
 	}
@@ -163,17 +157,13 @@ func TestCredentialSaveDoesNotWaitForProviderNetwork(t *testing.T) {
 	}
 	select {
 	case <-started:
-	case <-time.After(time.Second):
 		close(release)
-		t.Fatal("background provider refresh did not start")
+		t.Fatal("credential save contacted the Provider model catalog")
+	case <-time.After(100 * time.Millisecond):
 	}
 	close(release)
-	deadline := time.Now().Add(time.Second)
-	for len(models.Models()) == 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if len(models.Models()) != 1 {
-		t.Fatal("background provider refresh did not finish")
+	if len(models.Models()) != 0 {
+		t.Fatal("models were discovered outside the Formula")
 	}
 }
 
@@ -326,9 +316,7 @@ func TestModelHealthProbeUses24HourCacheAndSupportsForce(t *testing.T) {
 	defer upstream.Close()
 	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","no_auth":true}]`)
 	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
-	if err := models.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	discoverModelsForTest(t, models)
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
 	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
 	tracker := health.New()
@@ -384,9 +372,7 @@ func TestExpensiveModelProbeRequiresConfirmation(t *testing.T) {
 	defer upstream.Close()
 	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","no_auth":true}]`)
 	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
-	if err := models.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	discoverModelsForTest(t, models)
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
 	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
 	tracker := health.New()
@@ -439,9 +425,7 @@ func TestAutomaticHealthProbeIncludesImageAndVideo(t *testing.T) {
 	defer upstream.Close()
 	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","no_auth":true}]`)
 	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
-	if err := models.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	discoverModelsForTest(t, models)
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
 	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
 	tracker := health.New()
@@ -458,5 +442,46 @@ func TestAutomaticHealthProbeIncludesImageAndVideo(t *testing.T) {
 	status = handler.probes.Snapshot()
 	if status.Status != "completed" || status.Healthy != 2 || imageCalls.Load() != 1 || videoCalls.Load() != 1 {
 		t.Fatalf("status=%#v image_calls=%d video_calls=%d health=%#v", status, imageCalls.Load(), videoCalls.Load(), tracker.Snapshot())
+	}
+}
+
+func TestFailedHealthProbeRemovesModelFromCache(t *testing.T) {
+	for _, key := range provider.SupportedKeyEnvs() {
+		t.Setenv(key, "")
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"broken"}]}`))
+		case "/chat/completions":
+			http.Error(w, "broken", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","no_auth":true}]`)
+	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	discoverModelsForTest(t, models)
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	handler := New(routes, models, credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json")), health.New(), Config{}, nil)
+	status, started := handler.probes.Start(handler, true)
+	if !started || status.Total != 1 {
+		t.Fatalf("started=%t status=%#v", started, status)
+	}
+	deadline := time.Now().Add(time.Second)
+	for handler.probes.Snapshot().Status == "running" && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(models.Models()) != 0 || handler.probes.Snapshot().Failed != 1 {
+		t.Fatalf("failed model remained: models=%#v probe=%#v", models.Models(), handler.probes.Snapshot())
+	}
+}
+
+func discoverModelsForTest(t *testing.T, store *catalog.Store) {
+	t.Helper()
+	models, failures := store.DiscoverFromProviders(context.Background())
+	if len(failures) > 0 || len(models) == 0 {
+		t.Fatalf("models=%d failures=%#v", len(models), failures)
 	}
 }

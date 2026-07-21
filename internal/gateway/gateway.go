@@ -195,12 +195,17 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 		resp, err := g.forward(r, model, payload, endpoint, "application/json")
 		if err != nil {
 			g.tracker.Failure(model.ID, capability, time.Since(started), 0, err.Error(), 0)
+			g.evictFailedModel(model.ID, err.Error())
 			slog.Warn("provider request failed", "provider", model.Provider, "model", model.UpstreamID, "error", err)
 			if index+1 < len(candidates) {
 				continue
 			}
 			writeError(w, http.StatusBadGateway, "all configured free providers failed")
 			return
+		}
+		failed := resp.StatusCode >= http.StatusBadRequest
+		if failed {
+			g.evictFailedModel(model.ID, resp.Status)
 		}
 		if retryable(resp.StatusCode, fallback) && index+1 < len(candidates) {
 			g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, resp.Status, parseRetryAfter(resp.Header.Get("Retry-After")))
@@ -259,11 +264,16 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 		resp, err := g.forward(r, model, payload, endpoint, contentType)
 		if err != nil {
 			g.tracker.Failure(model.ID, capability, time.Since(started), 0, err.Error(), 0)
+			g.evictFailedModel(model.ID, err.Error())
 			if index+1 < len(candidates) {
 				continue
 			}
 			writeError(w, http.StatusBadGateway, "all configured free providers failed")
 			return
+		}
+		failed := resp.StatusCode >= http.StatusBadRequest
+		if failed {
+			g.evictFailedModel(model.ID, resp.Status)
 		}
 		if retryable(resp.StatusCode, fallback) && index+1 < len(candidates) {
 			g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, resp.Status, parseRetryAfter(resp.Header.Get("Retry-After")))
@@ -538,6 +548,14 @@ func (g *Gateway) recordResponse(model, capability string, latency time.Duration
 		return
 	}
 	g.tracker.Success(model, capability, latency, resp.StatusCode)
+}
+
+func (g *Gateway) evictFailedModel(modelID, reason string) {
+	if err := g.catalog.RemoveModel(modelID); err != nil {
+		slog.Warn("could not remove failed model from cache", "model", modelID, "reason", reason, "error", err)
+		return
+	}
+	slog.Info("failed model removed from routable cache", "model", modelID, "reason", reason)
 }
 
 func parseRetryAfter(value string) time.Duration {

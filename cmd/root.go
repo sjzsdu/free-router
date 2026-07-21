@@ -64,6 +64,7 @@ func Execute() error {
 	addAuthCommands(root, &opts)
 	addDaemonCommands(root, &opts)
 	addOnboardCommand(root, &opts)
+	addDiscoveryCommand(root, &opts)
 
 	serve := &cobra.Command{
 		Use:   "serve",
@@ -76,7 +77,7 @@ func Execute() error {
 
 	root.AddCommand(&cobra.Command{
 		Use:   "models",
-		Short: "Fetch and print models from every configured free provider",
+		Short: "Print models admitted by the Formula inventory",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			registry, err := newRegistry(opts)
 			if err != nil {

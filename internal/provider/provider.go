@@ -1,10 +1,12 @@
 package provider
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -102,7 +104,16 @@ func loadFreeModelManifest(path string) (FreeModelManifest, error) {
 		}
 	}
 	var manifest FreeModelManifest
-	if err := json.Unmarshal(content, &manifest); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(content))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&manifest); err != nil {
+		return FreeModelManifest{}, fmt.Errorf("decode free model manifest: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			err = errors.New("multiple JSON values")
+		}
 		return FreeModelManifest{}, fmt.Errorf("decode free model manifest: %w", err)
 	}
 	if err := ValidateFreeModelManifest(manifest); err != nil {

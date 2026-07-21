@@ -1,118 +1,819 @@
 {
-  "schema_version": 1,
-  "generated_at": "2026-07-20T00:00:00Z",
+  "generated_at": "2026-07-21T06:22:05Z",
   "providers": {
-    "openrouter": {
-      "policy": "zero-price",
-      "free_basis": "Both prompt and completion prices reported by the provider are zero.",
-      "source_urls": ["https://openrouter.ai/api/v1/models"]
-    },
-    "groq": {
-      "policy": "all-listed",
-      "free_basis": "Models available to an account on the provider Free Plan are subject to free-plan rate limits.",
-      "source_urls": ["https://console.groq.com/docs/rate-limits"]
-    },
-    "cerebras": {
-      "policy": "all-listed",
-      "free_basis": "Models exposed to a configured free-tier account are limited by that tier.",
-      "source_urls": ["https://inference-docs.cerebras.ai/support/rate-limits"]
-    },
-    "gemini": {
-      "policy": "all-listed",
-      "free_basis": "Models exposed to a configured Google AI Studio free-tier key are subject to free-tier limits.",
-      "source_urls": ["https://ai.google.dev/gemini-api/docs/rate-limits"]
-    },
-    "github-models": {
-      "policy": "all-listed",
-      "free_basis": "GitHub Models provides rate-limited model experimentation at no cost.",
-      "source_urls": ["https://docs.github.com/en/github-models/prototyping-with-ai-models"]
-    },
-    "pollinations": {
-      "policy": "all-listed",
-      "free_basis": "Models exposed to the account consume the provider's free Pollen allocation.",
-      "source_urls": ["https://enter.pollinations.ai/"]
-    },
-    "huggingface": {
-      "policy": "all-listed",
-      "free_basis": "Inference Providers requests consume the account's monthly free credits.",
-      "source_urls": ["https://huggingface.co/docs/inference-providers/pricing"]
-    },
-    "nvidia": {
-      "policy": "all-listed",
-      "free_basis": "Build API access is provided with rate-limited evaluation credits.",
-      "source_urls": ["https://build.nvidia.com/"]
-    },
-    "mistral": {
-      "policy": "all-listed",
-      "free_basis": "Models exposed to an Experiment Plan account are subject to experiment-plan limits.",
-      "source_urls": ["https://docs.mistral.ai/deployment/ai-studio/tier/"]
-    },
-    "sambanova": {
-      "policy": "all-listed",
-      "free_basis": "Models exposed to a configured Free Tier account are subject to provider limits.",
-      "source_urls": ["https://cloud.sambanova.ai/"]
-    },
-    "ollama-cloud": {
-      "policy": "all-listed",
-      "free_basis": "Models exposed to a configured free-tier account are subject to its usage limits.",
-      "source_urls": ["https://ollama.com/cloud"]
-    },
-    "modelscope": {
-      "policy": "all-listed",
-      "free_basis": "Models exposed to the inference account consume its free inference quota.",
-      "source_urls": ["https://modelscope.cn/docs/model-service/API-Inference/intro"]
-    },
-    "xiaomi-mimo": {
-      "policy": "all-listed",
-      "free_basis": "Models consume account gift credits; this is a limited credit rather than permanent zero pricing.",
-      "billing_warning": "赠送额度用完后停止使用或按账户计费设置执行，请先确认余额。",
-      "source_urls": ["https://platform.xiaomimimo.com/"]
-    },
-    "dashscope": {
-      "policy": "all-listed",
-      "free_basis": "Models consume new-user or model-specific free quota and may become billable after exhaustion.",
-      "billing_warning": "新人额度通常仅 30～90 天；请在百炼控制台开启免费额度用完即停。",
-      "source_urls": ["https://help.aliyun.com/zh/model-studio/getting-started/models"]
-    },
-    "volcengine-ark": {
-      "policy": "all-listed",
-      "free_basis": "Models consume model-specific trial quota and may become billable after exhaustion.",
-      "billing_warning": "免费额度按模型限量发放，耗尽后可能转为计费。",
-      "source_urls": ["https://www.volcengine.com/docs/82379/1099320"]
-    },
     "baichuan": {
-      "policy": "all-listed",
-      "free_basis": "Models consume time-limited new-account gift credits.",
       "billing_warning": "新用户赠送金有效期有限，余额耗尽后接口按平台价格计费。",
-      "source_urls": ["https://platform.baichuan-ai.com/"]
+      "free_basis": "Models consume time-limited new-account gift credits.",
+      "policy": "all-listed",
+      "source_urls": [
+        "https://platform.baichuan-ai.com/"
+      ]
     },
     "bigmodel": {
-      "policy": "allowlist",
+      "allowed_model_patterns": [
+        "*flash*"
+      ],
       "free_basis": "The provider documents Flash variants as free models.",
-      "source_urls": ["https://open.bigmodel.cn/"],
-      "allowed_model_patterns": ["*flash*"]
-    },
-    "qianfan": {
       "policy": "allowlist",
-      "free_basis": "Long-term free models documented by the provider.",
-      "source_urls": ["https://cloud.baidu.com/doc/WENXINWORKSHOP/s/Fm2vrveyu"],
-      "allowed_models": ["ernie-speed-8k", "ernie-speed-128k", "ernie-lite-8k", "ernie-tiny-8k"]
+      "source_urls": [
+        "https://open.bigmodel.cn/"
+      ]
     },
-    "siliconflow": {
-      "policy": "allowlist",
-      "free_basis": "Models marked free by the provider catalog.",
-      "source_urls": ["https://cloud.siliconflow.cn/models"],
-      "allowed_models": ["Qwen/Qwen3.5-4B", "PaddlePaddle/PaddleOCR-VL-1.5", "Qwen/Qwen3-8B", "Qwen/Qwen2.5-7B-Instruct", "THUDM/GLM-4-9B-0414", "THUDM/GLM-Z1-9B-0414", "deepseek-ai/DeepSeek-OCR", "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B", "tencent/Hunyuan-MT-7B"]
-    },
-    "zai": {
+    "cerebras": {
+      "free_basis": "Models exposed to a configured free-tier account are limited by that tier.",
       "policy": "all-listed",
-      "free_basis": "Models exposed to the configured free-model account are subject to provider limits.",
-      "source_urls": ["https://z.ai/model-api"]
+      "source_urls": [
+        "https://inference-docs.cerebras.ai/support/rate-limits"
+      ]
     },
     "cloudflare": {
-      "policy": "all-listed",
       "free_basis": "Workers AI includes a daily free allocation measured in Neurons.",
-      "source_urls": ["https://developers.cloudflare.com/workers-ai/platform/pricing/"]
+      "policy": "all-listed",
+      "source_urls": [
+        "https://developers.cloudflare.com/workers-ai/platform/pricing/"
+      ]
+    },
+    "dashscope": {
+      "billing_warning": "新人额度通常仅 30～90 天；请在百炼控制台开启免费额度用完即停。",
+      "free_basis": "Models consume new-user or model-specific free quota and may become billable after exhaustion.",
+      "policy": "all-listed",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/getting-started/models"
+      ]
+    },
+    "gemini": {
+      "free_basis": "Access via Google AI Studio free-tier key subject to free-tier limits; not a permanent free model.",
+      "models": [
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "models/gemini-2.5-flash",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "models/gemini-3-flash-preview",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "models/gemini-3.1-flash-lite",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "models/gemini-3.1-flash-lite-preview",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "models/gemini-3.5-flash",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "functions": [
+            "embedding"
+          ],
+          "id": "models/gemini-embedding-001",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "embedding",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "functions": [
+            "embedding"
+          ],
+          "id": "models/gemini-embedding-2",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "embedding",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "functions": [
+            "embedding"
+          ],
+          "id": "models/gemini-embedding-2-preview",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "embedding",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "models/gemini-flash-latest",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "models/gemini-flash-lite-latest",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "models/gemini-robotics-er-1.6-preview",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "models/gemma-4-26b-a4b-it",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "models/gemma-4-31b-it",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        }
+      ],
+      "policy": "inventory",
+      "source_urls": [
+        "https://ai.google.dev/gemini-api/docs/rate-limits",
+        "https://aistudio.google.com/apikey"
+      ]
+    },
+    "github-models": {
+      "free_basis": "GitHub Models provides rate-limited model experimentation at no cost.",
+      "policy": "all-listed",
+      "source_urls": [
+        "https://docs.github.com/en/github-models/prototyping-with-ai-models"
+      ]
+    },
+    "groq": {
+      "free_basis": "Models available to an account on the provider Free Plan are subject to free-plan rate limits.",
+      "policy": "all-listed",
+      "source_urls": [
+        "https://console.groq.com/docs/rate-limits"
+      ]
+    },
+    "huggingface": {
+      "free_basis": "Inference Providers requests consume the account's monthly free credits.",
+      "policy": "all-listed",
+      "source_urls": [
+        "https://huggingface.co/docs/inference-providers/pricing"
+      ]
+    },
+    "mistral": {
+      "free_basis": "Models exposed to an Experiment Plan account are subject to experiment-plan limits.",
+      "policy": "all-listed",
+      "source_urls": [
+        "https://docs.mistral.ai/deployment/ai-studio/tier/"
+      ]
+    },
+    "modelscope": {
+      "free_basis": "Models exposed to the inference account consume its free inference quota.",
+      "policy": "all-listed",
+      "source_urls": [
+        "https://modelscope.cn/docs/model-service/API-Inference/intro"
+      ]
+    },
+    "nvidia": {
+      "free_basis": "Build API access is provided with rate-limited evaluation credits.",
+      "policy": "all-listed",
+      "source_urls": [
+        "https://build.nvidia.com/"
+      ]
+    },
+    "ollama-cloud": {
+      "free_basis": "Models exposed to a configured free-tier account are subject to its usage limits.",
+      "policy": "all-listed",
+      "source_urls": [
+        "https://ollama.com/cloud"
+      ]
+    },
+    "openrouter": {
+      "free_basis": "Both prompt and completion prices reported by the provider are zero.",
+      "models": [
+        {
+          "context_length": 256000,
+          "description": "North Mini Code is Cohere's first agentic coding model and the debut of its North family. A sparse mixture-of-experts model with 30B total parameters and 3B active, it is optimized...",
+          "functions": [
+            "chat",
+            "chat-tools"
+          ],
+          "id": "cohere/north-mini-code:free",
+          "input_modalities": [
+            "text"
+          ],
+          "max_output_tokens": 64000,
+          "name": "Cohere: North Mini Code (free)",
+          "output_modalities": [
+            "text"
+          ],
+          "pricing": {
+            "completion": "0",
+            "prompt": "0"
+          },
+          "supported_parameters": [
+            "frequency_penalty",
+            "include_reasoning",
+            "max_tokens",
+            "presence_penalty",
+            "reasoning",
+            "seed",
+            "stop",
+            "temperature",
+            "tool_choice",
+            "tools",
+            "top_k",
+            "top_p"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "context_length": 262144,
+          "description": "Gemma 4 26B A4B IT is an instruction-tuned Mixture-of-Experts (MoE) model from Google DeepMind. Despite 25.2B total parameters, only 3.8B activate per token during inference — delivering near-31B quality at...",
+          "functions": [
+            "chat",
+            "image-understanding",
+            "video-understanding"
+          ],
+          "id": "google/gemma-4-26b-a4b-it:free",
+          "input_modalities": [
+            "image",
+            "text",
+            "video"
+          ],
+          "max_output_tokens": 32768,
+          "name": "Google: Gemma 4 26B A4B  (free)",
+          "output_modalities": [
+            "text"
+          ],
+          "pricing": {
+            "completion": "0",
+            "prompt": "0"
+          },
+          "supported_parameters": [
+            "frequency_penalty",
+            "include_reasoning",
+            "logprobs",
+            "max_tokens",
+            "presence_penalty",
+            "reasoning",
+            "repetition_penalty",
+            "response_format",
+            "seed",
+            "stop",
+            "structured_outputs",
+            "temperature",
+            "tool_choice",
+            "tools",
+            "top_k",
+            "top_logprobs",
+            "top_p"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "context_length": 256000,
+          "description": "NVIDIA Nemotron 3 Nano 30B A3B is a small language MoE model with highest compute efficiency and accuracy for developers to build specialized agentic AI systems. The model is fully...",
+          "functions": [
+            "chat",
+            "chat-tools"
+          ],
+          "id": "nvidia/nemotron-3-nano-30b-a3b:free",
+          "input_modalities": [
+            "text"
+          ],
+          "name": "NVIDIA: Nemotron 3 Nano 30B A3B (free)",
+          "output_modalities": [
+            "text"
+          ],
+          "pricing": {
+            "completion": "0",
+            "prompt": "0"
+          },
+          "supported_parameters": [
+            "include_reasoning",
+            "max_tokens",
+            "reasoning",
+            "seed",
+            "temperature",
+            "tool_choice",
+            "tools",
+            "top_p"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "context_length": 256000,
+          "description": "NVIDIA Nemotron™ 3 Nano Omni is a 30B-A3B open multimodal model designed to function as a perception and context sub-agent in enterprise agent systems. It accepts text, image, video, and...",
+          "functions": [
+            "chat",
+            "chat-tools",
+            "image-understanding",
+            "video-understanding",
+            "audio-understanding"
+          ],
+          "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+          "input_modalities": [
+            "text",
+            "audio",
+            "image",
+            "video"
+          ],
+          "max_output_tokens": 65536,
+          "name": "NVIDIA: Nemotron 3 Nano Omni (free)",
+          "output_modalities": [
+            "text"
+          ],
+          "pricing": {
+            "completion": "0",
+            "prompt": "0"
+          },
+          "supported_parameters": [
+            "include_reasoning",
+            "max_tokens",
+            "reasoning",
+            "seed",
+            "temperature",
+            "tool_choice",
+            "tools",
+            "top_p"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "context_length": 1000000,
+          "description": "NVIDIA Nemotron 3 Super is a 120B-parameter open hybrid MoE model, activating just 12B parameters for maximum compute efficiency and accuracy in complex multi-agent applications. Built on a hybrid Mamba-Transformer...",
+          "functions": [
+            "chat",
+            "chat-tools"
+          ],
+          "id": "nvidia/nemotron-3-super-120b-a12b:free",
+          "input_modalities": [
+            "text"
+          ],
+          "max_output_tokens": 262144,
+          "name": "NVIDIA: Nemotron 3 Super (free)",
+          "output_modalities": [
+            "text"
+          ],
+          "pricing": {
+            "completion": "0",
+            "prompt": "0"
+          },
+          "supported_parameters": [
+            "include_reasoning",
+            "max_tokens",
+            "reasoning",
+            "reasoning_effort",
+            "response_format",
+            "seed",
+            "structured_outputs",
+            "temperature",
+            "tool_choice",
+            "tools",
+            "top_p"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "context_length": 1000000,
+          "description": "NVIDIA Nemotron 3 Ultra is an open frontier-reasoning and orchestration model from NVIDIA, with 55B active parameters out of 550B total (MoE). Built on a hybrid Transformer-Mamba mixture-of-experts architecture, it...",
+          "functions": [
+            "chat",
+            "chat-tools"
+          ],
+          "id": "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "input_modalities": [
+            "text"
+          ],
+          "max_output_tokens": 65536,
+          "name": "NVIDIA: Nemotron 3 Ultra (free)",
+          "output_modalities": [
+            "text"
+          ],
+          "pricing": {
+            "completion": "0",
+            "prompt": "0"
+          },
+          "supported_parameters": [
+            "include_reasoning",
+            "max_tokens",
+            "reasoning",
+            "reasoning_effort",
+            "seed",
+            "temperature",
+            "tool_choice",
+            "tools",
+            "top_p"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "context_length": 128000,
+          "description": "NVIDIA Nemotron 3.5 Content Safety is a compact 4B-parameter multimodal guardrail model from NVIDIA, fine-tuned from Google Gemma-3-4B. It moderates both inputs to and responses from LLMs and VLMs, accepting...",
+          "functions": [
+            "image-understanding"
+          ],
+          "id": "nvidia/nemotron-3.5-content-safety:free",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "max_output_tokens": 8192,
+          "name": "NVIDIA: Nemotron 3.5 Content Safety (free)",
+          "output_modalities": [
+            "text"
+          ],
+          "pricing": {
+            "completion": "0",
+            "prompt": "0"
+          },
+          "supported_parameters": [
+            "include_reasoning",
+            "max_tokens",
+            "reasoning",
+            "seed",
+            "temperature",
+            "top_p"
+          ],
+          "type": "moderation",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "context_length": 128000,
+          "description": "NVIDIA Nemotron Nano 2 VL is a 12-billion-parameter open multimodal reasoning model designed for video understanding and document intelligence. It introduces a hybrid Transformer-Mamba architecture, combining transformer-level accuracy with Mamba’s...",
+          "functions": [
+            "chat",
+            "chat-tools",
+            "image-understanding",
+            "video-understanding"
+          ],
+          "id": "nvidia/nemotron-nano-12b-v2-vl:free",
+          "input_modalities": [
+            "image",
+            "text",
+            "video"
+          ],
+          "max_output_tokens": 128000,
+          "name": "NVIDIA: Nemotron Nano 12B 2 VL (free)",
+          "output_modalities": [
+            "text"
+          ],
+          "pricing": {
+            "completion": "0",
+            "prompt": "0"
+          },
+          "supported_parameters": [
+            "include_reasoning",
+            "max_tokens",
+            "reasoning",
+            "seed",
+            "temperature",
+            "tool_choice",
+            "tools",
+            "top_p"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "context_length": 128000,
+          "description": "NVIDIA-Nemotron-Nano-9B-v2 is a large language model (LLM) trained from scratch by NVIDIA, and designed as a unified model for both reasoning and non-reasoning tasks. It responds to user queries and...",
+          "functions": [
+            "chat",
+            "chat-tools"
+          ],
+          "id": "nvidia/nemotron-nano-9b-v2:free",
+          "input_modalities": [
+            "text"
+          ],
+          "name": "NVIDIA: Nemotron Nano 9B V2 (free)",
+          "output_modalities": [
+            "text"
+          ],
+          "pricing": {
+            "completion": "0",
+            "prompt": "0"
+          },
+          "supported_parameters": [
+            "include_reasoning",
+            "max_tokens",
+            "reasoning",
+            "response_format",
+            "seed",
+            "structured_outputs",
+            "temperature",
+            "tool_choice",
+            "tools",
+            "top_p"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "context_length": 131072,
+          "description": "gpt-oss-20b is an open-weight 21B parameter model released by OpenAI under the Apache 2.0 license. It uses a Mixture-of-Experts (MoE) architecture with 3.6B active parameters per forward pass, optimized for...",
+          "functions": [
+            "chat",
+            "chat-tools"
+          ],
+          "id": "openai/gpt-oss-20b:free",
+          "input_modalities": [
+            "text"
+          ],
+          "max_output_tokens": 32768,
+          "name": "OpenAI: gpt-oss-20b (free)",
+          "output_modalities": [
+            "text"
+          ],
+          "pricing": {
+            "completion": "0",
+            "prompt": "0"
+          },
+          "supported_parameters": [
+            "frequency_penalty",
+            "include_reasoning",
+            "logprobs",
+            "max_tokens",
+            "presence_penalty",
+            "reasoning",
+            "reasoning_effort",
+            "repetition_penalty",
+            "response_format",
+            "seed",
+            "stop",
+            "structured_outputs",
+            "temperature",
+            "tool_choice",
+            "tools",
+            "top_k",
+            "top_logprobs",
+            "top_p"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "context_length": 200000,
+          "description": "The simplest way to get free inference. openrouter/free is a router that selects free models at random from the models available on OpenRouter. The router smartly filters for models that...",
+          "functions": [
+            "chat",
+            "chat-tools",
+            "image-understanding"
+          ],
+          "id": "openrouter/free",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "name": "Free Models Router",
+          "output_modalities": [
+            "text"
+          ],
+          "pricing": {
+            "completion": "0",
+            "prompt": "0"
+          },
+          "supported_parameters": [
+            "frequency_penalty",
+            "include_reasoning",
+            "logprobs",
+            "max_tokens",
+            "presence_penalty",
+            "reasoning",
+            "reasoning_effort",
+            "repetition_penalty",
+            "response_format",
+            "seed",
+            "stop",
+            "structured_outputs",
+            "temperature",
+            "tool_choice",
+            "tools",
+            "top_k",
+            "top_logprobs",
+            "top_p"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "context_length": 262144,
+          "description": "Laguna M.1 is the flagship coding agent model from [Poolside](https://poolside.ai/), optimized for complex software engineering tasks. Designed for agentic coding workflows, it supports tool calling and reasoning, with a 256K...",
+          "functions": [
+            "chat"
+          ],
+          "id": "poolside/laguna-m.1:free",
+          "input_modalities": [
+            "text"
+          ],
+          "max_output_tokens": 32768,
+          "name": "Poolside: Laguna M.1 (free)",
+          "output_modalities": [
+            "text"
+          ],
+          "pricing": {
+            "completion": "0",
+            "prompt": "0"
+          },
+          "supported_parameters": [
+            "include_reasoning",
+            "max_tokens",
+            "reasoning",
+            "temperature",
+            "tool_choice",
+            "tools"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        }
+      ],
+      "policy": "inventory",
+      "source_urls": [
+        "https://openrouter.ai/api/v1/models"
+      ]
+    },
+    "pollinations": {
+      "free_basis": "Models exposed to the account consume the provider's free Pollen allocation.",
+      "policy": "all-listed",
+      "source_urls": [
+        "https://enter.pollinations.ai/"
+      ]
+    },
+    "qianfan": {
+      "allowed_models": [
+        "ernie-speed-8k",
+        "ernie-speed-128k",
+        "ernie-lite-8k",
+        "ernie-tiny-8k"
+      ],
+      "free_basis": "Long-term free models documented by the provider.",
+      "policy": "allowlist",
+      "source_urls": [
+        "https://cloud.baidu.com/doc/WENXINWORKSHOP/s/Fm2vrveyu"
+      ]
+    },
+    "sambanova": {
+      "free_basis": "Models exposed to a configured Free Tier account are subject to provider limits.",
+      "policy": "all-listed",
+      "source_urls": [
+        "https://cloud.sambanova.ai/"
+      ]
+    },
+    "siliconflow": {
+      "allowed_models": [
+        "Qwen/Qwen3.5-4B",
+        "PaddlePaddle/PaddleOCR-VL-1.5",
+        "Qwen/Qwen3-8B",
+        "Qwen/Qwen2.5-7B-Instruct",
+        "THUDM/GLM-4-9B-0414",
+        "THUDM/GLM-Z1-9B-0414",
+        "deepseek-ai/DeepSeek-OCR",
+        "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        "tencent/Hunyuan-MT-7B"
+      ],
+      "free_basis": "Models marked free by the provider catalog.",
+      "models": [
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen2.5-7B-Instruct",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3-8B",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "THUDM/GLM-4-9B-0414",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "THUDM/GLM-Z1-9B-0414",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "deepseek-ai/DeepSeek-OCR",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "tencent/Hunyuan-MT-7B",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-21T06:22:05Z"
+        }
+      ],
+      "policy": "inventory",
+      "source_urls": [
+        "https://cloud.siliconflow.cn/models"
+      ]
+    },
+    "volcengine-ark": {
+      "billing_warning": "免费额度按模型限量发放，耗尽后可能转为计费。",
+      "free_basis": "Models consume model-specific trial quota and may become billable after exhaustion.",
+      "policy": "all-listed",
+      "source_urls": [
+        "https://www.volcengine.com/docs/82379/1099320"
+      ]
+    },
+    "xiaomi-mimo": {
+      "billing_warning": "赠送额度用完后停止使用或按账户计费设置执行，请先确认余额。",
+      "free_basis": "Models consume account gift credits; this is a limited credit rather than permanent zero pricing.",
+      "policy": "all-listed",
+      "source_urls": [
+        "https://platform.xiaomimimo.com/"
+      ]
+    },
+    "zai": {
+      "free_basis": "Models exposed to the configured free-model account are subject to provider limits.",
+      "policy": "all-listed",
+      "source_urls": [
+        "https://z.ai/model-api"
+      ]
     }
-  }
+  },
+  "schema_version": 1
 }

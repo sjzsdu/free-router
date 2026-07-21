@@ -15,7 +15,7 @@ import (
 	"github.com/sjzsdu/free-router/internal/provider"
 )
 
-func TestRefreshKeepsOnlyZeroPricedModels(t *testing.T) {
+func TestFormulaDiscoveryKeepsOnlyZeroPricedModels(t *testing.T) {
 	clearBuiltinKeys(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"data":[
@@ -31,9 +31,7 @@ func TestRefreshKeepsOnlyZeroPricedModels(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := New(registry, filepath.Join(t.TempDir(), "models.json"), server.Client())
-	if err := store.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	discoverForTest(t, store)
 	models := store.Models()
 	if len(models) != 2 || models[0].ID != "test/free/a" || models[1].ID != "test/free/b" {
 		t.Fatalf("unexpected models: %#v", models)
@@ -59,7 +57,7 @@ func TestDiscoveredModelsConvertWithoutProviderCatalogRequest(t *testing.T) {
 	}
 }
 
-func TestLoadCacheUsesSameEligibilityRulesAsFetch(t *testing.T) {
+func TestLegacyCacheIsRejected(t *testing.T) {
 	clearBuiltinKeys(t)
 	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"https://example.invalid/v1","no_auth":true,"filter":"zero-price"}]`)
 	if err != nil {
@@ -74,12 +72,8 @@ func TestLoadCacheUsesSameEligibilityRulesAsFetch(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := New(registry, cache, http.DefaultClient)
-	if err := store.loadCache(); err != nil {
-		t.Fatal(err)
-	}
-	models := store.Models()
-	if len(models) != 1 || models[0].UpstreamID != "free" {
-		t.Fatalf("cache eligibility diverged from fetch: %#v", models)
+	if err := store.loadCache(); err == nil {
+		t.Fatal("legacy provider-discovered cache was accepted")
 	}
 }
 
@@ -101,6 +95,48 @@ func TestUnverifiedInventoryPrunesCachedProviderModels(t *testing.T) {
 	}
 	if len(store.Models()) != 0 {
 		t.Fatalf("unverified provider remained in cache: %#v", store.Models())
+	}
+}
+
+func TestFailedModelStaysRemovedUntilFormulaManifestChanges(t *testing.T) {
+	clearBuiltinKeys(t)
+	t.Setenv("GROQ_API_KEY", "test")
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "free-models.json")
+	cachePath := filepath.Join(dir, "models.json")
+	writeManifest := func(generatedAt string) {
+		t.Helper()
+		content := `{"schema_version":1,"generated_at":"` + generatedAt + `","providers":{"groq":{"policy":"inventory","source_urls":["https://example.com/models"],"models":[{"id":"verified-chat","functions":["chat"]}]}}}`
+		if err := os.WriteFile(manifestPath, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	newStore := func() *Store {
+		t.Helper()
+		registry, err := provider.NewRegistryWithManifest("", provider.DefaultEnvMap(), manifestPath, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return New(registry, cachePath, http.DefaultClient)
+	}
+
+	writeManifest("2026-07-21T00:00:00Z")
+	store := newStore()
+	if err := store.Bootstrap(context.Background()); err != nil || len(store.Models()) != 1 {
+		t.Fatalf("bootstrap err=%v models=%#v", err, store.Models())
+	}
+	if err := store.RemoveModel("groq/verified-chat"); err != nil {
+		t.Fatal(err)
+	}
+	store = newStore()
+	if err := store.Bootstrap(context.Background()); err != nil || len(store.Models()) != 0 {
+		t.Fatalf("failed model returned in same manifest: err=%v models=%#v", err, store.Models())
+	}
+
+	writeManifest("2026-07-22T00:00:00Z")
+	store = newStore()
+	if err := store.Bootstrap(context.Background()); err != nil || len(store.Models()) != 1 {
+		t.Fatalf("new Formula manifest did not reintroduce model: err=%v models=%#v", err, store.Models())
 	}
 }
 
@@ -135,9 +171,7 @@ func TestMultimodalUnderstandingProbeUsesOpenAIContentParts(t *testing.T) {
 	defer server.Close()
 	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + server.URL + `","no_auth":true}]`)
 	store := New(registry, filepath.Join(t.TempDir(), "models.json"), server.Client())
-	if err := store.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	discoverForTest(t, store)
 	if _, err := store.ProbeModel(context.Background(), "test/vision-model", FunctionImageUnderstanding); err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +204,7 @@ func TestProbeIncludesSafeUpstreamErrorDetail(t *testing.T) {
 	}
 }
 
-func TestRefreshProviderOnlyContactsRequestedProvider(t *testing.T) {
+func TestRefreshProviderNeverContactsUpstream(t *testing.T) {
 	clearBuiltinKeys(t)
 	requestedCalls := 0
 	requested := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -190,7 +224,7 @@ func TestRefreshProviderOnlyContactsRequestedProvider(t *testing.T) {
 	if err := store.RefreshProvider(context.Background(), "requested"); err != nil {
 		t.Fatal(err)
 	}
-	if requestedCalls != 1 || otherCalls != 0 || len(store.Models()) != 1 {
+	if requestedCalls != 0 || otherCalls != 0 || len(store.Models()) != 0 {
 		t.Fatalf("requested_calls=%d other_calls=%d models=%d", requestedCalls, otherCalls, len(store.Models()))
 	}
 }
@@ -225,9 +259,7 @@ func TestAudioProbeUsesEmbeddedWAVMultipart(t *testing.T) {
 	defer server.Close()
 	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + server.URL + `","no_auth":true}]`)
 	store := New(registry, filepath.Join(t.TempDir(), "models.json"), server.Client())
-	if err := store.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	discoverForTest(t, store)
 	if _, err := store.ProbeModel(context.Background(), "test/whisper-test", FunctionSpeechToText); err != nil {
 		t.Fatal(err)
 	}
@@ -260,9 +292,7 @@ func TestImageEditProbeUsesEmbeddedPNGMultipart(t *testing.T) {
 	defer server.Close()
 	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + server.URL + `","no_auth":true}]`)
 	store := New(registry, filepath.Join(t.TempDir(), "models.json"), server.Client())
-	if err := store.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	discoverForTest(t, store)
 	if _, err := store.ProbeModel(context.Background(), "test/image-edit-test", FunctionImageGeneration); err != nil {
 		t.Fatal(err)
 	}
@@ -291,9 +321,7 @@ func TestImageToVideoProbeIncludesEmbeddedPNG(t *testing.T) {
 	defer server.Close()
 	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + server.URL + `","no_auth":true}]`)
 	store := New(registry, filepath.Join(t.TempDir(), "models.json"), server.Client())
-	if err := store.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	discoverForTest(t, store)
 	if _, err := store.ProbeModel(context.Background(), "test/tiny-i2v", FunctionVideoGeneration); err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +344,7 @@ func TestClassifyModelIDs(t *testing.T) {
 	}
 }
 
-func TestRefreshSupportsCloudflareStyleCatalog(t *testing.T) {
+func TestFormulaDiscoverySupportsCloudflareStyleCatalog(t *testing.T) {
 	clearBuiltinKeys(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"result":[{"id":"internal-uuid","name":"@cf/openai/gpt-oss-20b"}]}`))
@@ -328,9 +356,7 @@ func TestRefreshSupportsCloudflareStyleCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := New(registry, filepath.Join(t.TempDir(), "models.json"), server.Client())
-	if err := store.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	discoverForTest(t, store)
 	models := store.Models()
 	if len(models) != 1 || models[0].UpstreamID != "@cf/openai/gpt-oss-20b" {
 		t.Fatalf("unexpected models: %#v", models)
@@ -341,5 +367,13 @@ func clearBuiltinKeys(t *testing.T) {
 	t.Helper()
 	for _, key := range provider.SupportedKeyEnvs() {
 		t.Setenv(key, "")
+	}
+}
+
+func discoverForTest(t *testing.T, store *Store) {
+	t.Helper()
+	models, failures := store.DiscoverFromProviders(context.Background())
+	if len(failures) > 0 || len(models) == 0 {
+		t.Fatalf("models=%d failures=%#v", len(models), failures)
 	}
 }

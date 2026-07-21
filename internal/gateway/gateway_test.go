@@ -48,9 +48,7 @@ func TestAutoRetriesNextFreeModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
-	if err := store.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	discoverModelsForTest(t, store)
 	handler := New(store, registry, Config{MaxAttempts: 2}, upstream.Client())
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"auto","messages":[]}`))
 	recorder := httptest.NewRecorder()
@@ -61,6 +59,9 @@ func TestAutoRetriesNextFreeModel(t *testing.T) {
 	}
 	if chatCalls.Load() != 2 {
 		t.Fatalf("expected 2 calls, got %d", chatCalls.Load())
+	}
+	if models := store.Models(); len(models) != 1 || models[0].UpstreamID != "free/b" {
+		t.Fatalf("failed model was not removed from cache: %#v", models)
 	}
 
 	modelsRequest := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
@@ -89,9 +90,7 @@ func TestModelsEndpointHidesFailedModels(t *testing.T) {
 	defer upstream.Close()
 	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","no_auth":true}]`)
 	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
-	if err := store.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	discoverModelsForTest(t, store)
 	tracker := health.New()
 	tracker.Failure("test/failed", catalog.FunctionChat, 0, http.StatusBadGateway, "broken", 0)
 	handler := New(store, registry, Config{Health: tracker}, upstream.Client())
@@ -127,9 +126,7 @@ func TestModelsEndpointOmitsCapabilityWithoutHealthyCandidates(t *testing.T) {
 	defer upstream.Close()
 	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","no_auth":true}]`)
 	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
-	if err := store.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	discoverModelsForTest(t, store)
 	tracker := health.New()
 	tracker.Failure("test/only-chat", catalog.FunctionChat, 0, http.StatusBadGateway, "broken", 0)
 	handler := New(store, registry, Config{Health: tracker}, upstream.Client())
@@ -163,9 +160,7 @@ func TestCapabilityFailureDoesNotDisableAnotherFunctionOnSameModel(t *testing.T)
 	defer upstream.Close()
 	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","no_auth":true}]`)
 	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
-	if err := store.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	discoverModelsForTest(t, store)
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
 	tracker := health.New()
 	tracker.Failure("test/multimodal", catalog.FunctionImageUnderstanding, 0, http.StatusBadRequest, "image failed", 0)
@@ -218,9 +213,7 @@ func TestNamedRouteFallsBackToRemainingModelAfterPriorityArray(t *testing.T) {
 	defer upstream.Close()
 	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","api_key":"test"}]`)
 	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
-	if err := store.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	discoverModelsForTest(t, store)
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
 	config := routes.Config()
 	route := config.Routes["chat"]
@@ -262,9 +255,7 @@ func TestNamedRouteUsesConfiguredFallbackOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
-	if err := store.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	discoverModelsForTest(t, store)
 	routes, err := routing.New(filepath.Join(t.TempDir(), "config.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -311,9 +302,7 @@ func TestNamedRouteRoundRobinBalancesHealthyModels(t *testing.T) {
 	defer upstream.Close()
 	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","api_key":"test"}]`)
 	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
-	if err := store.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	discoverModelsForTest(t, store)
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
 	config := routes.Config()
 	route := config.Routes["chat"]
@@ -353,9 +342,7 @@ func TestEmbeddingAliasUsesCachedEmbeddingModel(t *testing.T) {
 	defer upstream.Close()
 	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","api_key":"test"}]`)
 	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
-	if err := store.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	discoverModelsForTest(t, store)
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
 	handler := New(store, registry, Config{MaxAttempts: 2, Routes: routes}, upstream.Client())
 	recorder := httptest.NewRecorder()
@@ -410,9 +397,7 @@ func TestAutoFallsBackAcrossProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), first.Client())
-	if err := store.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	discoverModelsForTest(t, store)
 	handler := New(store, registry, Config{MaxAttempts: 2}, first.Client())
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"auto","messages":[]}`))
 	recorder := httptest.NewRecorder()
@@ -452,5 +437,13 @@ func clearBuiltinKeys(t *testing.T) {
 	t.Helper()
 	for _, key := range provider.SupportedKeyEnvs() {
 		t.Setenv(key, "")
+	}
+}
+
+func discoverModelsForTest(t *testing.T, store *catalog.Store) {
+	t.Helper()
+	models, failures := store.DiscoverFromProviders(context.Background())
+	if len(failures) > 0 || len(models) == 0 {
+		t.Fatalf("models=%d failures=%#v", len(models), failures)
 	}
 }

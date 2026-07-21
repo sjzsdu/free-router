@@ -74,6 +74,24 @@ func TestExternalManifestReplacesEmbeddedEligibilityData(t *testing.T) {
 	}
 }
 
+func TestManifestRejectsUnknownFieldsAndTrailingJSON(t *testing.T) {
+	for name, content := range map[string]string{
+		"unknown top-level field": `{"schema_version":1,"providers":{},"research-new-providers":{}}`,
+		"unknown model field":     `{"schema_version":1,"providers":{"groq":{"policy":"inventory","source_urls":["https://example.com"],"models":[{"id":"free","functions":["chat"],"invented":true}]}}}`,
+		"trailing JSON":           `{"schema_version":1,"providers":{}} {}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "free-models.json")
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadFreeModelManifest(path); err == nil {
+				t.Fatal("invalid manifest was accepted")
+			}
+		})
+	}
+}
+
 func TestApplyManifestDoesNotMutateInputAndNormalizesPolicies(t *testing.T) {
 	original := []Spec{
 		{ID: "openrouter", Filter: FilterZeroPrice, AllowedModels: []string{"old"}},
@@ -104,7 +122,7 @@ func TestBuiltinStatusIncludesManifestPolicy(t *testing.T) {
 	status := BuiltinStatusWithEnv(DefaultEnvMap())
 	for _, item := range status {
 		if item["id"] == "openrouter" {
-			if item["discovery_policy"] != "zero-price" || item["free_basis"] == "" || item["manifest_generated_at"] == "" {
+			if item["discovery_policy"] != "inventory" || item["free_basis"] == "" || item["manifest_generated_at"] == "" {
 				t.Fatalf("manifest status is incomplete: %#v", item)
 			}
 			return

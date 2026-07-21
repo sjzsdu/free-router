@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -96,6 +95,11 @@ type ModelProbeError struct {
 	Message string
 }
 
+type DiscoveryFailure struct {
+	Provider string `json:"provider"`
+	Error    string `json:"error"`
+}
+
 func (e *ModelProbeError) Error() string { return e.Message }
 
 type upstreamModel struct {
@@ -147,86 +151,42 @@ type Store struct {
 	updated   time.Time
 }
 
+type cacheFile struct {
+	SchemaVersion       int     `json:"schema_version"`
+	ManifestGeneratedAt string  `json:"manifest_generated_at"`
+	Models              []Model `json:"models"`
+}
+
 func New(registry *provider.Registry, cache string, client *http.Client) *Store {
 	return &Store{registry: registry, cache: cache, client: client}
 }
 
 func (s *Store) Bootstrap(ctx context.Context) error {
 	if err := s.loadCache(); err == nil {
-		go func() {
-			if err := s.Refresh(ctx); err != nil {
-				slog.Warn("background model catalog refresh failed", "error", err)
-			}
-		}()
 		return nil
 	}
 	return s.Refresh(ctx)
 }
 
-// Refresh keeps successful providers fresh while retaining the last good models for failed providers.
+// Refresh rebuilds the routable cache exclusively from Formula-produced inventories.
+// It never contacts provider model endpoints.
 func (s *Store) Refresh(ctx context.Context) error {
+	_ = ctx
 	s.refreshMu.Lock()
 	defer s.refreshMu.Unlock()
-
-	type result struct {
-		provider string
-		models   []Model
-		err      error
-	}
-	providers := s.registry.All()
-	if len(providers) == 0 {
-		s.set(nil, time.Now())
-		return s.saveCache(nil)
-	}
-	results := make(chan result, len(providers))
-	for _, spec := range providers {
-		go func() {
-			models, err := s.fetch(ctx, spec)
-			results <- result{provider: spec.ID, models: models, err: err}
-		}()
-	}
-
-	current := s.Models()
-	byProvider := make(map[string][]Model)
-	for _, model := range current {
-		if spec, enabled := s.registry.Get(model.Provider); enabled && cacheEligible(spec, model) {
-			byProvider[model.Provider] = append(byProvider[model.Provider], model)
-		}
-	}
-	successes := 0
-	authoritativeRemovals := 0
-	var refreshErrors []error
-	for range providers {
-		result := <-results
-		if result.err != nil {
-			if errors.Is(result.err, ErrUnverifiedInventory) {
-				delete(byProvider, result.provider)
-				authoritativeRemovals++
-			}
-			refreshErrors = append(refreshErrors, fmt.Errorf("%s: %w", result.provider, result.err))
-			slog.Warn("provider model refresh failed", "provider", result.provider, "error", result.err)
-			continue
-		}
-		successes++
-		byProvider[result.provider] = result.models
-	}
-	if successes == 0 && authoritativeRemovals == 0 && len(byProvider) == 0 {
-		return errors.Join(refreshErrors...)
-	}
-
 	merged := make([]Model, 0)
-	for _, models := range byProvider {
-		merged = append(merged, models...)
+	for _, spec := range s.registry.All() {
+		merged = append(merged, modelsFromDiscovery(spec)...)
 	}
 	sort.Slice(merged, func(i, j int) bool { return merged[i].ID < merged[j].ID })
 	s.set(merged, time.Now())
-	if err := s.saveCache(merged); err != nil {
-		slog.Warn("could not save model cache", "error", err)
-	}
-	return nil
+	return s.saveCache(merged)
 }
 
 func cacheEligible(spec provider.Spec, model Model) bool {
+	if len(spec.DiscoveredModels) == 0 {
+		return false
+	}
 	return modelEligible(spec, model.UpstreamID, model.Pricing.Prompt, model.Pricing.Completion)
 }
 
@@ -240,23 +200,16 @@ func modelEligible(spec provider.Spec, modelID, promptPrice, completionPrice str
 	return spec.Filter != provider.FilterZeroPrice || (isZero(promptPrice) && isZero(completionPrice))
 }
 
-// RefreshProvider updates one provider without waiting on or contacting the others.
+// RefreshProvider reapplies one Provider's Formula inventory without network discovery.
 func (s *Store) RefreshProvider(ctx context.Context, providerID string) error {
+	_ = ctx
 	s.refreshMu.Lock()
 	defer s.refreshMu.Unlock()
 	spec, ok := s.registry.Get(providerID)
 	if !ok {
 		return fmt.Errorf("provider %q is not configured", providerID)
 	}
-	models, err := s.fetch(ctx, spec)
-	if err != nil {
-		if errors.Is(err, ErrUnverifiedInventory) {
-			if pruneErr := s.removeProvider(providerID); pruneErr != nil {
-				return errors.Join(err, pruneErr)
-			}
-		}
-		return err
-	}
+	models := modelsFromDiscovery(spec)
 	merged := make([]Model, 0, len(s.Models())+len(models))
 	for _, model := range s.Models() {
 		if model.Provider != providerID {
@@ -270,17 +223,6 @@ func (s *Store) RefreshProvider(ctx context.Context, providerID string) error {
 		return fmt.Errorf("save model cache: %w", err)
 	}
 	return nil
-}
-
-func (s *Store) removeProvider(providerID string) error {
-	models := make([]Model, 0, len(s.Models()))
-	for _, model := range s.Models() {
-		if model.Provider != providerID {
-			models = append(models, model)
-		}
-	}
-	s.set(models, time.Now())
-	return s.saveCache(models)
 }
 
 // PruneDisabled removes cached models whose provider is no longer configured.
@@ -298,10 +240,9 @@ func (s *Store) PruneDisabled() error {
 	return s.saveCache(models)
 }
 
-func (s *Store) fetch(ctx context.Context, spec provider.Spec) ([]Model, error) {
-	if len(spec.DiscoveredModels) > 0 {
-		return modelsFromDiscovery(spec), nil
-	}
+// fetchUpstream is reserved for the maintainer discovery command used by the Formula.
+// Runtime catalog refreshes never call it.
+func (s *Store) fetchUpstream(ctx context.Context, spec provider.Spec) ([]Model, error) {
 	if spec.DiscoveryPolicy == "unverified" {
 		return nil, fmt.Errorf("%w; rerun the discovery formula", ErrUnverifiedInventory)
 	}
@@ -460,11 +401,43 @@ func (s *Store) Probe(ctx context.Context, providerID string) (int, error) {
 	if !ok {
 		return 0, fmt.Errorf("provider %q is not configured", providerID)
 	}
-	models, err := s.fetch(ctx, spec)
+	models, err := s.fetchUpstream(ctx, spec)
 	if err != nil {
 		return 0, err
 	}
 	return len(models), nil
+}
+
+// DiscoverFromProviders fetches fresh upstream catalogs for Formula maintenance.
+// It updates only this in-memory Store and never writes the runtime model cache.
+func (s *Store) DiscoverFromProviders(ctx context.Context) ([]Model, []DiscoveryFailure) {
+	type result struct {
+		provider string
+		models   []Model
+		err      error
+	}
+	providers := s.registry.All()
+	results := make(chan result, len(providers))
+	for _, spec := range providers {
+		go func(spec provider.Spec) {
+			models, err := s.fetchUpstream(ctx, spec)
+			results <- result{provider: spec.ID, models: models, err: err}
+		}(spec)
+	}
+	models := make([]Model, 0)
+	failures := make([]DiscoveryFailure, 0)
+	for range providers {
+		result := <-results
+		if result.err != nil {
+			failures = append(failures, DiscoveryFailure{Provider: result.provider, Error: result.err.Error()})
+			continue
+		}
+		models = append(models, result.models...)
+	}
+	sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
+	sort.Slice(failures, func(i, j int) bool { return failures[i].Provider < failures[j].Provider })
+	s.set(models, time.Now())
+	return models, failures
 }
 
 // ProbeModel sends the smallest useful inference request for one advertised function.
@@ -729,21 +702,42 @@ func (s *Store) set(models []Model, updated time.Time) {
 	s.mu.Unlock()
 }
 
+// RemoveModel permanently removes a failed model from the cache for the current
+// Formula manifest version. A newer manifest may introduce it again for retesting.
+func (s *Store) RemoveModel(modelID string) error {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	current := s.Models()
+	models := make([]Model, 0, len(current))
+	removed := false
+	for _, model := range current {
+		if model.ID == modelID {
+			removed = true
+			continue
+		}
+		models = append(models, model)
+	}
+	if !removed {
+		return nil
+	}
+	s.set(models, time.Now())
+	return s.saveCache(models)
+}
+
 func (s *Store) loadCache() error {
 	data, err := os.ReadFile(s.cache)
 	if err != nil {
 		return fmt.Errorf("read cache: %w", err)
 	}
-	var cached []Model
+	var cached cacheFile
 	if err := json.Unmarshal(data, &cached); err != nil {
 		return fmt.Errorf("decode cache: %w", err)
 	}
-	models := make([]Model, 0, len(cached))
-	for _, model := range cached {
-		if model.Provider == "" { // v0.1 cache migration.
-			model.Provider, model.UpstreamID = "openrouter", model.ID
-			model.ID = "openrouter/" + model.ID
-		}
+	if cached.SchemaVersion != 1 || cached.ManifestGeneratedAt != s.manifestGeneratedAt() {
+		return errors.New("cache was produced from a different Formula manifest")
+	}
+	models := make([]Model, 0, len(cached.Models))
+	for _, model := range cached.Models {
 		if spec, enabled := s.registry.Get(model.Provider); enabled && cacheEligible(spec, model) {
 			if model.Type == "" {
 				model.Type = classifyID(model.UpstreamID)
@@ -755,9 +749,6 @@ func (s *Store) loadCache() error {
 			}
 			models = append(models, model)
 		}
-	}
-	if len(models) == 0 {
-		return errors.New("cache has no models for configured providers")
 	}
 	updated := time.Now()
 	if info, err := os.Stat(s.cache); err == nil {
@@ -771,7 +762,7 @@ func (s *Store) saveCache(models []Model) error {
 	if err := os.MkdirAll(filepath.Dir(s.cache), 0o700); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(models, "", "  ")
+	data, err := json.MarshalIndent(cacheFile{SchemaVersion: 1, ManifestGeneratedAt: s.manifestGeneratedAt(), Models: models}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -780,6 +771,16 @@ func (s *Store) saveCache(models []Model) error {
 		return err
 	}
 	return os.Rename(tmp, s.cache)
+}
+
+func (s *Store) manifestGeneratedAt() string {
+	var generatedAt string
+	for _, spec := range s.registry.All() {
+		if spec.ManifestGeneratedAt > generatedAt {
+			generatedAt = spec.ManifestGeneratedAt
+		}
+	}
+	return generatedAt
 }
 
 func isZero(value string) bool {

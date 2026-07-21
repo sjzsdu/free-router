@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"sort"
 	"sync"
@@ -241,6 +242,9 @@ func (manager *probeManager) run(h *Handler, models []probeJob) {
 					status = probeError.Status
 				}
 				h.health.ProbeFailure(job.Model.ID, job.Capability, latency, status, err.Error())
+				if removeErr := h.catalog.RemoveModel(job.Model.ID); removeErr != nil {
+					slog.Warn("could not remove failed model from cache", "model", job.Model.ID, "error", removeErr)
+				}
 				manager.record(false)
 			}
 		}()

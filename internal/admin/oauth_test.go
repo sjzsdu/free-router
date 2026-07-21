@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/sjzsdu/free-router/internal/catalog"
 	"github.com/sjzsdu/free-router/internal/credentials"
@@ -107,12 +106,8 @@ func TestOpenRouterOAuthPKCEStoresKeyAndReloadsProvider(t *testing.T) {
 	if _, ok := registry.Get("openrouter"); !ok {
 		t.Fatal("provider was not enabled")
 	}
-	deadline := time.Now().Add(time.Second)
-	for len(models.Models()) != 1 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if len(models.Models()) != 1 {
-		t.Fatalf("models=%d", len(models.Models()))
+	if len(models.Models()) != 0 {
+		t.Fatalf("OAuth bypassed Formula inventory: models=%d", len(models.Models()))
 	}
 
 	replayRecorder := httptest.NewRecorder()
