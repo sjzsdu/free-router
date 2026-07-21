@@ -66,6 +66,11 @@ export interface ProviderStatus {
   tier: string
   free_kind?: 'credit' | 'trial' | string
   billing_warning?: string
+  free_basis?: string
+  source_urls?: string[]
+  discovery_policy?: 'inventory' | 'allowlist' | 'zero-price' | 'all-listed' | 'unverified' | string
+  manifest_generated_at?: string
+  manifest_error?: string
   register_url?: string
   oauth?: boolean
 }

@@ -1,10 +1,17 @@
 package cmd
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestValidateModelDataRejectsEmptyPath(t *testing.T) {
+	if err := validateModelData("  ", &bytes.Buffer{}); err == nil {
+		t.Fatal("empty model data path should be rejected")
+	}
+}
 
 func TestLoadDaemonEnvironment(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "daemon-env.json")

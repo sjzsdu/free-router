@@ -48,6 +48,8 @@ const (
 	FunctionModeration         = "moderation"
 )
 
+var ErrUnverifiedInventory = errors.New("free model inventory is unverified")
+
 type Model struct {
 	ID                  string       `json:"id"`
 	Provider            string       `json:"provider"`
@@ -187,15 +189,20 @@ func (s *Store) Refresh(ctx context.Context) error {
 	current := s.Models()
 	byProvider := make(map[string][]Model)
 	for _, model := range current {
-		if _, enabled := s.registry.Get(model.Provider); enabled {
+		if spec, enabled := s.registry.Get(model.Provider); enabled && cacheEligible(spec, model) {
 			byProvider[model.Provider] = append(byProvider[model.Provider], model)
 		}
 	}
 	successes := 0
+	authoritativeRemovals := 0
 	var refreshErrors []error
 	for range providers {
 		result := <-results
 		if result.err != nil {
+			if errors.Is(result.err, ErrUnverifiedInventory) {
+				delete(byProvider, result.provider)
+				authoritativeRemovals++
+			}
 			refreshErrors = append(refreshErrors, fmt.Errorf("%s: %w", result.provider, result.err))
 			slog.Warn("provider model refresh failed", "provider", result.provider, "error", result.err)
 			continue
@@ -203,7 +210,7 @@ func (s *Store) Refresh(ctx context.Context) error {
 		successes++
 		byProvider[result.provider] = result.models
 	}
-	if successes == 0 && len(byProvider) == 0 {
+	if successes == 0 && authoritativeRemovals == 0 && len(byProvider) == 0 {
 		return errors.Join(refreshErrors...)
 	}
 
@@ -219,6 +226,20 @@ func (s *Store) Refresh(ctx context.Context) error {
 	return nil
 }
 
+func cacheEligible(spec provider.Spec, model Model) bool {
+	return modelEligible(spec, model.UpstreamID, model.Pricing.Prompt, model.Pricing.Completion)
+}
+
+func modelEligible(spec provider.Spec, modelID, promptPrice, completionPrice string) bool {
+	if modelID == "" || spec.DiscoveryPolicy == "unverified" {
+		return false
+	}
+	if !allowed(spec.AllowedModels, spec.AllowedModelPatterns, modelID) {
+		return false
+	}
+	return spec.Filter != provider.FilterZeroPrice || (isZero(promptPrice) && isZero(completionPrice))
+}
+
 // RefreshProvider updates one provider without waiting on or contacting the others.
 func (s *Store) RefreshProvider(ctx context.Context, providerID string) error {
 	s.refreshMu.Lock()
@@ -229,6 +250,11 @@ func (s *Store) RefreshProvider(ctx context.Context, providerID string) error {
 	}
 	models, err := s.fetch(ctx, spec)
 	if err != nil {
+		if errors.Is(err, ErrUnverifiedInventory) {
+			if pruneErr := s.removeProvider(providerID); pruneErr != nil {
+				return errors.Join(err, pruneErr)
+			}
+		}
 		return err
 	}
 	merged := make([]Model, 0, len(s.Models())+len(models))
@@ -244,6 +270,17 @@ func (s *Store) RefreshProvider(ctx context.Context, providerID string) error {
 		return fmt.Errorf("save model cache: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) removeProvider(providerID string) error {
+	models := make([]Model, 0, len(s.Models()))
+	for _, model := range s.Models() {
+		if model.Provider != providerID {
+			models = append(models, model)
+		}
+	}
+	s.set(models, time.Now())
+	return s.saveCache(models)
 }
 
 // PruneDisabled removes cached models whose provider is no longer configured.
@@ -262,6 +299,12 @@ func (s *Store) PruneDisabled() error {
 }
 
 func (s *Store) fetch(ctx context.Context, spec provider.Spec) ([]Model, error) {
+	if len(spec.DiscoveredModels) > 0 {
+		return modelsFromDiscovery(spec), nil
+	}
+	if spec.DiscoveryPolicy == "unverified" {
+		return nil, fmt.Errorf("%w; rerun the discovery formula", ErrUnverifiedInventory)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, spec.ModelsEndpoint(), nil)
 	if err != nil {
 		return nil, err
@@ -299,7 +342,7 @@ func (s *Store) fetch(ctx context.Context, spec provider.Spec) ([]Model, error) 
 		if spec.UseNameAsID && candidate.Name != "" {
 			candidate.ID = candidate.Name
 		}
-		if candidate.ID == "" || !allowed(spec.AllowedModels, spec.AllowedModelPatterns, candidate.ID) || (spec.Filter == provider.FilterZeroPrice && !zeroPriced(candidate)) {
+		if !modelEligible(spec, candidate.ID, candidate.Pricing.Prompt, candidate.Pricing.Completion) {
 			continue
 		}
 		input := candidate.InputModalities
@@ -333,6 +376,51 @@ func (s *Store) fetch(ctx context.Context, spec provider.Spec) ([]Model, error) 
 		return nil, errors.New("no eligible models returned")
 	}
 	return models, nil
+}
+
+func modelsFromDiscovery(spec provider.Spec) []Model {
+	models := make([]Model, 0, len(spec.DiscoveredModels))
+	for _, candidate := range spec.DiscoveredModels {
+		if !modelEligible(spec, candidate.ID, candidate.Pricing.Prompt, candidate.Pricing.Completion) {
+			continue
+		}
+		modelType := candidate.Type
+		if modelType == "" {
+			modelType = "normal"
+		}
+		functions := append([]string{}, candidate.Functions...)
+		if len(functions) == 0 {
+			functions = []string{FunctionChat}
+		}
+		capabilities := Capabilities{
+			ToolCall:       contains(functions, FunctionChatTools),
+			ToolCallKnown:  len(candidate.Functions) > 0,
+			Vision:         contains(functions, FunctionImageUnderstanding),
+			VisionKnown:    len(candidate.Functions) > 0,
+			Reasoning:      contains(candidate.SupportedParameters, "reasoning"),
+			ReasoningKnown: contains(candidate.SupportedParameters, "reasoning"),
+			Streaming:      contains(candidate.SupportedParameters, "stream"),
+		}
+		models = append(models, Model{
+			ID: spec.ID + "/" + candidate.ID, Provider: spec.ID, UpstreamID: candidate.ID,
+			Name: candidate.Name, Description: candidate.Description, OwnedBy: candidate.OwnedBy,
+			Type: modelType, Functions: functions, Free: true, Tier: spec.Tier,
+			ContextLength: candidate.ContextLength, MaxOutputTokens: candidate.MaxOutputTokens,
+			InputModalities:     append([]string{}, candidate.InputModalities...),
+			OutputModalities:    append([]string{}, candidate.OutputModalities...),
+			SupportedParameters: append([]string{}, candidate.SupportedParameters...),
+			SupportedEndpoints:  append([]string{}, candidate.SupportedEndpoints...),
+			Capabilities:        capabilities,
+			Pricing: Pricing{
+				Prompt: candidate.Pricing.Prompt, Completion: candidate.Pricing.Completion,
+			},
+		})
+	}
+	if len(models) == 0 {
+		return nil
+	}
+	sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
+	return models
 }
 
 func upstreamErrorDetail(body io.Reader) string {
@@ -656,7 +744,7 @@ func (s *Store) loadCache() error {
 			model.Provider, model.UpstreamID = "openrouter", model.ID
 			model.ID = "openrouter/" + model.ID
 		}
-		if _, enabled := s.registry.Get(model.Provider); enabled {
+		if spec, enabled := s.registry.Get(model.Provider); enabled && cacheEligible(spec, model) {
 			if model.Type == "" {
 				model.Type = classifyID(model.UpstreamID)
 				model.Free = true
@@ -692,10 +780,6 @@ func (s *Store) saveCache(models []Model) error {
 		return err
 	}
 	return os.Rename(tmp, s.cache)
-}
-
-func zeroPriced(model upstreamModel) bool {
-	return isZero(model.Pricing.Prompt) && isZero(model.Pricing.Completion)
 }
 
 func isZero(value string) bool {

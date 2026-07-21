@@ -34,7 +34,7 @@
 
 ### 中国大陆免费源的筛选原则
 
-内置中国大陆来源目前包括 ModelScope、SiliconFlow、智谱开放平台、百度千帆、Xiaomi MiMo、阿里云百炼、火山方舟和百川智能。free-router 不会把永久免费平台返回的全部模型都当作免费模型：智谱只自动接收官方 `Flash` 系列，千帆只接收 `ernie-speed-8k`、`ernie-speed-128k`、`ernie-lite-8k`、`ernie-tiny-8k`，SiliconFlow 使用显式免费模型清单。模型列表在启动时同步一次，也可以在管理页面手动刷新。
+内置中国大陆来源目前包括 ModelScope、SiliconFlow、智谱开放平台、百度千帆、Xiaomi MiMo、阿里云百炼、火山方舟和百川智能。免费模型名单和判定证据统一维护在版本化数据清单中，不再写死在 Go 代码里；没有明确免费证据的模型不会进入候选。运行时模型目录可以在管理页面手动刷新，免费资格则由下文的 Formula 独立更新。
 
 `gift-credits`、`new-user-free-quota`、`free-trial-quota` 都属于额度型来源，并非永久免费。只有用户配置对应 Key 后它们才会启用，管理页面会持续显示计费警告。百炼用户应先开启“免费额度用完即停”；其他额度型平台应关闭后付费或确保账户没有可扣余额。Kimi 当前按输入/输出计费，MiniMax 当前使用付费 Token Plan、Credits 或按量计费，因此没有作为免费来源内置。
 
@@ -241,6 +241,7 @@ free-router 的全局配置与运行资料统一存放在 `~/.free-router`：
 ~/.free-router/
 ├── config.json       # 路由、Provider 环境变量映射和模型覆盖
 ├── credentials.json  # Keychain 不可用时的仅限当前用户凭据文件
+├── free-models.json  # 可选的外部免费模型清单
 ├── models.json       # 自动维护的模型目录缓存
 ├── daemon-env.json   # 守护进程环境快照
 └── free-router.log   # macOS 守护进程日志
@@ -301,12 +302,27 @@ free-router onboard --force            # 明确覆盖已有配置
 
 ## 模型缓存与自维护
 
-1. 首次启动并发请求所有已配置 provider 的 `/models`，生成本地缓存。
-2. 后续启动优先加载缓存，服务立即可用，然后只在启动阶段后台同步一次。
-3. 不会定时轮询 `/models`；普通推理请求也绝不会为了选择模型访问模型目录。
-4. 新增 Provider 凭据时会同步一次；模型目录发生变化时可在 Web 界面点击“刷新模型”。
-5. 单个源同步失败时保留该源上一次成功的缓存，不影响其他源。
-6. 缓存保留 `functions`、tool call、vision、context、输入输出模态和 endpoint 等字段，用于多能力匹配。
+免费资格、运行缓存和健康状态是三类独立数据：
+
+1. `internal/provider/free-models.json` 是版本化的免费资格清单，通过 Go Embed 随二进制发布；Provider 连接地址和鉴权逻辑仍留在 Go 代码中。
+2. 清单已经枚举具体模型时，free-router 直接用这些模型作为原始目录，不再请求 `/models` 来判断它们是否免费；清单只提供规则时，运行时请求 `/models` 并按零价格或 allowlist 过滤。
+3. `~/.free-router/models.json` 只是已启用 Provider 的运行缓存。普通推理请求不会访问模型目录，也不会定时轮询 `/models`。
+4. 健康检测只回答“当前能否调用”。故障模型会退出路由候选，但不会反向修改免费资格证据；下次清单更新时会重新核验资格。
+5. 可用 `--free-models FILE` 或 `FREE_ROUTER_FREE_MODELS` 临时加载外部清单，无需重新构建二进制。
+
+### 并发更新免费模型清单
+
+仓库提供 [.tt/formulas/discover-free-models.toml](./.tt/formulas/discover-free-models.toml)。它为每个内置 Provider 启动独立并发调研分支，只接受官网文档、官方价格页或官方 API 作为免费证据；最后保守合并、写入清单，并调用 Go 的语义校验器。无证据的平台会标记为 `unverified`，不会猜测或自动进入路由。
+
+Formula 不需要日期参数，会自动使用实际运行时刻生成 `generated_at` 和模型的 `verified_at`。
+
+```bash
+tt formula validate .tt/formulas/discover-free-models.toml
+tt formula run discover-free-models --dir .tt/formulas
+go run . validate-model-data internal/provider/free-models.json
+```
+
+维护者定期运行 Formula、复核 diff 后提交数据文件即可；业务代码无需跟着模型名单变化。若只想在本机立即使用生成结果，可把清单复制到 `~/.free-router/free-models.json`，并设置 `FREE_ROUTER_FREE_MODELS` 后重启服务。
 
 ## 接入任意免费源
 

@@ -6,9 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sjzsdu/free-router/internal/provider"
 )
@@ -47,6 +49,58 @@ func TestRefreshKeepsOnlyZeroPricedModels(t *testing.T) {
 		if !model.SupportsFunction(function) {
 			t.Fatalf("model functions %v do not contain %q", model.Functions, function)
 		}
+	}
+}
+
+func TestDiscoveredModelsConvertWithoutProviderCatalogRequest(t *testing.T) {
+	models := modelsFromDiscovery(provider.Spec{ID: "test", Tier: "free", DiscoveredModels: []provider.DiscoveredModel{{ID: "free-chat", Functions: []string{FunctionChatTools}, ContextLength: 32768, Pricing: provider.DiscoveredPricing{Prompt: "0", Completion: "0"}}}})
+	if len(models) != 1 || models[0].UpstreamID != "free-chat" || !models[0].Capabilities.ToolCall || models[0].Pricing.Prompt != "0" {
+		t.Fatalf("models=%#v", models)
+	}
+}
+
+func TestLoadCacheUsesSameEligibilityRulesAsFetch(t *testing.T) {
+	clearBuiltinKeys(t)
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"https://example.invalid/v1","no_auth":true,"filter":"zero-price"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := filepath.Join(t.TempDir(), "models.json")
+	content := `[
+		{"id":"test/free","provider":"test","upstream_id":"free","type":"normal","functions":["chat"],"pricing":{"prompt":"0","completion":"0"}},
+		{"id":"test/paid","provider":"test","upstream_id":"paid","type":"normal","functions":["chat"],"pricing":{"prompt":"0.1","completion":"0"}}
+	]`
+	if err := os.WriteFile(cache, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := New(registry, cache, http.DefaultClient)
+	if err := store.loadCache(); err != nil {
+		t.Fatal(err)
+	}
+	models := store.Models()
+	if len(models) != 1 || models[0].UpstreamID != "free" {
+		t.Fatalf("cache eligibility diverged from fetch: %#v", models)
+	}
+}
+
+func TestUnverifiedInventoryPrunesCachedProviderModels(t *testing.T) {
+	clearBuiltinKeys(t)
+	t.Setenv("GROQ_API_KEY", "test")
+	manifestPath := filepath.Join(t.TempDir(), "free-models.json")
+	if err := os.WriteFile(manifestPath, []byte(`{"schema_version":1,"providers":{"groq":{"policy":"unverified","free_basis":"evidence expired"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := provider.NewRegistryWithManifest("", provider.DefaultEnvMap(), manifestPath, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
+	store.set([]Model{{ID: "groq/stale", Provider: "groq", UpstreamID: "stale", Free: true}}, time.Now())
+	if err := store.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.Models()) != 0 {
+		t.Fatalf("unverified provider remained in cache: %#v", store.Models())
 	}
 }
 

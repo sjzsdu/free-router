@@ -2,6 +2,8 @@ package provider
 
 import (
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -33,8 +35,12 @@ func TestSiliconFlowDiscoversOnlyChatModels(t *testing.T) {
 }
 
 func TestChineseFreeProvidersHaveExplicitFreeModelPolicies(t *testing.T) {
+	manifest, err := loadFreeModelManifest("")
+	if err != nil {
+		t.Fatal(err)
+	}
 	byID := make(map[string]Spec)
-	for _, spec := range builtins() {
+	for _, spec := range applyFreeModelManifest(builtins(), manifest) {
 		byID[spec.ID] = spec
 	}
 	for _, id := range []string{"bigmodel", "qianfan"} {
@@ -46,6 +52,65 @@ func TestChineseFreeProvidersHaveExplicitFreeModelPolicies(t *testing.T) {
 			t.Fatalf("provider %s must restrict discovery to verified free models", id)
 		}
 	}
+}
+
+func TestExternalManifestReplacesEmbeddedEligibilityData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "free-models.json")
+	content := `{"schema_version":1,"providers":{"groq":{"policy":"inventory","source_urls":["https://example.com/models"],"models":[{"id":"free-chat","functions":["chat","chat-tools"],"context_length":8192}]}}}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range SupportedKeyEnvs() {
+		t.Setenv(key, "")
+	}
+	t.Setenv("GROQ_API_KEY", "test")
+	registry, err := NewRegistryWithManifest("", DefaultEnvMap(), path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, ok := registry.Get("groq")
+	if !ok || len(spec.DiscoveredModels) != 1 || spec.DiscoveredModels[0].ID != "free-chat" {
+		t.Fatalf("external manifest was not applied: %#v, %v", spec, ok)
+	}
+}
+
+func TestApplyManifestDoesNotMutateInputAndNormalizesPolicies(t *testing.T) {
+	original := []Spec{
+		{ID: "openrouter", Filter: FilterZeroPrice, AllowedModels: []string{"old"}},
+		{ID: "groq", Filter: FilterZeroPrice, AllowedModels: []string{"old"}},
+	}
+	before := append([]Spec(nil), original...)
+	before[0].AllowedModels = append([]string(nil), original[0].AllowedModels...)
+	before[1].AllowedModels = append([]string(nil), original[1].AllowedModels...)
+	manifest := FreeModelManifest{SchemaVersion: 1, GeneratedAt: "2026-07-21T00:00:00Z", Providers: map[string]FreeProviderCatalog{
+		"groq": {Policy: "all-listed", FreeBasis: "free plan", BillingWarning: "rate limited"},
+	}}
+	applied := applyFreeModelManifest(original, manifest)
+	if !reflect.DeepEqual(original, before) {
+		t.Fatalf("input specs were mutated: before=%#v after=%#v", before, original)
+	}
+	if applied[0].DiscoveryPolicy != "zero-price" || applied[0].Filter != FilterZeroPrice {
+		t.Fatalf("openrouter fallback was lost: %#v", applied[0])
+	}
+	if applied[1].DiscoveryPolicy != "all-listed" || applied[1].Filter != FilterAll || len(applied[1].AllowedModels) != 0 {
+		t.Fatalf("all-listed was not normalized: %#v", applied[1])
+	}
+	if applied[1].BillingWarning != "rate limited" || applied[1].FreeBasis != "free plan" || applied[1].ManifestGeneratedAt == "" {
+		t.Fatalf("manifest metadata was not applied: %#v", applied[1])
+	}
+}
+
+func TestBuiltinStatusIncludesManifestPolicy(t *testing.T) {
+	status := BuiltinStatusWithEnv(DefaultEnvMap())
+	for _, item := range status {
+		if item["id"] == "openrouter" {
+			if item["discovery_policy"] != "zero-price" || item["free_basis"] == "" || item["manifest_generated_at"] == "" {
+				t.Fatalf("manifest status is incomplete: %#v", item)
+			}
+			return
+		}
+	}
+	t.Fatal("openrouter status not found")
 }
 
 func TestCreditProvidersExposeBillingWarnings(t *testing.T) {

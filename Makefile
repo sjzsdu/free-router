@@ -13,7 +13,7 @@ endif
 LDFLAGS := -s -w
 
 .DEFAULT_GOAL := help
-.PHONY: help build web-install web-build web-check install uninstall daemon-install daemon-start daemon-stop daemon-restart daemon-status daemon-logs daemon-uninstall run test test-race test-cover vet fmt fmt-check version-check check tidy clean
+.PHONY: help build web-install web-build web-check install uninstall daemon-install daemon-start daemon-stop daemon-restart daemon-status daemon-logs daemon-uninstall run discover-free-models validate-free-models test test-race test-cover vet fmt fmt-check version-check check tidy clean
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -64,6 +64,12 @@ uninstall: ## Remove the installed binary
 
 run: web-build ## Run the service
 	$(GO) run -ldflags="$(LDFLAGS)" . serve
+
+discover-free-models: ## Concurrently research providers and update the free model manifest
+	tt formula run discover-free-models --dir .tt/formulas
+
+validate-free-models: ## Validate the generated free model manifest
+	$(GO) run . validate-model-data internal/provider/free-models.json
 
 test: ## Run unit and integration tests
 	$(GO) test ./...

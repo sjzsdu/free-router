@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-20T00:00:00Z",
+  "providers": {
+    "openrouter": {
+      "policy": "zero-price",
+      "free_basis": "Both prompt and completion prices reported by the provider are zero.",
+      "source_urls": ["https://openrouter.ai/api/v1/models"]
+    },
+    "groq": {
+      "policy": "all-listed",
+      "free_basis": "Models available to an account on the provider Free Plan are subject to free-plan rate limits.",
+      "source_urls": ["https://console.groq.com/docs/rate-limits"]
+    },
+    "cerebras": {
+      "policy": "all-listed",
+      "free_basis": "Models exposed to a configured free-tier account are limited by that tier.",
+      "source_urls": ["https://inference-docs.cerebras.ai/support/rate-limits"]
+    },
+    "gemini": {
+      "policy": "all-listed",
+      "free_basis": "Models exposed to a configured Google AI Studio free-tier key are subject to free-tier limits.",
+      "source_urls": ["https://ai.google.dev/gemini-api/docs/rate-limits"]
+    },
+    "github-models": {
+      "policy": "all-listed",
+      "free_basis": "GitHub Models provides rate-limited model experimentation at no cost.",
+      "source_urls": ["https://docs.github.com/en/github-models/prototyping-with-ai-models"]
+    },
+    "pollinations": {
+      "policy": "all-listed",
+      "free_basis": "Models exposed to the account consume the provider's free Pollen allocation.",
+      "source_urls": ["https://enter.pollinations.ai/"]
+    },
+    "huggingface": {
+      "policy": "all-listed",
+      "free_basis": "Inference Providers requests consume the account's monthly free credits.",
+      "source_urls": ["https://huggingface.co/docs/inference-providers/pricing"]
+    },
+    "nvidia": {
+      "policy": "all-listed",
+      "free_basis": "Build API access is provided with rate-limited evaluation credits.",
+      "source_urls": ["https://build.nvidia.com/"]
+    },
+    "mistral": {
+      "policy": "all-listed",
+      "free_basis": "Models exposed to an Experiment Plan account are subject to experiment-plan limits.",
+      "source_urls": ["https://docs.mistral.ai/deployment/ai-studio/tier/"]
+    },
+    "sambanova": {
+      "policy": "all-listed",
+      "free_basis": "Models exposed to a configured Free Tier account are subject to provider limits.",
+      "source_urls": ["https://cloud.sambanova.ai/"]
+    },
+    "ollama-cloud": {
+      "policy": "all-listed",
+      "free_basis": "Models exposed to a configured free-tier account are subject to its usage limits.",
+      "source_urls": ["https://ollama.com/cloud"]
+    },
+    "modelscope": {
+      "policy": "all-listed",
+      "free_basis": "Models exposed to the inference account consume its free inference quota.",
+      "source_urls": ["https://modelscope.cn/docs/model-service/API-Inference/intro"]
+    },
+    "xiaomi-mimo": {
+      "policy": "all-listed",
+      "free_basis": "Models consume account gift credits; this is a limited credit rather than permanent zero pricing.",
+      "billing_warning": "赠送额度用完后停止使用或按账户计费设置执行，请先确认余额。",
+      "source_urls": ["https://platform.xiaomimimo.com/"]
+    },
+    "dashscope": {
+      "policy": "all-listed",
+      "free_basis": "Models consume new-user or model-specific free quota and may become billable after exhaustion.",
+      "billing_warning": "新人额度通常仅 30～90 天；请在百炼控制台开启免费额度用完即停。",
+      "source_urls": ["https://help.aliyun.com/zh/model-studio/getting-started/models"]
+    },
+    "volcengine-ark": {
+      "policy": "all-listed",
+      "free_basis": "Models consume model-specific trial quota and may become billable after exhaustion.",
+      "billing_warning": "免费额度按模型限量发放，耗尽后可能转为计费。",
+      "source_urls": ["https://www.volcengine.com/docs/82379/1099320"]
+    },
+    "baichuan": {
+      "policy": "all-listed",
+      "free_basis": "Models consume time-limited new-account gift credits.",
+      "billing_warning": "新用户赠送金有效期有限，余额耗尽后接口按平台价格计费。",
+      "source_urls": ["https://platform.baichuan-ai.com/"]
+    },
+    "bigmodel": {
+      "policy": "allowlist",
+      "free_basis": "The provider documents Flash variants as free models.",
+      "source_urls": ["https://open.bigmodel.cn/"],
+      "allowed_model_patterns": ["*flash*"]
+    },
+    "qianfan": {
+      "policy": "allowlist",
+      "free_basis": "Long-term free models documented by the provider.",
+      "source_urls": ["https://cloud.baidu.com/doc/WENXINWORKSHOP/s/Fm2vrveyu"],
+      "allowed_models": ["ernie-speed-8k", "ernie-speed-128k", "ernie-lite-8k", "ernie-tiny-8k"]
+    },
+    "siliconflow": {
+      "policy": "allowlist",
+      "free_basis": "Models marked free by the provider catalog.",
+      "source_urls": ["https://cloud.siliconflow.cn/models"],
+      "allowed_models": ["Qwen/Qwen3.5-4B", "PaddlePaddle/PaddleOCR-VL-1.5", "Qwen/Qwen3-8B", "Qwen/Qwen2.5-7B-Instruct", "THUDM/GLM-4-9B-0414", "THUDM/GLM-Z1-9B-0414", "deepseek-ai/DeepSeek-OCR", "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B", "tencent/Hunyuan-MT-7B"]
+    },
+    "zai": {
+      "policy": "all-listed",
+      "free_basis": "Models exposed to the configured free-model account are subject to provider limits.",
+      "source_urls": ["https://z.ai/model-api"]
+    },
+    "cloudflare": {
+      "policy": "all-listed",
+      "free_basis": "Workers AI includes a daily free allocation measured in Neurons.",
+      "source_urls": ["https://developers.cloudflare.com/workers-ai/platform/pricing/"]
+    }
+  }
+}

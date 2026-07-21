@@ -80,7 +80,7 @@ func addCredential(cmd *cobra.Command, opts *options, providerID string) error {
 		if err != nil {
 			return err
 		}
-		for _, status := range provider.BuiltinStatusWithEnv(envMap) {
+		for _, status := range provider.BuiltinStatusWithManifest(envMap, opts.freeModels) {
 			fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", status["id"])
 		}
 		fmt.Fprint(cmd.ErrOrStderr(), "Provider ID: ")

@@ -1,13 +1,18 @@
 package provider
 
 import (
+	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
 	"strings"
 	"sync"
 )
+
+//go:embed free-models.json
+var embeddedFreeModels []byte
 
 type Filter string
 
@@ -37,7 +42,188 @@ type Spec struct {
 	UseNameAsID          bool              `json:"use_name_as_id,omitempty"`
 	AllowedModels        []string          `json:"allowed_models,omitempty"`
 	AllowedModelPatterns []string          `json:"allowed_model_patterns,omitempty"`
+	DiscoveredModels     []DiscoveredModel `json:"-"`
+	DiscoveryPolicy      string            `json:"-"`
+	FreeBasis            string            `json:"-"`
+	SourceURLs           []string          `json:"-"`
+	ManifestGeneratedAt  string            `json:"-"`
 	RequiredEnvs         []string          `json:"-"`
+}
+
+// DiscoveredModel is model metadata produced by the free-model discovery Formula.
+// It deliberately contains no credentials or provider connection settings.
+type DiscoveredModel struct {
+	ID                  string            `json:"id"`
+	Name                string            `json:"name,omitempty"`
+	Description         string            `json:"description,omitempty"`
+	OwnedBy             string            `json:"owned_by,omitempty"`
+	Type                string            `json:"type,omitempty"`
+	Functions           []string          `json:"functions,omitempty"`
+	ContextLength       int               `json:"context_length,omitempty"`
+	MaxOutputTokens     int               `json:"max_output_tokens,omitempty"`
+	InputModalities     []string          `json:"input_modalities,omitempty"`
+	OutputModalities    []string          `json:"output_modalities,omitempty"`
+	SupportedParameters []string          `json:"supported_parameters,omitempty"`
+	SupportedEndpoints  []string          `json:"supported_endpoints,omitempty"`
+	FreeBasis           string            `json:"free_basis,omitempty"`
+	SourceURLs          []string          `json:"source_urls,omitempty"`
+	VerifiedAt          string            `json:"verified_at,omitempty"`
+	Pricing             DiscoveredPricing `json:"pricing,omitempty"`
+}
+
+type DiscoveredPricing struct {
+	Prompt     string `json:"prompt,omitempty"`
+	Completion string `json:"completion,omitempty"`
+}
+
+type FreeModelManifest struct {
+	SchemaVersion int                            `json:"schema_version"`
+	GeneratedAt   string                         `json:"generated_at,omitempty"`
+	Providers     map[string]FreeProviderCatalog `json:"providers"`
+}
+
+type FreeProviderCatalog struct {
+	Policy               string            `json:"policy,omitempty"`
+	FreeBasis            string            `json:"free_basis,omitempty"`
+	SourceURLs           []string          `json:"source_urls,omitempty"`
+	AllowedModels        []string          `json:"allowed_models,omitempty"`
+	AllowedModelPatterns []string          `json:"allowed_model_patterns,omitempty"`
+	Models               []DiscoveredModel `json:"models,omitempty"`
+	BillingWarning       string            `json:"billing_warning,omitempty"`
+}
+
+func loadFreeModelManifest(path string) (FreeModelManifest, error) {
+	content := embeddedFreeModels
+	if strings.TrimSpace(path) != "" {
+		var err error
+		content, err = os.ReadFile(path)
+		if err != nil {
+			return FreeModelManifest{}, fmt.Errorf("read free model manifest: %w", err)
+		}
+	}
+	var manifest FreeModelManifest
+	if err := json.Unmarshal(content, &manifest); err != nil {
+		return FreeModelManifest{}, fmt.Errorf("decode free model manifest: %w", err)
+	}
+	if err := ValidateFreeModelManifest(manifest); err != nil {
+		return FreeModelManifest{}, err
+	}
+	return manifest, nil
+}
+
+func LoadFreeModelManifest(path string) (FreeModelManifest, error) {
+	return loadFreeModelManifest(path)
+}
+
+func ValidateFreeModelManifest(manifest FreeModelManifest) error {
+	if manifest.SchemaVersion != 1 {
+		return fmt.Errorf("unsupported free model manifest schema_version %d", manifest.SchemaVersion)
+	}
+	for providerID, entry := range manifest.Providers {
+		if strings.TrimSpace(providerID) == "" {
+			return errors.New("free model manifest contains an empty provider id")
+		}
+		switch entry.Policy {
+		case "inventory", "allowlist", "zero-price", "all-listed", "unverified":
+		default:
+			return fmt.Errorf("provider %s has unsupported policy %q", providerID, entry.Policy)
+		}
+		if entry.Policy == "unverified" && len(entry.Models) > 0 {
+			return fmt.Errorf("provider %s is unverified but contains models", providerID)
+		}
+		if entry.Policy == "inventory" && len(entry.Models) == 0 {
+			return fmt.Errorf("provider %s uses inventory policy without models", providerID)
+		}
+		if entry.Policy != "inventory" && len(entry.Models) > 0 {
+			return fmt.Errorf("provider %s contains models but policy is %q instead of inventory", providerID, entry.Policy)
+		}
+		if entry.Policy == "allowlist" && len(entry.AllowedModels) == 0 && len(entry.AllowedModelPatterns) == 0 {
+			return fmt.Errorf("provider %s uses allowlist policy without an allowlist", providerID)
+		}
+		seen := make(map[string]bool)
+		for _, model := range entry.Models {
+			if strings.TrimSpace(model.ID) == "" {
+				return fmt.Errorf("provider %s contains a model with an empty id", providerID)
+			}
+			if seen[model.ID] {
+				return fmt.Errorf("provider %s contains duplicate model %q", providerID, model.ID)
+			}
+			seen[model.ID] = true
+			if len(model.Functions) == 0 {
+				return fmt.Errorf("provider %s model %s has no functions", providerID, model.ID)
+			}
+			for _, function := range model.Functions {
+				if !validModelFunction(function) {
+					return fmt.Errorf("provider %s model %s has unsupported function %q", providerID, model.ID, function)
+				}
+			}
+			if len(model.SourceURLs) == 0 && len(entry.SourceURLs) == 0 {
+				return fmt.Errorf("provider %s model %s has no evidence source", providerID, model.ID)
+			}
+		}
+	}
+	return nil
+}
+
+func validModelFunction(function string) bool {
+	switch function {
+	case "chat", "chat-tools", "image-understanding", "image-generation", "video-understanding", "video-generation", "audio-understanding", "speech-to-text", "text-to-speech", "embedding", "rerank", "moderation":
+		return true
+	default:
+		return false
+	}
+}
+
+func applyFreeModelManifest(specs []Spec, manifest FreeModelManifest) []Spec {
+	result := append([]Spec(nil), specs...)
+	for index := range result {
+		entry, ok := manifest.Providers[result[index].ID]
+		if !ok {
+			result[index].AllowedModels = nil
+			result[index].AllowedModelPatterns = nil
+			result[index].DiscoveredModels = nil
+			if result[index].ID == "openrouter" {
+				result[index].DiscoveryPolicy = "zero-price"
+				result[index].Filter = FilterZeroPrice
+			} else {
+				result[index].DiscoveryPolicy = "unverified"
+				result[index].Filter = FilterAll
+			}
+			continue
+		}
+		result[index].DiscoveryPolicy = entry.Policy
+		result[index].FreeBasis = entry.FreeBasis
+		result[index].SourceURLs = append([]string(nil), entry.SourceURLs...)
+		result[index].ManifestGeneratedAt = manifest.GeneratedAt
+		if entry.BillingWarning != "" {
+			result[index].BillingWarning = entry.BillingWarning
+		}
+		result[index].AllowedModels = nil
+		result[index].AllowedModelPatterns = nil
+		result[index].DiscoveredModels = nil
+		switch entry.Policy {
+		case "inventory":
+			result[index].Filter = FilterAll
+			result[index].DiscoveredModels = append([]DiscoveredModel(nil), entry.Models...)
+			result[index].AllowedModels = make([]string, 0, len(entry.Models))
+			for _, model := range entry.Models {
+				if model.ID != "" {
+					result[index].AllowedModels = append(result[index].AllowedModels, model.ID)
+				}
+			}
+		case "allowlist":
+			result[index].Filter = FilterAll
+			result[index].AllowedModels = append([]string(nil), entry.AllowedModels...)
+			result[index].AllowedModelPatterns = append([]string(nil), entry.AllowedModelPatterns...)
+		case "zero-price":
+			result[index].Filter = FilterZeroPrice
+		case "all-listed":
+			result[index].Filter = FilterAll
+		case "unverified":
+			result[index].Filter = FilterAll
+		}
+	}
+	return result
 }
 
 func (spec Spec) ModelsEndpoint() string {
@@ -128,9 +314,25 @@ func NewRegistryAllowEmptyWithEnv(customJSON string, envMap EnvMap, resolvers ..
 	return newRegistry(customJSON, true, MergeEnvMap(envMap), resolvers...)
 }
 
+func NewRegistryWithManifest(customJSON string, envMap EnvMap, manifestPath string, allowEmpty bool, resolvers ...KeyResolver) (*Registry, error) {
+	manifest, err := loadFreeModelManifest(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	return newRegistryWithSpecs(customJSON, allowEmpty, MergeEnvMap(envMap), applyFreeModelManifest(builtins(), manifest), resolvers...)
+}
+
 func newRegistry(customJSON string, allowEmpty bool, envMap EnvMap, resolvers ...KeyResolver) (*Registry, error) {
+	manifest, err := loadFreeModelManifest("")
+	if err != nil {
+		return nil, err
+	}
+	return newRegistryWithSpecs(customJSON, allowEmpty, envMap, applyFreeModelManifest(builtins(), manifest), resolvers...)
+}
+
+func newRegistryWithSpecs(customJSON string, allowEmpty bool, envMap EnvMap, specs []Spec, resolvers ...KeyResolver) (*Registry, error) {
 	registry := &Registry{providers: make(map[string]Spec)}
-	for _, spec := range builtins() {
+	for _, spec := range specs {
 		registry.addIfConfigured(spec, envMap, resolvers)
 	}
 	if strings.TrimSpace(customJSON) != "" {
@@ -187,6 +389,17 @@ func (registry *Registry) Reload(customJSON string, resolvers ...KeyResolver) er
 
 func (registry *Registry) ReloadWithEnv(customJSON string, envMap EnvMap, resolvers ...KeyResolver) error {
 	updated, err := newRegistry(customJSON, true, MergeEnvMap(envMap), resolvers...)
+	if err != nil {
+		return err
+	}
+	registry.mu.Lock()
+	registry.providers = updated.providers
+	registry.mu.Unlock()
+	return nil
+}
+
+func (registry *Registry) ReloadWithManifest(customJSON string, envMap EnvMap, manifestPath string, resolvers ...KeyResolver) error {
+	updated, err := NewRegistryWithManifest(customJSON, envMap, manifestPath, true, resolvers...)
 	if err != nil {
 		return err
 	}
@@ -258,9 +471,18 @@ func BuiltinStatus(resolvers ...KeyResolver) []map[string]any {
 }
 
 func BuiltinStatusWithEnv(envMap EnvMap, resolvers ...KeyResolver) []map[string]any {
+	return BuiltinStatusWithManifest(envMap, "", resolvers...)
+}
+
+func BuiltinStatusWithManifest(envMap EnvMap, manifestPath string, resolvers ...KeyResolver) []map[string]any {
 	envMap = MergeEnvMap(envMap)
-	result := make([]map[string]any, 0, len(builtins()))
-	for _, spec := range builtins() {
+	specs := builtins()
+	manifest, manifestErr := loadFreeModelManifest(manifestPath)
+	if manifestErr == nil {
+		specs = applyFreeModelManifest(specs, manifest)
+	}
+	result := make([]map[string]any, 0, len(specs))
+	for _, spec := range specs {
 		_, matchedEnv, configured := resolveEnvironment(spec, envMap)
 		source := "environment"
 		if !configured {
@@ -282,9 +504,18 @@ func BuiltinStatusWithEnv(envMap EnvMap, resolvers ...KeyResolver) []map[string]
 			"requires": spec.RequiredEnvs, "missing_required": missingRequired,
 			"configured": configured, "source": source, "tier": spec.Tier, "free_kind": spec.FreeKind,
 			"billing_warning": spec.BillingWarning, "register_url": spec.RegisterURL, "oauth": spec.OAuth,
+			"discovery_policy": spec.DiscoveryPolicy, "free_basis": spec.FreeBasis, "source_urls": spec.SourceURLs,
+			"manifest_generated_at": spec.ManifestGeneratedAt, "manifest_error": errorString(manifestErr),
 		})
 	}
 	return result
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func resolveEnvironment(spec Spec, envMap EnvMap) (string, string, bool) {
@@ -372,28 +603,15 @@ func builtins() []Spec {
 		{
 			ID: "bigmodel", BaseURL: "https://open.bigmodel.cn/api/paas/v4",
 			APIKeyEnv: "BIGMODEL_API_KEY", Tier: "free-flash-models", RegisterURL: "https://bigmodel.cn/usercenter/proj-mgmt/apikeys",
-			AllowedModelPatterns: []string{"*flash*"},
 		},
 		{
 			ID: "qianfan", BaseURL: "https://qianfan.baidubce.com/v2",
 			APIKeyEnv: "QIANFAN_API_KEY", Tier: "long-term-free-models", RegisterURL: "https://console.bce.baidu.com/qianfan/ais/console/apiKey",
-			AllowedModels: []string{"ernie-speed-8k", "ernie-speed-128k", "ernie-lite-8k", "ernie-tiny-8k"},
 		},
 		{
 			ID: "siliconflow", BaseURL: "https://api.siliconflow.cn/v1",
 			ModelsURL: "https://api.siliconflow.cn/v1/models?type=text&sub_type=chat",
 			APIKeyEnv: "SILICONFLOW_API_KEY", Tier: "free-models", RegisterURL: "https://cloud.siliconflow.cn/account/ak",
-			AllowedModels: []string{
-				"Qwen/Qwen3.5-4B",
-				"PaddlePaddle/PaddleOCR-VL-1.5",
-				"Qwen/Qwen3-8B",
-				"Qwen/Qwen2.5-7B-Instruct",
-				"THUDM/GLM-4-9B-0414",
-				"THUDM/GLM-Z1-9B-0414",
-				"deepseek-ai/DeepSeek-OCR",
-				"deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
-				"tencent/Hunyuan-MT-7B",
-			},
 		},
 		{ID: "zai", BaseURL: "https://api.z.ai/api/paas/v4", APIKeyEnv: "ZAI_API_KEY", Tier: "free-models", RegisterURL: "https://z.ai/manage-apikey/apikey-list"},
 		{ID: "cloudflare", BaseURL: "https://api.cloudflare.com/client/v4/accounts/" + cloudflareAccount + "/ai/v1", ModelsURL: "https://api.cloudflare.com/client/v4/accounts/" + cloudflareAccount + "/ai/models/search", APIKeyEnv: "CLOUDFLARE_API_TOKEN", RequiredEnvs: []string{"CLOUDFLARE_ACCOUNT_ID"}, UseNameAsID: true, Tier: "10000-neurons-per-day", RegisterURL: "https://dash.cloudflare.com/profile/api-tokens"},

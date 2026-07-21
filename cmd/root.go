@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -39,6 +40,7 @@ type options struct {
 	cache            string
 	config           string
 	credentials      string
+	freeModels       string
 	adminAllowRemote bool
 	adminToken       string
 	maxAttempts      int
@@ -88,6 +90,14 @@ func Execute() error {
 		},
 	})
 	root.AddCommand(&cobra.Command{
+		Use:   "validate-model-data FILE",
+		Short: "Validate a generated free model manifest",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return validateModelData(args[0], cmd.OutOrStdout())
+		},
+	})
+	root.AddCommand(&cobra.Command{
 		Use:   "providers",
 		Short: "Show built-in free providers and configuration status",
 		RunE: func(_ *cobra.Command, _ []string) error {
@@ -96,7 +106,7 @@ func Execute() error {
 			if err != nil {
 				return err
 			}
-			return json.NewEncoder(os.Stdout).Encode(provider.BuiltinStatusWithEnv(envMap, vault.Get))
+			return json.NewEncoder(os.Stdout).Encode(provider.BuiltinStatusWithManifest(envMap, opts.freeModels, vault.Get))
 		},
 	})
 	root.AddCommand(&cobra.Command{
@@ -112,6 +122,23 @@ func Execute() error {
 	return root.ExecuteContext(ctx)
 }
 
+func validateModelData(path string, output io.Writer) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return errors.New("model data file path must not be empty")
+	}
+	manifest, err := provider.LoadFreeModelManifest(path)
+	if err != nil {
+		return err
+	}
+	models := 0
+	for _, entry := range manifest.Providers {
+		models += len(entry.Models)
+	}
+	_, err = fmt.Fprintf(output, "valid free model manifest: providers=%d models=%d\n", len(manifest.Providers), models)
+	return err
+}
+
 func defaultOptions() options {
 	dataDir := appdirs.Default()
 	return options{
@@ -120,6 +147,7 @@ func defaultOptions() options {
 		cache:            envOr("FREE_ROUTER_CACHE", filepath.Join(dataDir, "models.json")),
 		config:           envOr("FREE_ROUTER_CONFIG", filepath.Join(dataDir, "config.json")),
 		credentials:      envOr("FREE_ROUTER_CREDENTIALS", filepath.Join(dataDir, "credentials.json")),
+		freeModels:       os.Getenv("FREE_ROUTER_FREE_MODELS"),
 		adminAllowRemote: envBool("FREE_ROUTER_ADMIN_ALLOW_REMOTE"),
 		adminToken:       os.Getenv("FREE_ROUTER_ADMIN_TOKEN"),
 		maxAttempts:      6,
@@ -132,6 +160,7 @@ func bindFlags(command *cobra.Command, opts *options) {
 	command.PersistentFlags().StringVar(&opts.cache, "cache", opts.cache, "model catalog cache file")
 	command.PersistentFlags().StringVar(&opts.config, "config", opts.config, "route configuration file")
 	command.PersistentFlags().StringVar(&opts.credentials, "credentials", opts.credentials, "saved provider credentials file")
+	command.PersistentFlags().StringVar(&opts.freeModels, "free-models", opts.freeModels, "external free model manifest (embedded data is used by default)")
 	command.PersistentFlags().BoolVar(&opts.adminAllowRemote, "admin-allow-remote", opts.adminAllowRemote, "allow the admin UI outside localhost")
 	command.PersistentFlags().IntVar(&opts.maxAttempts, "max-attempts", opts.maxAttempts, "maximum upstream attempts for model=auto")
 }
@@ -148,7 +177,7 @@ func runServer(ctx context.Context, opts options) error {
 	if err != nil {
 		return fmt.Errorf("load route configuration: %w", err)
 	}
-	registry, err := provider.NewRegistryAllowEmptyWithEnv(opts.providers, provider.EnvMap(routes.Config().ProviderEnv), vault.Get)
+	registry, err := provider.NewRegistryWithManifest(opts.providers, provider.EnvMap(routes.Config().ProviderEnv), opts.freeModels, true, vault.Get)
 	if err != nil {
 		return err
 	}
@@ -162,10 +191,10 @@ func runServer(ctx context.Context, opts options) error {
 	tracker := health.New()
 	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts, Routes: routes, Health: tracker}, http.DefaultClient)
 	reloadProviders := func() error {
-		return registry.ReloadWithEnv(opts.providers, provider.EnvMap(routes.Config().ProviderEnv), vault.Get)
+		return registry.ReloadWithManifest(opts.providers, provider.EnvMap(routes.Config().ProviderEnv), opts.freeModels, vault.Get)
 	}
 	handler.Handle("GET /admin", http.RedirectHandler("/admin/", http.StatusTemporaryRedirect))
-	handler.Handle("/admin/", admin.New(routes, store, vault, tracker, admin.Config{AllowRemote: opts.adminAllowRemote, Token: opts.adminToken, Version: version}, reloadProviders))
+	handler.Handle("/admin/", admin.New(routes, store, vault, tracker, admin.Config{AllowRemote: opts.adminAllowRemote, Token: opts.adminToken, Version: version, FreeModels: opts.freeModels}, reloadProviders))
 	server := &http.Server{
 		Addr:              opts.addr,
 		Handler:           handler,
@@ -198,7 +227,7 @@ func newRegistry(opts options) (*provider.Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return provider.NewRegistryWithEnv(opts.providers, envMap, vault.Get)
+	return provider.NewRegistryWithManifest(opts.providers, envMap, opts.freeModels, false, vault.Get)
 }
 
 func configuredEnvMap(opts options) (provider.EnvMap, error) {

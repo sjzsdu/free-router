@@ -45,6 +45,7 @@ type Config struct {
 	AllowRemote        bool
 	Token              string
 	Version            string
+	FreeModels         string
 	OAuthHTTPClient    *http.Client
 	OpenRouterAuthURL  string
 	OpenRouterTokenURL string
@@ -133,7 +134,7 @@ func (h *Handler) state(w http.ResponseWriter) {
 	entries, _ := h.vault.List()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"config": h.routes.Config(), "config_path": h.routes.Path(), "models": h.catalog.Models(),
-		"catalog": h.catalog.Status(), "providers": provider.BuiltinStatusWithEnv(provider.EnvMap(h.routes.Config().ProviderEnv), h.vault.Get), "credentials": entries,
+		"catalog": h.catalog.Status(), "providers": provider.BuiltinStatusWithManifest(provider.EnvMap(h.routes.Config().ProviderEnv), h.config.FreeModels, h.vault.Get), "credentials": entries,
 		"health": h.health.Snapshot(), "summary": h.health.Summary(), "health_probe": h.probes.Snapshot(), "runtime": h.runtimeState(),
 	})
 }

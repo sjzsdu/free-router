@@ -1,0 +1,325 @@
+formula = "discover-free-models"
+description = "并发核验各 Provider 的免费模型，并生成 free-router 使用的版本化模型清单。"
+version = 1
+type = "workflow"
+
+[preflight]
+
+[[preflight.checks]]
+type = "command"
+name = "go"
+command = "go"
+message = "需要 Go 来验证生成的模型清单。"
+
+[[preflight.checks]]
+type = "git"
+name = "repository"
+require_repo = true
+message = "请在 free-router 仓库中运行此 Formula。"
+
+[[preflight.checks]]
+type = "path"
+name = "manifest-directory"
+path = "internal/provider"
+message = "找不到 internal/provider，请在 free-router 仓库根目录运行。"
+
+# 所有 research-* 步骤无相互依赖，Formula 运行时会并发执行。
+# 每个步骤只负责一个 Provider，避免某个平台超时拖住其他数据源。
+
+[[steps]]
+id = "capture-run-time"
+title = "记录本次核验时间"
+execution = "script"
+[steps.script]
+command = ["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"]
+format = "text"
+timeout = "10s"
+idempotent = true
+[steps.validate]
+format = "json"
+required = ["exit_code", "stdout", "stderr"]
+
+[[steps]]
+id = "research-openrouter"
+title = "核验 OpenRouter 免费模型"
+description = """
+以 Formula 实际运行时刻为准调研 openrouter。只使用官网文档、官方价格页或官方 API 响应作为证据；识别无需付费、长期免费、试用额度三者的区别。输出 ONLY compact JSON，字段为 provider、policy、free_basis、billing_warning、source_urls、models、notes。policy 只能是 inventory|zero-price|all-listed|unverified。models 每项可包含 id,name,type,functions,context_length,max_output_tokens,input_modalities,output_modalities,supported_parameters,supported_endpoints,free_basis,source_urls,verified_at,pricing。pricing 包含 prompt 和 completion；未知时留空，禁止把免费额度写成零价格。verified_at 使用实际核验时刻。没有可靠证据时 models=[] 且 policy=unverified，禁止猜测。
+"""
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "billing_warning", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-groq"
+title = "核验 Groq 免费模型"
+description = "以 Formula 实际运行时刻为准调研 groq。只使用官方证据。输出 ONLY compact JSON：{\"provider\":\"groq\",\"policy\":\"inventory|zero-price|all-listed|unverified\",\"free_basis\":\"...\",\"billing_warning\":\"\",\"source_urls\":[],\"models\":[],\"notes\":\"...\"}。models 尽量补齐能力、模态、上下文、pricing 和官方证据，并用实际核验时刻填写 verified_at；未知价格留空，免费额度不得写成零价格；无可靠证据时 policy=unverified，禁止猜测。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "billing_warning", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-cerebras"
+title = "核验 Cerebras 免费模型"
+description = "以 Formula 实际运行时刻为准调研 cerebras。只使用官方证据，输出与 groq 步骤相同的 compact JSON 契约且 provider=cerebras；models 尽量补齐能力、模态、上下文和证据，无可靠证据时 policy=unverified，禁止猜测。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-gemini"
+title = "核验 Gemini 免费模型"
+description = "以 Formula 实际运行时刻为准调研 gemini。只使用官方证据，输出与 groq 步骤相同的 compact JSON 契约且 provider=gemini；注意区分模型存在、OpenAI 兼容端点可调用、免费层可调用，无可靠证据时 policy=unverified。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-github-models"
+title = "核验 GitHub Models 免费模型"
+description = "以 Formula 实际运行时刻为准调研 github-models。只使用官方证据，输出与 groq 步骤相同的 compact JSON 契约且 provider=github-models；无可靠证据时 policy=unverified，禁止猜测。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-pollinations"
+title = "核验 Pollinations 免费模型"
+description = "以 Formula 实际运行时刻为准调研 pollinations。只使用官方证据，输出与 groq 步骤相同的 compact JSON 契约且 provider=pollinations；无可靠证据时 policy=unverified，禁止猜测。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-huggingface"
+title = "核验 Hugging Face Router 免费模型"
+description = "以 Formula 实际运行时刻为准调研 huggingface。只使用官方证据，输出与 groq 步骤相同的 compact JSON 契约且 provider=huggingface；区分免费额度与永久零价模型，无可靠证据时 policy=unverified。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-nvidia"
+title = "核验 NVIDIA 免费模型"
+description = "以 Formula 实际运行时刻为准调研 nvidia。只使用官方证据，输出与 groq 步骤相同的 compact JSON 契约且 provider=nvidia；无可靠证据时 policy=unverified，禁止猜测。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-mistral"
+title = "核验 Mistral 免费模型"
+description = "以 Formula 实际运行时刻为准调研 mistral。只使用官方证据，输出与 groq 步骤相同的 compact JSON 契约且 provider=mistral；无可靠证据时 policy=unverified，禁止猜测。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-sambanova"
+title = "核验 SambaNova 免费模型"
+description = "以 Formula 实际运行时刻为准调研 sambanova。只使用官方证据，输出与 groq 步骤相同的 compact JSON 契约且 provider=sambanova；无可靠证据时 policy=unverified，禁止猜测。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-ollama-cloud"
+title = "核验 Ollama Cloud 免费模型"
+description = "以 Formula 实际运行时刻为准调研 ollama-cloud。只使用官方证据，输出与 groq 步骤相同的 compact JSON 契约且 provider=ollama-cloud；无可靠证据时 policy=unverified，禁止猜测。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-modelscope"
+title = "核验 ModelScope 免费模型"
+description = "以 Formula 实际运行时刻为准调研 modelscope。只使用官方证据，输出与 groq 步骤相同的 compact JSON 契约且 provider=modelscope；无可靠证据时 policy=unverified，禁止猜测。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-xiaomi-mimo"
+title = "核验 Xiaomi MiMo 免费模型"
+description = "以 Formula 实际运行时刻为准调研 xiaomi-mimo。只使用官方证据，输出与 groq 步骤相同的 compact JSON 契约且 provider=xiaomi-mimo；赠送金或限时额度不得标成长期免费，无可靠证据时 policy=unverified。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-dashscope"
+title = "核验阿里云百炼免费模型"
+description = "以 Formula 实际运行时刻为准调研 dashscope。只使用官方证据，输出与 groq 步骤相同的 compact JSON 契约且 provider=dashscope；区分新人额度、限时免费和长期免费，无可靠证据时 policy=unverified。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-volcengine-ark"
+title = "核验火山方舟免费模型"
+description = "以 Formula 实际运行时刻为准调研 volcengine-ark。只使用官方证据，输出与 groq 步骤相同的 compact JSON 契约且 provider=volcengine-ark；无可靠证据时 policy=unverified，禁止猜测。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-baichuan"
+title = "核验百川免费模型"
+description = "以 Formula 实际运行时刻为准调研 baichuan。只使用官方证据，输出与 groq 步骤相同的 compact JSON 契约且 provider=baichuan；无可靠证据时 policy=unverified，禁止猜测。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-bigmodel"
+title = "核验智谱 BigModel 免费模型"
+description = "以 Formula 实际运行时刻为准调研 bigmodel。只使用官方证据，输出与 groq 步骤相同的 compact JSON 契约且 provider=bigmodel；优先给出具体模型 ID，不要只根据名称包含 flash 推断，无可靠证据时 policy=unverified。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-qianfan"
+title = "核验百度千帆免费模型"
+description = "以 Formula 实际运行时刻为准调研 qianfan。只使用官方证据，输出与 groq 步骤相同的 compact JSON 契约且 provider=qianfan；无可靠证据时 policy=unverified，禁止猜测。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-siliconflow"
+title = "核验 SiliconFlow 免费模型"
+description = "以 Formula 实际运行时刻为准调研 siliconflow。只使用官方证据，输出与 groq 步骤相同的 compact JSON 契约且 provider=siliconflow；必须核对平台免费标识或价格，不以旧名单为证据，无可靠证据时 policy=unverified。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-zai"
+title = "核验 Z.ai 免费模型"
+description = "以 Formula 实际运行时刻为准调研 zai。只使用官方证据，输出与 groq 步骤相同的 compact JSON 契约且 provider=zai；无可靠证据时 policy=unverified，禁止猜测。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-cloudflare"
+title = "核验 Cloudflare Workers AI 免费模型"
+description = "以 Formula 实际运行时刻为准调研 cloudflare。只使用官方证据，输出与 groq 步骤相同的 compact JSON 契约且 provider=cloudflare；说明免费额度是 Provider 级额度还是模型零价，无可靠证据时 policy=unverified。"
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["provider", "policy", "free_basis", "source_urls", "models", "notes"]
+
+[[steps]]
+id = "research-custom-candidates"
+title = "发现新的免费 Provider"
+description = """
+以 Formula 实际运行时刻为准，从官方来源寻找 free-router 尚未内置、但提供 OpenAI 兼容 API 且存在长期免费模型或明确免费额度的 Provider。输出 ONLY compact JSON：{"candidates":[{"id":"...","base_url":"...","register_url":"...","api_key_env":"...","free_basis":"...","source_urls":["..."],"models":[]}],"notes":"..."}。排除必须自托管的服务、来路不明的中转站和没有官方免费证据的平台。
+"""
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+required = ["candidates", "notes"]
+
+[[steps]]
+id = "build-manifest"
+title = "合并免费模型清单"
+depends_on = ["capture-run-time", "research-openrouter", "research-groq", "research-cerebras", "research-gemini", "research-github-models", "research-pollinations", "research-huggingface", "research-nvidia", "research-mistral", "research-sambanova", "research-ollama-cloud", "research-modelscope", "research-xiaomi-mimo", "research-dashscope", "research-volcengine-ark", "research-baichuan", "research-bigmodel", "research-qianfan", "research-siliconflow", "research-zai", "research-cloudflare", "research-custom-candidates"]
+input_context = ["capture-run-time.stdout", "research-openrouter", "research-groq", "research-cerebras", "research-gemini", "research-github-models", "research-pollinations", "research-huggingface", "research-nvidia", "research-mistral", "research-sambanova", "research-ollama-cloud", "research-modelscope", "research-xiaomi-mimo", "research-dashscope", "research-volcengine-ark", "research-baichuan", "research-bigmodel", "research-qianfan", "research-siliconflow", "research-zai", "research-cloudflare", "research-custom-candidates"]
+description = """
+把所有 Provider 报告合并为 internal/provider/free-models.json。使用 capture-run-time.stdout 的值作为 generated_at，并作为所有模型的 verified_at。保留额度耗尽、转入计费等 billing_warning。不要补写上游报告没有证据支持的模型。冲突时采用更保守结论；无可靠免费证据的 Provider 使用 policy=unverified、models=[]。只有 OpenRouter 这类 API 明确返回逐模型零价格时才使用 zero-price；明确免费层覆盖清单中全部模型时可用 all-listed；有具体模型时使用 inventory。
+
+输出 ONLY JSON 数组，且只能有一个文件对象：
+[{"filename":"free-models.json","title":"Free model manifest","summary":"...","content":"{格式化后的 JSON 字符串}"}]
+
+content 的顶层契约：
+{"schema_version":1,"generated_at":"capture-run-time.stdout","providers":{"provider-id":{"policy":"inventory|zero-price|all-listed|unverified","free_basis":"...","billing_warning":"...","source_urls":["官方 URL"],"models":[{"id":"上游精确 ID","name":"...","type":"normal|embedding|image|audio|video|rerank|moderation","functions":["chat|chat-tools|image-understanding|image-generation|video-understanding|video-generation|audio-understanding|speech-to-text|text-to-speech|embedding|rerank|moderation"],"context_length":0,"max_output_tokens":0,"input_modalities":[],"output_modalities":[],"supported_parameters":[],"supported_endpoints":[],"free_basis":"...","source_urls":["..."],"verified_at":"capture-run-time.stdout","pricing":{"prompt":"","completion":""}}]}}}
+
+providers 必须包含当前 21 个内置 Provider。不要把 research-custom-candidates 直接写进清单；在 summary 中只报告候选，待代码增加连接配置后再纳入。
+"""
+[steps.agent]
+name = "planner"
+[steps.validate]
+format = "json"
+min_items = 1
+item_required = ["filename", "title", "summary", "content"]
+
+[[steps]]
+id = "write-manifest"
+title = "写入免费模型清单"
+depends_on = ["build-manifest"]
+execution = "tool"
+[steps.tool]
+name = "write_files"
+[steps.tool.write_files]
+source = "build-manifest"
+root = "internal"
+dir_name = "provider"
+[steps.validate]
+format = "json"
+required = ["directory", "files"]
+
+[[steps]]
+id = "validate-manifest"
+title = "验证免费模型清单"
+depends_on = ["write-manifest"]
+execution = "script"
+[steps.script]
+command = ["go", "run", ".", "validate-model-data", "internal/provider/free-models.json"]
+format = "text"
+timeout = "5m"
+idempotent = true
+[steps.validate]
+format = "json"
+required = ["exit_code", "stdout", "stderr"]
+
+[[steps]]
+id = "report"
+title = "报告清单更新结果"
+depends_on = ["validate-manifest", "research-custom-candidates"]
+input_context = ["validate-manifest.stdout", "research-custom-candidates"]
+description = "简要报告清单中的 Provider/模型数量、验证结果、新 Provider 候选和需要人工复核的风险。不要重复原始 JSON 或日志。"
+[steps.agent]
+name = "reporter"
