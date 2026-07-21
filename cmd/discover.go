@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"sort"
 	"time"
@@ -32,16 +33,21 @@ type modelDiscoveryOutput struct {
 
 func addDiscoveryCommand(root *cobra.Command, opts *options) {
 	root.AddCommand(&cobra.Command{
-		Use:    "discover-model-data",
+		Use:    "discover-model-data [provider]",
 		Short:  "Discover and verify models for the maintenance Formula",
 		Hidden: true,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return discoverModelData(cmd.Context(), *opts, cmd.OutOrStdout())
+		Args:   cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			target := "all"
+			if len(args) == 1 {
+				target = args[0]
+			}
+			return discoverModelData(cmd.Context(), *opts, target, cmd.OutOrStdout())
 		},
 	})
 }
 
-func discoverModelData(ctx context.Context, opts options, output io.Writer) error {
+func discoverModelData(ctx context.Context, opts options, target string, output io.Writer) error {
 	vault := credentials.New(opts.credentials)
 	envMap, err := configuredEnvMap(opts)
 	if err != nil {
@@ -51,8 +57,13 @@ func discoverModelData(ctx context.Context, opts options, output io.Writer) erro
 	if err != nil {
 		return err
 	}
+	if target != "all" {
+		if _, ok := registry.Get(target); !ok {
+			return fmt.Errorf("provider %q is not configured; configure its API key before targeted discovery", target)
+		}
+	}
 	store := catalog.New(registry, "", catalogHTTPClient())
-	models, fetchFailures := store.DiscoverFromProviders(ctx)
+	models, fetchFailures := store.DiscoverFromProviders(ctx, target)
 	byProvider := make(map[string][]provider.DiscoveredModel)
 	probeFailures := make([]modelProbeFailure, 0)
 	for _, model := range models {

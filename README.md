@@ -318,9 +318,13 @@ Formula 结束报告会区分 `attempted_at` 和真正发生数据变化的 `gen
 
 Formula 不需要日期参数；发生有效数据变化时，会使用实际运行时刻更新 `generated_at`，并为新发现且缺少时间的模型补上 `verified_at`。
 
+`provider` 变量默认为 `all`。指定 Provider 后，官方目录读取、能力探测和 inventory 合并都只作用于该 Provider，其他 Provider 的清单保持不变；目标 Provider 必须已经配置 API Key。
+
 ```bash
 tt formula validate .tt/formulas/discover-free-models.toml
 tt formula run discover-free-models --dir .tt/formulas
+tt formula run discover-free-models --dir .tt/formulas --var provider=gemini
+make discover-free-models PROVIDER=gemini
 go run . validate-model-data internal/provider/free-models.json
 make test-formula
 ```

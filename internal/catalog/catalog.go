@@ -410,13 +410,26 @@ func (s *Store) Probe(ctx context.Context, providerID string) (int, error) {
 
 // DiscoverFromProviders fetches fresh upstream catalogs for Formula maintenance.
 // It updates only this in-memory Store and never writes the runtime model cache.
-func (s *Store) DiscoverFromProviders(ctx context.Context) ([]Model, []DiscoveryFailure) {
+func (s *Store) DiscoverFromProviders(ctx context.Context, providerIDs ...string) ([]Model, []DiscoveryFailure) {
 	type result struct {
 		provider string
 		models   []Model
 		err      error
 	}
 	providers := s.registry.All()
+	if len(providerIDs) > 0 && providerIDs[0] != "" && providerIDs[0] != "all" {
+		targets := make(map[string]struct{}, len(providerIDs))
+		for _, providerID := range providerIDs {
+			targets[providerID] = struct{}{}
+		}
+		selected := make([]provider.Spec, 0, len(providerIDs))
+		for _, spec := range providers {
+			if _, ok := targets[spec.ID]; ok {
+				selected = append(selected, spec)
+			}
+		}
+		providers = selected
+	}
 	results := make(chan result, len(providers))
 	for _, spec := range providers {
 		go func(spec provider.Spec) {

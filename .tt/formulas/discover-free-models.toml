@@ -1,7 +1,10 @@
 formula = "discover-free-models"
-description = "并发核验全部内置 Provider 的免费模型，并生成 free-router 使用的版本化模型清单。"
-version = 5
+description = "并发核验全部或指定 Provider 的免费模型，并生成 free-router 使用的版本化模型清单。"
+version = 6
 type = "workflow"
+
+[vars]
+provider = { description = "只更新指定 Provider；默认 all 更新全部 Provider。", default = "all" }
 
 [preflight]
 
@@ -60,28 +63,44 @@ format = "json"
 required = ["stdout"]
 
 [[steps]]
-id = "research-providers"
-title = "并发核验各 Provider 免费模型"
+id = "select-providers"
+title = "选择本次更新的 Provider"
 depends_on = ["list-providers"]
+execution = "script"
+idempotent = true
+
+[steps.script]
+command = ["sh", "scripts/filter-free-model-providers.sh", "{{list-providers.stdout}}", "{{provider}}"]
+format = "json"
+timeout = "30s"
+
+[steps.validate]
+format = "json"
+required = ["stdout"]
+
+[[steps]]
+id = "research-providers"
+title = "并发核验所选 Provider 免费模型"
+depends_on = ["select-providers"]
 
 [steps.loop]
-for_each = "list-providers.stdout"
-var = "provider"
+for_each = "select-providers.stdout"
+var = "provider_spec"
 parallel = true
 max_concurrency = 6
 
 [[steps.loop.body]]
 id = "research-provider"
-title = "核验 {{provider.id}} 免费模型"
+title = "核验 {{provider_spec.id}} 免费模型"
 description = """
-以 Formula 实际运行时刻为准调研 {{provider.id}}。当前内置资料：tier={{provider.tier}}，free_kind={{provider.free_kind}}，register_url={{provider.register_url}}。
+以 Formula 实际运行时刻为准调研 {{provider_spec.id}}。当前内置资料：tier={{provider_spec.tier}}，free_kind={{provider_spec.free_kind}}，register_url={{provider_spec.register_url}}。
 
 这是只读调研步骤：不得创建或修改工作区文件，不得安装 Skill、依赖或工具，不得执行注册、登录、写 API 等外部操作；只能在最终响应中返回指定 JSON。
 
 只使用 Provider 官网文档、官方价格页或官方 API 响应作为证据。必须区分永久零价、Provider 免费层、赠送额度和限时试用；模型存在不代表免费，也不代表 OpenAI 兼容端点可调用。无法从官方来源确认时使用 policy=unverified、models=[]，禁止猜测。
 
-只能返回当前 Provider 的一个 JSON 对象；provider 必须严格等于 "{{provider.id}}"，policy 必须选择一个实际值，禁止原样返回候选串。输出 ONLY compact JSON：
-{"provider":"{{provider.id}}","policy":"inventory|zero-price|all-listed|unverified","free_basis":"...","billing_warning":"","source_urls":["官方 URL"],"models":[],"notes":"..."}
+只能返回当前 Provider 的一个 JSON 对象；provider 必须严格等于 "{{provider_spec.id}}"，policy 必须选择一个实际值，禁止原样返回候选串。输出 ONLY compact JSON：
+{"provider":"{{provider_spec.id}}","policy":"inventory|zero-price|all-listed|unverified","free_basis":"...","billing_warning":"","source_urls":["官方 URL"],"models":[],"notes":"..."}
 
 有可靠的具体免费模型时使用 inventory。每个模型尽量提供 id、name、type、functions、context_length、max_output_tokens、input_modalities、output_modalities、supported_parameters、supported_endpoints、free_basis、source_urls、pricing。functions 只能使用 chat、chat-tools、image-understanding、image-generation、video-understanding、video-generation、audio-understanding、speech-to-text、text-to-speech、embedding、rerank、moderation。pricing 未知时留空；免费额度不得写成零价格。
 """
@@ -96,12 +115,12 @@ required = ["provider", "policy", "models"]
 [[steps]]
 id = "normalize-research"
 title = "校验并归一化 Provider 调研结果"
-depends_on = ["list-providers", "research-providers"]
+depends_on = ["select-providers", "research-providers"]
 execution = "script"
 idempotent = true
 
 [steps.script]
-command = ["sh", "scripts/normalize-free-model-research.sh", "{{list-providers.stdout}}", "{{research-providers}}"]
+command = ["sh", "scripts/normalize-free-model-research.sh", "{{select-providers.stdout}}", "{{research-providers}}"]
 format = "text"
 timeout = "30s"
 
@@ -113,10 +132,11 @@ item_required = ["provider", "policy", "models", "accepted"]
 [[steps]]
 id = "discover-callable-models"
 title = "从官方接口发现并验证可调用模型"
+depends_on = ["select-providers"]
 execution = "script"
 
 [steps.script]
-command = ["go", "run", ".", "discover-model-data"]
+command = ["go", "run", ".", "discover-model-data", "{{provider}}"]
 format = "text"
 timeout = "45m"
 
@@ -130,6 +150,8 @@ title = "发现新的免费 Provider"
 depends_on = ["normalize-research"]
 input_context = ["list-providers.stdout"]
 description = """
+本次更新目标是 {{provider}}。如果它不等于 all，不要执行全局 Provider 搜索，直接返回 {"candidates":[],"notes":"targeted provider run; global provider discovery skipped"}。
+
 以 Formula 实际运行时刻为准，从官方来源寻找 list-providers.stdout 尚未包含、但提供 OpenAI 兼容 API 且存在长期免费模型或明确免费额度的 Provider。排除已经内置的 Provider、必须自托管的服务、来路不明的中转站和没有官方免费证据的平台。
 
 这是只读调研步骤：不得创建或修改工作区文件，不得安装 Skill、依赖或工具，不得执行注册、登录、写 API 等外部操作；只能在最终响应中返回指定 JSON。
@@ -217,7 +239,7 @@ execution = "script"
 idempotent = true
 
 [steps.script]
-command = ["sh", "scripts/apply-probed-inventory.sh", "{{build-manifest}}", "{{discover-callable-models}}", "{{capture-run-time.timestamp}}"]
+command = ["sh", "scripts/apply-probed-inventory.sh", "{{build-manifest}}", "{{discover-callable-models}}", "{{capture-run-time.timestamp}}", "{{provider}}"]
 format = "text"
 timeout = "30s"
 
@@ -245,10 +267,10 @@ execution = "script"
 idempotent = true
 
 [steps.script]
-command = ["jq", "-c", "--arg", "discovery", "{{normalize-new-providers}}", "--arg", "research", "{{normalize-research}}", "--arg", "probed", "{{discover-callable-models}}", "--arg", "write", "{{write-manifest}}", "--arg", "attempted_at", "{{capture-run-time.timestamp}}", ". as $manifest | ($discovery | fromjson | if type == \"string\" then fromjson else . end) as $new | ($research | fromjson | if type == \"string\" then fromjson else . end) as $checked | ($probed | fromjson | if type == \"string\" then fromjson else . end) as $verified | ($write | fromjson | if type == \"string\" then fromjson else . end) as $saved | {schema_version, generated_at, attempted_at:$attempted_at, manifest_changed:($saved.changed // false), provider_count:(.providers | length), model_count:([.providers[] | (.models // [])] | flatten | length), policies:(reduce (.providers[] | .policy) as $policy ({}; .[$policy] = ((.[$policy] // 0) + 1))), callable_provider_count:(($verified.providers // []) | length), fetch_failure_count:(($verified.fetch_failures // []) | length), probe_failure_count:(($verified.probe_failures // []) | length), accepted_research_count:([$checked[] | select(.accepted == true)] | length), rejected_research_count:([$checked[] | select(.accepted != true)] | length), rejected_provider_ids:[$checked[] | select(.accepted != true) | .provider], new_provider_candidates:(($new.candidates // []) | map(.id)), rejected_candidate_ids:($new.rejected_candidate_ids // []), discovery_notes:($new.notes // \"\")}", "internal/provider/free-models.json"]
+command = ["jq", "-c", "--arg", "target_provider", "{{provider}}", "--arg", "discovery", "{{normalize-new-providers}}", "--arg", "research", "{{normalize-research}}", "--arg", "probed", "{{discover-callable-models}}", "--arg", "write", "{{write-manifest}}", "--arg", "attempted_at", "{{capture-run-time.timestamp}}", ". as $manifest | ($discovery | fromjson | if type == \"string\" then fromjson else . end) as $new | ($research | fromjson | if type == \"string\" then fromjson else . end) as $checked | ($probed | fromjson | if type == \"string\" then fromjson else . end) as $verified | ($write | fromjson | if type == \"string\" then fromjson else . end) as $saved | {schema_version, generated_at, attempted_at:$attempted_at, target_provider:$target_provider, manifest_changed:($saved.changed // false), provider_count:(.providers | length), model_count:([.providers[] | (.models // [])] | flatten | length), policies:(reduce (.providers[] | .policy) as $policy ({}; .[$policy] = ((.[$policy] // 0) + 1))), callable_provider_count:(($verified.providers // []) | length), fetch_failure_count:(($verified.fetch_failures // []) | length), probe_failure_count:(($verified.probe_failures // []) | length), accepted_research_count:([$checked[] | select(.accepted == true)] | length), rejected_research_count:([$checked[] | select(.accepted != true)] | length), rejected_provider_ids:[$checked[] | select(.accepted != true) | .provider], new_provider_candidates:(($new.candidates // []) | map(.id)), rejected_candidate_ids:($new.rejected_candidate_ids // []), discovery_notes:($new.notes // \"\")}", "internal/provider/free-models.json"]
 format = "text"
 timeout = "30s"
 
 [steps.validate]
 format = "json"
-required = ["schema_version", "generated_at", "attempted_at", "manifest_changed", "provider_count", "model_count", "policies", "accepted_research_count", "rejected_research_count", "rejected_provider_ids", "new_provider_candidates", "rejected_candidate_ids"]
+required = ["schema_version", "generated_at", "attempted_at", "target_provider", "manifest_changed", "provider_count", "model_count", "policies", "accepted_research_count", "rejected_research_count", "rejected_provider_ids", "new_provider_candidates", "rejected_candidate_ids"]

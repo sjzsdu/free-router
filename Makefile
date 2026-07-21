@@ -66,7 +66,7 @@ run: web-build ## Run the service
 	$(GO) run -ldflags="$(LDFLAGS)" . serve
 
 discover-free-models: ## Concurrently research providers and update the free model manifest
-	tt formula run discover-free-models --dir .tt/formulas
+	tt formula run discover-free-models --dir .tt/formulas --var provider=$(or $(PROVIDER),all)
 
 validate-free-models: ## Validate the generated free model manifest
 	$(GO) run . validate-model-data internal/provider/free-models.json

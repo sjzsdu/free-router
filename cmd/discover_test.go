@@ -39,7 +39,7 @@ func TestDiscoverModelDataKeepsOnlySuccessfulCapabilities(t *testing.T) {
 	defer upstream.Close()
 
 	opts := defaultOptions()
-	opts.providers = `[{"id":"test","base_url":"` + upstream.URL + `","no_auth":true}]`
+	opts.providers = `[{"id":"test","base_url":"` + upstream.URL + `","no_auth":true},{"id":"must-not-be-called","base_url":"http://127.0.0.1:1","no_auth":true}]`
 	dir := t.TempDir()
 	opts.config = filepath.Join(dir, "config.json")
 	opts.credentials = filepath.Join(dir, "credentials.json")
@@ -48,7 +48,7 @@ func TestDiscoverModelDataKeepsOnlySuccessfulCapabilities(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := discoverModelData(context.Background(), opts, &output); err != nil {
+	if err := discoverModelData(context.Background(), opts, "test", &output); err != nil {
 		t.Fatal(err)
 	}
 	var result modelDiscoveryOutput
@@ -58,11 +58,32 @@ func TestDiscoverModelDataKeepsOnlySuccessfulCapabilities(t *testing.T) {
 	if len(result.Providers) != 1 || len(result.Providers[0].Models) != 1 {
 		t.Fatalf("result=%#v", result)
 	}
+	if len(result.FetchFailures) != 0 {
+		t.Fatalf("targeted discovery contacted another provider: %#v", result.FetchFailures)
+	}
 	model := result.Providers[0].Models[0]
 	if model.ID != "working" || len(model.Functions) != 1 || model.Functions[0] != "chat" {
 		t.Fatalf("model=%#v", model)
 	}
 	if len(result.ProbeFailures) != 2 {
 		t.Fatalf("probe failures=%#v", result.ProbeFailures)
+	}
+}
+
+func TestDiscoverModelDataRejectsUnconfiguredTarget(t *testing.T) {
+	for _, key := range provider.SupportedKeyEnvs() {
+		t.Setenv(key, "")
+	}
+	opts := defaultOptions()
+	dir := t.TempDir()
+	opts.config = filepath.Join(dir, "config.json")
+	opts.credentials = filepath.Join(dir, "credentials.json")
+	opts.freeModels = filepath.Join(dir, "free-models.json")
+	if err := os.WriteFile(opts.freeModels, []byte(`{"schema_version":1,"generated_at":"test","providers":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := discoverModelData(context.Background(), opts, "gemini", &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected an unconfigured target error")
 	}
 }

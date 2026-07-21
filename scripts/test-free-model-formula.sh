@@ -6,6 +6,7 @@ normalize="$root/scripts/normalize-free-model-research.sh"
 build="$root/scripts/build-free-model-manifest.sh"
 normalize_candidates="$root/scripts/normalize-provider-candidates.sh"
 apply_probed="$root/scripts/apply-probed-inventory.sh"
+filter_providers="$root/scripts/filter-free-model-providers.sh"
 
 providers='[
   {"id":"groq","register_url":"https://console.groq.com/keys"},
@@ -17,6 +18,15 @@ research='[
   {"provider":"groq","policy":"all-listed","free_basis":"Free Plan quota.","source_urls":["https://console.groq.com/docs/rate-limits"],"models":[]},
   "{\"provider\":\"groq\",\"policy\":\"all-listed\",\"free_basis\":\"wrong iteration\",\"source_urls\":[\"https://console.groq.com/docs/rate-limits\"],\"models\":[]}{\"provider\":\"gemini\"}"
 ]'
+
+selected="$(sh "$filter_providers" "$providers" gemini)"
+test "$(printf '%s' "$selected" | jq 'length')" -eq 1
+test "$(printf '%s' "$selected" | jq -r '.[0].id')" = "gemini"
+test "$(sh "$filter_providers" "$providers" all | jq 'length')" -eq 3
+if sh "$filter_providers" "$providers" missing >/dev/null 2>&1; then
+  echo "unknown provider unexpectedly passed filtering" >&2
+  exit 1
+fi
 
 normalized="$(sh "$normalize" "$providers" "$research")"
 test "$(printf '%s' "$normalized" | jq 'length')" -eq 3
@@ -48,11 +58,16 @@ test "$(printf '%s' "$candidates" | jq -r '.candidates[0].id')" = "new-free"
 test "$(printf '%s' "$candidates" | jq -r '.rejected_candidate_ids[0]')" = "groq"
 
 probed='{"providers":[{"provider":"groq","models":[{"id":"verified-chat","functions":["chat"]}]}],"fetch_failures":[],"probe_failures":[]}'
-admitted="$(sh "$apply_probed" "$current" "$probed" "2026-07-22T00:00:00Z")"
+admitted="$(sh "$apply_probed" "$current" "$probed" "2026-07-22T00:00:00Z" all)"
 test "$(printf '%s' "$admitted" | jq -r '.providers.groq.policy')" = "inventory"
 test "$(printf '%s' "$admitted" | jq -r '.providers.groq.models[0].id')" = "verified-chat"
 test "$(printf '%s' "$admitted" | jq -r '.providers.groq.models[0].verified_at')" = "2026-07-22T00:00:00Z"
 test "$(printf '%s' "$admitted" | jq -r '.providers.gemini.policy')" = "unverified"
 test "$(printf '%s' "$admitted" | jq '.providers.gemini.models | length')" -eq 0
+
+targeted="$(sh "$apply_probed" "$current" '{"providers":[{"provider":"gemini","models":[{"id":"gemini-targeted","functions":["chat"]}]}]}' "2026-07-23T00:00:00Z" gemini)"
+test "$(printf '%s' "$targeted" | jq -r '.providers.gemini.models[0].id')" = "gemini-targeted"
+test "$(printf '%s' "$targeted" | jq -r '.providers.groq.policy')" = "all-listed"
+test "$(printf '%s' "$targeted" | jq '.providers.groq | has("models")')" = "false"
 
 printf 'free-model formula fixture tests passed\n'
