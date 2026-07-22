@@ -131,6 +131,33 @@ func TestManifestPricingMustBeNonNegativeNumericStrings(t *testing.T) {
 	}
 }
 
+func TestManifestDiscoveryStatusIsValidatedAndExposed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "free-models.json")
+	content := `{"schema_version":2,"generated_at":"test","providers":{"groq":{"models":[],"discovery_status":"discovery-failed","discovery_message":"official endpoint returned 403"}}}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status := BuiltinStatusWithManifest(DefaultEnvMap(), path)
+	for _, item := range status {
+		if item["id"] == "groq" {
+			if item["discovery_status"] != "discovery-failed" || item["discovery_message"] != "official endpoint returned 403" {
+				t.Fatalf("discovery reason not exposed: %#v", item)
+			}
+			return
+		}
+	}
+	t.Fatal("groq status not found")
+}
+
+func TestManifestRejectsUnknownDiscoveryStatus(t *testing.T) {
+	manifest := FreeModelManifest{SchemaVersion: 2, Providers: map[string]FreeProviderCatalog{
+		"groq": {Models: []DiscoveredModel{}, DiscoveryStatus: "maybe-free"},
+	}}
+	if err := ValidateFreeModelManifest(manifest); err == nil {
+		t.Fatal("unknown discovery status was accepted")
+	}
+}
+
 func TestCatalogAllIsSorted(t *testing.T) {
 	registry := &Registry{catalog: map[string]Spec{
 		"zeta": {ID: "zeta"}, "alpha": {ID: "alpha"}, "middle": {ID: "middle"},

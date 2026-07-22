@@ -20,11 +20,20 @@ jq -cn --arg current "$1" --arg research "$2" --arg timestamp "$3" '
     else . end;
   def compact_object:
     with_entries(select(.value != null and .value != "" and .value != []));
+  def discovery_status($result):
+    if (($result.models // []) | length) > 0 then "ready"
+    elif $result.accepted != true then "discovery-failed"
+    elif (($result.message // "") | contains("did not match the required schema")) then "validation-failed"
+    elif (($result.message // "") | contains("could not identify free models")) then "verification-failed"
+    elif (($result.message // "") | contains("no eligible free models")) then "confirmed-empty"
+    else "verification-failed" end;
   def entry_from($result):
     ({
       free_basis: $result.free_basis,
       billing_warning: $result.billing_warning,
       source_urls: $result.source_urls,
+      discovery_status: discovery_status($result),
+      discovery_message: $result.message,
       models: [$result.models[] | .verified_at = $timestamp] | sort_by(.id)
     } | compact_object);
 
@@ -37,10 +46,13 @@ jq -cn --arg current "$1" --arg research "$2" --arg timestamp "$3" '
   else
     (reduce $inventory.results[] as $result
       ($manifest.providers;
-       if $result.accepted == true and $result.authoritative == true and $result.abandoned == true then
-         del(.[$result.provider])
-       elif $result.accepted == true and $result.authoritative == true then
+       if $result.accepted == true and $result.authoritative == true then
          .[$result.provider] = entry_from($result)
+       elif $result.accepted != true then
+         .[$result.provider] = ((.[$result.provider] // {models:[]}) + {
+           discovery_status: discovery_status($result),
+           discovery_message: $result.message
+         } | compact_object)
        else
          .
        end)) as $providers |

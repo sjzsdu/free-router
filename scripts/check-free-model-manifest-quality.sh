@@ -49,7 +49,7 @@ jq -cn --arg current "$current" --arg candidate "$candidate" --arg inventory "$3
           elif $decision.accepted != true or $decision.authoritative != true then
             if $before == $after then "" else "provider changed after non-authoritative discovery failure" end
           elif $decision.abandoned == true then
-            if ($new.providers | has($id)) then "abandoned provider remains in candidate manifest" else "" end
+            if ($after|length) == 0 then "" else "abandoned provider retains models in candidate manifest" end
           elif $after != ([$decision.models[]?.id] | unique | sort) then
             "candidate inventory does not match authoritative discovery result"
           else ""

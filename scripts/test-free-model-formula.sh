@@ -10,6 +10,7 @@ filter_providers="$root/scripts/filter-free-model-providers.sh"
 resolve_inventory="$root/scripts/resolve-free-model-inventory.sh"
 quality_gate="$root/scripts/check-free-model-manifest-quality.sh"
 summarize="$root/scripts/summarize-free-model-run.sh"
+write_manifest="$root/scripts/write-free-model-manifest.sh"
 valid_candidate='{"valid":true,"error":"","provider_count":2,"model_count":2}'
 candidate_dir="$(mktemp -d)"
 trap 'rm -rf "$candidate_dir"' EXIT HUP INT TERM
@@ -82,14 +83,18 @@ test "$(printf '%s' "$unavailable" | jq -r '.results[0].accepted')" = "false"
 test "$(printf '%s' "$unavailable" | jq -r '.preserved_provider_ids[0]')" = "groq"
 
 unchanged="$(sh "$build" "$current" "$unavailable" "2026-07-21T00:00:00Z" "$candidate_dir/unchanged.json")"
-test "$(printf '%s' "$unchanged" | jq -r '.generated_at')" = "2026-07-20T00:00:00Z"
+test "$(printf '%s' "$unchanged" | jq -r '.generated_at')" = "2026-07-21T00:00:00Z"
 test "$(printf '%s' "$unchanged" | jq -r '.providers.groq.models[0].id')" = "verified-chat"
+test "$(printf '%s' "$unchanged" | jq -r '.providers.groq.discovery_status')" = "discovery-failed"
+test "$(printf '%s' "$unchanged" | jq -r '.providers.groq.discovery_message')" = "401 Unauthorized"
 
 updated="$(sh "$build" "$current" "$resolved" "2026-07-21T00:00:00Z" "$candidate_dir/updated.json")"
 test "$(printf '%s' "$updated" | jq -r '.generated_at')" = "2026-07-21T00:00:00Z"
 test "$(printf '%s' "$updated" | jq -r '.providers.groq.models[0].id')" = "groq-new"
 test "$(printf '%s' "$updated" | jq -r '.providers.gemini.models[0].id')" = "models/gemini-test"
 test "$(printf '%s' "$updated" | jq -r '.providers.gemini.models[0].verified_at')" = "2026-07-21T00:00:00Z"
+test "$(printf '%s' "$updated" | jq -r '.providers.pollinations.discovery_status')" = "validation-failed"
+test "$(printf '%s' "$updated" | jq '.providers.pollinations.models | length')" -eq 0
 
 gate="$(sh "$quality_gate" "$current" "$updated" "$resolved" "$valid_candidate" false)"
 test "$(printf '%s' "$gate" | jq -r '.approved')" = "true"
@@ -109,6 +114,15 @@ test "$(printf '%s' "$unselected_gate" | jq -r '.violations[0].provider')" = "ge
 invalid_gate="$(sh "$quality_gate" "$current" "$updated" "$resolved" '{"valid":false,"error":"provider test model bad has no functions"}' false)"
 test "$(printf '%s' "$invalid_gate" | jq -r '.approved')" = "false"
 test "$(printf '%s' "$invalid_gate" | jq -r '.candidate_valid')" = "false"
+
+status_target="$candidate_dir/status-target.json"
+printf '%s' "$current" > "$status_target"
+status_write="$(FREE_ROUTER_MANIFEST_TARGET="$status_target" FREE_ROUTER_ROOT="$root" sh "$write_manifest" "$candidate_dir/updated.json" false)"
+test "$(printf '%s' "$status_write" | jq -r '.applied')" = "false"
+test "$(printf '%s' "$status_write" | jq -r '.status_changed')" = "true"
+test "$(jq -r '.providers.groq.models[0].id' "$status_target")" = "verified-chat"
+test "$(jq -r '.providers.groq.discovery_status' "$status_target")" = "awaiting-approval"
+test "$(jq -r '.providers.pollinations.discovery_status' "$status_target")" = "validation-failed"
 
 large_models="$(jq -cn '[range(0;51) | {id:("model-" + tostring),functions:["chat"]}]')"
 large_candidate="$(jq -cn --argjson models "$large_models" '{schema_version:2,providers:{groq:{models:$models}}}')"

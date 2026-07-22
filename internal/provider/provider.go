@@ -44,6 +44,8 @@ type Spec struct {
 	FreeBasis           string            `json:"-"`
 	SourceURLs          []string          `json:"-"`
 	ManifestGeneratedAt string            `json:"-"`
+	DiscoveryStatus     string            `json:"-"`
+	DiscoveryMessage    string            `json:"-"`
 	RequiredEnvs        []string          `json:"-"`
 }
 
@@ -80,10 +82,12 @@ type FreeModelManifest struct {
 }
 
 type FreeProviderCatalog struct {
-	FreeBasis      string            `json:"free_basis,omitempty"`
-	SourceURLs     []string          `json:"source_urls,omitempty"`
-	Models         []DiscoveredModel `json:"models"`
-	BillingWarning string            `json:"billing_warning,omitempty"`
+	FreeBasis        string            `json:"free_basis,omitempty"`
+	SourceURLs       []string          `json:"source_urls,omitempty"`
+	Models           []DiscoveredModel `json:"models"`
+	BillingWarning   string            `json:"billing_warning,omitempty"`
+	DiscoveryStatus  string            `json:"discovery_status,omitempty"`
+	DiscoveryMessage string            `json:"discovery_message,omitempty"`
 }
 
 func loadFreeModelManifest(path string) (FreeModelManifest, error) {
@@ -126,6 +130,9 @@ func ValidateFreeModelManifest(manifest FreeModelManifest) error {
 		if strings.TrimSpace(providerID) == "" {
 			return errors.New("free model manifest contains an empty provider id")
 		}
+		if !validDiscoveryStatus(entry.DiscoveryStatus) {
+			return fmt.Errorf("provider %s has unsupported discovery_status %q", providerID, entry.DiscoveryStatus)
+		}
 		seen := make(map[string]bool)
 		for _, model := range entry.Models {
 			if strings.TrimSpace(model.ID) == "" {
@@ -157,6 +164,15 @@ func ValidateFreeModelManifest(manifest FreeModelManifest) error {
 		}
 	}
 	return nil
+}
+
+func validDiscoveryStatus(status string) bool {
+	switch status {
+	case "", "ready", "confirmed-empty", "discovery-failed", "validation-failed", "verification-failed", "awaiting-approval":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateManifestPrice(value string) error {
@@ -192,6 +208,8 @@ func applyFreeModelManifest(specs []Spec, manifest FreeModelManifest) []Spec {
 		result[index].FreeBasis = entry.FreeBasis
 		result[index].SourceURLs = append([]string(nil), entry.SourceURLs...)
 		result[index].ManifestGeneratedAt = manifest.GeneratedAt
+		result[index].DiscoveryStatus = entry.DiscoveryStatus
+		result[index].DiscoveryMessage = entry.DiscoveryMessage
 		if entry.BillingWarning != "" {
 			result[index].BillingWarning = entry.BillingWarning
 		}
@@ -480,12 +498,27 @@ func BuiltinStatusWithManifest(envMap EnvMap, manifestPath string, resolvers ...
 		if len(spec.DiscoveredModels) > 0 {
 			catalogStatus = "ready"
 		}
+		discoveryStatus := spec.DiscoveryStatus
+		discoveryMessage := spec.DiscoveryMessage
+		if manifestErr != nil {
+			discoveryStatus = "manifest-error"
+			discoveryMessage = manifestErr.Error()
+		} else if discoveryStatus == "" {
+			if len(spec.DiscoveredModels) > 0 {
+				discoveryStatus = "ready"
+				discoveryMessage = "Formula 清单已收录可路由模型"
+			} else {
+				discoveryStatus = "awaiting-discovery"
+				discoveryMessage = "当前清单尚未记录最近一次 Formula 发现结论"
+			}
+		}
 		result = append(result, map[string]any{
 			"id": spec.ID, "envs": effectiveEnvNames(spec, envMap), "matched_env": matchedEnv,
 			"requires": spec.RequiredEnvs, "missing_required": missingRequired,
 			"configured": configured, "source": source, "tier": spec.Tier, "free_kind": spec.FreeKind,
 			"billing_warning": spec.BillingWarning, "register_url": spec.RegisterURL, "oauth": spec.OAuth,
 			"catalog_status": catalogStatus, "formula_model_count": len(spec.DiscoveredModels), "free_basis": spec.FreeBasis, "source_urls": spec.SourceURLs,
+			"discovery_status": discoveryStatus, "discovery_message": discoveryMessage,
 			"model_discovery": spec.ModelDiscovery, "free_model_policy": spec.FreeModelPolicy,
 			"manifest_generated_at": spec.ManifestGeneratedAt, "manifest_error": errorString(manifestErr),
 		})

@@ -309,7 +309,7 @@ free-router onboard --force            # 明确覆盖已有配置
 1. `internal/provider/free-models.json` 是 Formula 产出的版本化数据文件，通过 Go Embed 随二进制发布；每个 Provider 只有经过官方证据确认的 `models[]`，不再存在 policy 或运行时 allowlist。
 2. 读取和缓存 Formula 模型不需要配置 API Key。API Key 只负责启用对应 Provider 的实际调用能力，不参与模型发现，也不会改变目录内容。
 3. 启动、保存凭据和 Admin 操作均不会请求 Provider `/models` 扩充目录。运行时代码只消费 Formula 数据，Provider 连接地址和鉴权逻辑仍留在 Go 代码中。
-4. `~/.free-router/models.json` 是带有 Formula `generated_at` 的本地目录缓存。模型调用或 Admin 探测失败后会立即从缓存删除，并记录模型元数据指纹；重启或 Formula 仅更新其他模型时都不会复活。
+4. `~/.free-router/models.json` 使用 Formula 模型目录的稳定内容指纹校验缓存。模型调用或 Admin 探测失败后会立即从缓存删除，并记录模型关键路由元数据指纹；重启或 Formula 仅更新描述、时间等非路由字段时都不会复活。
 5. 被隔离模型只有自身元数据发生变化，或用户显式重新检测并验证成功后才会恢复。单纯发布新的 `generated_at` 不会清空故障隔离。
 6. 可用 `--free-models FILE` 或 `FREE_ROUTER_FREE_MODELS` 临时加载外部清单，无需重新构建二进制。
 
@@ -319,11 +319,11 @@ free-router onboard --force            # 明确覆盖已有配置
 
 - `api`：官方 `/models` 是权威模型源；Formula 直接使用接口结果，并按官方零价字段或该 Provider 的免费套餐规则过滤。
 - `api-agent-filter`：官方 `/models` 提供权威 ID 候选集，专属 Agent 只负责根据官方价格页和免费额度说明筛选；Agent 不能创造接口未返回的 ID。
-- `agent`：Provider 没有可用的官方模型目录，由专属 Agent 从官方模型文档、价格页和 API 文档生成完整清单；Agent 无法得到可靠模型时，Formula 直接放弃并从清单删除该 Provider。
+- `agent`：Provider 没有可用的官方模型目录，由专属 Agent 从官方模型文档、价格页和 API 文档生成完整清单；Agent 无法得到可靠模型时，Formula 清空其候选模型并记录准确的失败状态与原因。
 
 模型发现不以本机是否配置 API Key 作为前置条件：公开接口会直接读取；需要鉴权的官方接口在有凭据时读取，没有凭据或遇到 401、403、429、超时等暂时失败时保留旧清单，避免一次网络或账户故障造成误删。`agent` 与 `api-agent-filter` 的调研只接受官方资料；其中 `api-agent-filter` 必须和本次官方接口结果取交集。
 
-写入前有确定性质量门禁：被选 Provider 只能按本次权威结果完整替换；未选择的 Provider 不得变化；官方接口失败的 Provider 必须保留；Agent 权威结果为空的 Provider 必须删除。Formula 最后由 `reporter` Agent 根据审计数据生成 Markdown，列出官方接口更新、Agent 更新、放弃项、接口失败保留项及模型数量变化。通过门禁后 Formula 会直接更新 `internal/provider/free-models.json` 和 `generated_at`。
+写入前有确定性质量门禁：被选 Provider 只能按本次权威结果完整替换；未选择的 Provider 不得变化；官方接口失败的 Provider 必须保留原模型；Agent 权威结果为空时模型数组必须为空。每个 Provider 同时保存 `discovery_status` 与 `discovery_message`，区分发现失败、结果校验失败、免费属性待确认、确认无符合条件模型和等待质量门禁准入。即使模型变化被门禁拒绝，也只更新这些诊断字段，不改已准入模型。Formula 最后由 `reporter` Agent 根据审计数据生成 Markdown。
 
 Formula 不需要日期参数；发生有效数据变化时，会使用实际运行时刻更新 `generated_at`，并为新发现且缺少时间的模型补上 `verified_at`。
 

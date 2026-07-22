@@ -1,6 +1,6 @@
 formula = "discover-free-models"
 description = "并发核验全部或指定 Provider 的免费模型，并生成 free-router 使用的版本化模型清单。"
-version = 15
+version = 16
 type = "workflow"
 
 [vars]

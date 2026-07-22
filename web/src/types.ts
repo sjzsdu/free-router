@@ -69,6 +69,8 @@ export interface ProviderStatus {
   free_basis?: string
   source_urls?: string[]
   catalog_status?: 'ready' | 'empty' | string
+  discovery_status?: 'ready' | 'confirmed-empty' | 'discovery-failed' | 'validation-failed' | 'verification-failed' | 'awaiting-approval' | 'awaiting-discovery' | 'manifest-error' | string
+  discovery_message?: string
   formula_model_count?: number
   manifest_generated_at?: string
   manifest_error?: string
