@@ -65,8 +65,8 @@ uninstall: ## Remove the installed binary
 run: web-build ## Run the service
 	$(GO) run -ldflags="$(LDFLAGS)" . serve
 
-discover-free-models: ## Concurrently research providers and update the free model manifest
-	tt formula run discover-free-models --dir .tt/formulas --var provider=$(or $(PROVIDER),all)
+discover-free-models: ## Research providers and safely update the free model manifest
+	tt formula run discover-free-models --dir .tt/formulas --var provider=$(or $(PROVIDER),all) --var allow_large_changes=$(or $(ALLOW_LARGE_CHANGES),false)
 
 validate-free-models: ## Validate the generated free model manifest
 	$(GO) run . validate-model-data internal/provider/free-models.json

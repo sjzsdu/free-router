@@ -40,7 +40,7 @@ const pageInfo: Record<Page, { title: string; subtitle: string }> = {
   overview: { title: '运行概览', subtitle: '服务、模型目录和路由健康状态' },
   routes: { title: '路由策略', subtitle: '配置固定能力名称的 fallback 优先级' },
   models: { title: '模型目录', subtitle: '浏览缓存模型、能力元数据和健康状态' },
-  providers: { title: '免费源', subtitle: '管理凭据、连接状态和 Formula 准入目录' },
+  providers: { title: '免费源', subtitle: '分别查看 Formula 可信目录、凭据和连接状态' },
   system: { title: '系统状态', subtitle: '查看守护进程、缓存和本地配置位置' },
 }
 
@@ -273,7 +273,7 @@ function Overview({ state, runtime, models, healthMap, navigate }: { state: AppS
       </article>
     </section>
 
-    <section className="panel catalog-strip"><div><div className="catalog-icon"><Database size={20} /></div><div><strong>模型目录来自 Formula 准入清单</strong><p>运行时不会访问 Provider 的模型目录；调用失败会从本机缓存删除。</p></div></div><div><span>最后更新</span><strong>{formatDate(state.catalog.updated_at)}</strong></div><div><span>淘汰记录</span><strong>{state.summary.failed} 个模型功能</strong></div></section>
+    <section className="panel catalog-strip"><div><div className="catalog-icon"><Database size={20} /></div><div><strong>模型目录只来自 Formula 可信清单</strong><p>运行时不会发现或追加模型；调用失败会从本机缓存删除。</p></div></div><div><span>最后更新</span><strong>{formatDate(state.catalog.updated_at)}</strong></div><div><span>淘汰记录</span><strong>{state.summary.failed} 个模型功能</strong></div></section>
   </div>
 }
 
@@ -411,8 +411,8 @@ function ProviderCard({ provider, modelCount, saved, refresh, toast }: { provide
     setBusy('test')
     try {
       const result = await api.testProvider(provider.id)
-      setProbe({ status: 'healthy', models: result.models, latency: result.latency_ms })
-      toast({ message: `${provider.id} 连接正常，发现 ${result.models} 个模型` })
+      setProbe({ status: 'healthy', models: result.formula_models, latency: result.latency_ms })
+      toast({ message: `${provider.id} 连接正常，${result.formula_models} 个 Formula 模型仍在上游目录中` })
       refresh()
     } catch (error) {
       const message = (error as Error).message
@@ -424,13 +424,13 @@ function ProviderCard({ provider, modelCount, saved, refresh, toast }: { provide
   const source = provider.matched_env || (provider.source === 'saved' ? '安全存储' : '—')
   const placeholder = provider.envs?.length ? provider.envs.join(' / ') : 'API Key'
   const state = !provider.configured ? 'inactive' : probe?.status === 'error' ? 'error' : probe?.status === 'healthy' ? (Number(probe.models) > 0 ? 'available' : 'pending') : modelCount > 0 ? 'available' : 'pending'
-  const admittedByFormula = provider.discovery_policy === 'inventory'
-  const stateTitle = state === 'available' ? '服务可用' : state === 'pending' ? (admittedByFormula ? '等待缓存同步' : '未通过 Formula 准入') : state === 'error' ? '连接异常' : '尚未接入'
-  const stateDetail = probe?.status === 'healthy' ? `${probe.models} 个官方目录模型 · ${probe.latency}ms` : probe?.status === 'error' ? '最近一次连接测试失败' : state === 'available' ? 'Formula 模型已缓存，可参与路由' : state === 'pending' ? (admittedByFormula ? '清单已有 inventory，等待本地缓存加载' : '凭据有效，但当前清单没有通过真实调用验证的模型') : '配置凭据后等待 Formula 核验'
+  const formulaModelCount = provider.formula_model_count || 0
+  const stateTitle = state === 'available' ? '服务可用' : state === 'pending' ? (formulaModelCount > 0 ? '当前模型已隔离' : 'Formula 尚无模型') : state === 'error' ? '连接异常' : '尚未接入'
+  const stateDetail = probe?.status === 'healthy' ? `${probe.models} 个 Formula 模型仍在上游目录 · ${probe.latency}ms` : probe?.status === 'error' ? '最近一次连接测试失败' : state === 'available' ? 'Formula 模型已缓存，可参与路由' : state === 'pending' ? (formulaModelCount > 0 ? 'Formula 有模型，但本机调用失败后已从缓存隔离' : 'Formula 尚未收录该 Provider 的可信免费模型') : formulaModelCount > 0 ? `Formula 已维护 ${formulaModelCount} 个模型，配置凭据后可调用` : 'Formula 尚未收录可信免费模型；配置凭据不会影响模型发现'
   return <article className={cx('provider-card', state)}>
     <div className="provider-card-head"><div className="provider-logo">{provider.id.slice(0, 2).toUpperCase()}</div><div><h3>{provider.id}</h3><p>{provider.tier}</p></div><StatusBadge status={provider.configured ? 'configured' : 'missing'} /></div>
     <div className={cx('provider-runtime', state)}><div className="provider-runtime-icon">{state === 'available' ? <Check size={17} /> : state === 'error' ? <AlertTriangle size={17} /> : state === 'pending' ? <RefreshCw size={17} /> : <Unplug size={17} />}</div><div><span>运行状态</span><strong>{stateTitle}</strong><small title={probe?.message}>{stateDetail}</small></div><div className="provider-model-count"><strong>{modelCount}</strong><span>缓存模型</span></div></div>
-    <div className="provider-discovery"><div><span>免费模型策略</span><strong>{provider.discovery_policy || '未声明'}</strong></div><small title={provider.free_basis}>{provider.manifest_generated_at ? `清单 ${formatDate(provider.manifest_generated_at)}` : '未加载模型清单'}</small></div>
+    <div className="provider-discovery"><div><span>Formula 模型目录</span><strong>{formulaModelCount > 0 ? `${formulaModelCount} 个模型` : '暂无可信模型'}</strong></div><small title={provider.free_basis}>{provider.manifest_generated_at ? `清单 ${formatDate(provider.manifest_generated_at)}` : '未加载模型清单'}</small></div>
     <div className="provider-credential-head"><div><span>凭据配置</span><strong>{provider.configured ? '已设置' : '未设置'}</strong></div><small title={source}>来源：{source}</small></div>
     {provider.manifest_error && <div className="provider-warning"><AlertTriangle size={14} />模型清单错误：{provider.manifest_error}</div>}
     {missingRequired.length > 0 && <div className="provider-warning"><AlertTriangle size={14} />还需要 {missingRequired.join(', ')}</div>}

@@ -68,7 +68,8 @@ export interface ProviderStatus {
   billing_warning?: string
   free_basis?: string
   source_urls?: string[]
-  discovery_policy?: 'inventory' | 'allowlist' | 'zero-price' | 'all-listed' | 'unverified' | string
+  catalog_status?: 'ready' | 'empty' | string
+  formula_model_count?: number
   manifest_generated_at?: string
   manifest_error?: string
   register_url?: string

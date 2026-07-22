@@ -29,12 +29,15 @@ func TestSiliconFlowDiscoversOnlyChatModels(t *testing.T) {
 	if endpoint.Query().Get("type") != "text" || endpoint.Query().Get("sub_type") != "chat" {
 		t.Fatalf("unexpected models endpoint: %s", endpoint)
 	}
-	if len(spec.AllowedModels) == 0 {
-		t.Fatal("siliconflow must have an explicit free-model allowlist")
+	if len(spec.DiscoveredModels) == 0 {
+		t.Fatal("siliconflow must load Formula models")
 	}
 }
 
-func TestChineseFreeProvidersHaveExplicitFreeModelPolicies(t *testing.T) {
+func TestFormulaCatalogIncludesProvidersWithoutCredentials(t *testing.T) {
+	for _, key := range SupportedKeyEnvs() {
+		t.Setenv(key, "")
+	}
 	manifest, err := loadFreeModelManifest("")
 	if err != nil {
 		t.Fatal(err)
@@ -43,20 +46,24 @@ func TestChineseFreeProvidersHaveExplicitFreeModelPolicies(t *testing.T) {
 	for _, spec := range applyFreeModelManifest(builtins(), manifest) {
 		byID[spec.ID] = spec
 	}
-	for _, id := range []string{"bigmodel", "qianfan"} {
-		spec, ok := byID[id]
+	for _, id := range []string{"bigmodel", "qianfan", "openrouter"} {
+		_, ok := byID[id]
 		if !ok {
 			t.Fatalf("missing Chinese provider %s", id)
 		}
-		if len(spec.AllowedModels) == 0 && len(spec.AllowedModelPatterns) == 0 {
-			t.Fatalf("provider %s must restrict discovery to verified free models", id)
-		}
+	}
+	registry, err := NewRegistry("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(registry.All()) != 0 || len(registry.CatalogAll()) != len(builtins()) {
+		t.Fatalf("configured=%d catalog=%d", len(registry.All()), len(registry.CatalogAll()))
 	}
 }
 
 func TestExternalManifestReplacesEmbeddedEligibilityData(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "free-models.json")
-	content := `{"schema_version":1,"providers":{"groq":{"policy":"inventory","source_urls":["https://example.com/models"],"models":[{"id":"free-chat","functions":["chat","chat-tools"],"context_length":8192}]}}}`
+	content := `{"schema_version":2,"providers":{"groq":{"source_urls":["https://example.com/models"],"models":[{"id":"free-chat","functions":["chat","chat-tools"],"context_length":8192}]}}}`
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +71,7 @@ func TestExternalManifestReplacesEmbeddedEligibilityData(t *testing.T) {
 		t.Setenv(key, "")
 	}
 	t.Setenv("GROQ_API_KEY", "test")
-	registry, err := NewRegistryWithManifest("", DefaultEnvMap(), path, false)
+	registry, err := NewRegistryWithManifest("", DefaultEnvMap(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,11 +81,28 @@ func TestExternalManifestReplacesEmbeddedEligibilityData(t *testing.T) {
 	}
 }
 
+func TestExternalManifestAppliesToCustomProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "free-models.json")
+	content := `{"schema_version":2,"providers":{"custom":{"source_urls":["https://example.com/models"],"models":[{"id":"free-chat","functions":["chat"]}]}}}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := NewRegistryWithManifest(`[{"id":"custom","base_url":"https://example.com/v1","no_auth":true}]`, DefaultEnvMap(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, ok := registry.CatalogGet("custom")
+	if !ok || len(spec.DiscoveredModels) != 1 || spec.DiscoveredModels[0].ID != "free-chat" {
+		t.Fatalf("external manifest was not joined to custom provider: %#v, %v", spec, ok)
+	}
+}
+
 func TestManifestRejectsUnknownFieldsAndTrailingJSON(t *testing.T) {
 	for name, content := range map[string]string{
-		"unknown top-level field": `{"schema_version":1,"providers":{},"research-new-providers":{}}`,
-		"unknown model field":     `{"schema_version":1,"providers":{"groq":{"policy":"inventory","source_urls":["https://example.com"],"models":[{"id":"free","functions":["chat"],"invented":true}]}}}`,
-		"trailing JSON":           `{"schema_version":1,"providers":{}} {}`,
+		"unknown top-level field": `{"schema_version":2,"providers":{},"research-new-providers":{}}`,
+		"legacy policy field":     `{"schema_version":2,"providers":{"groq":{"policy":"inventory","models":[]}}}`,
+		"unknown model field":     `{"schema_version":2,"providers":{"groq":{"source_urls":["https://example.com"],"models":[{"id":"free","functions":["chat"],"invented":true}]}}}`,
+		"trailing JSON":           `{"schema_version":2,"providers":{}} {}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "free-models.json")
@@ -92,37 +116,54 @@ func TestManifestRejectsUnknownFieldsAndTrailingJSON(t *testing.T) {
 	}
 }
 
-func TestApplyManifestDoesNotMutateInputAndNormalizesPolicies(t *testing.T) {
-	original := []Spec{
-		{ID: "openrouter", Filter: FilterZeroPrice, AllowedModels: []string{"old"}},
-		{ID: "groq", Filter: FilterZeroPrice, AllowedModels: []string{"old"}},
+func TestManifestPricingMustBeNonNegativeNumericStrings(t *testing.T) {
+	valid := []string{"", "0", "0.000", "1", "1.25", "1e-6"}
+	for _, value := range valid {
+		if err := validateManifestPrice(value); err != nil {
+			t.Errorf("valid price %q rejected: %v", value, err)
+		}
 	}
+	invalid := []string{"-1", "+1", "NaN", "Inf", "$0", "free", " 0", "0 ", "1/2"}
+	for _, value := range invalid {
+		if err := validateManifestPrice(value); err == nil {
+			t.Errorf("invalid price %q accepted", value)
+		}
+	}
+}
+
+func TestCatalogAllIsSorted(t *testing.T) {
+	registry := &Registry{catalog: map[string]Spec{
+		"zeta": {ID: "zeta"}, "alpha": {ID: "alpha"}, "middle": {ID: "middle"},
+	}}
+	got := registry.CatalogAll()
+	if len(got) != 3 || got[0].ID != "alpha" || got[1].ID != "middle" || got[2].ID != "zeta" {
+		t.Fatalf("CatalogAll order = %#v", got)
+	}
+}
+
+func TestApplyManifestDoesNotMutateInput(t *testing.T) {
+	original := []Spec{{ID: "openrouter"}, {ID: "groq"}}
 	before := append([]Spec(nil), original...)
-	before[0].AllowedModels = append([]string(nil), original[0].AllowedModels...)
-	before[1].AllowedModels = append([]string(nil), original[1].AllowedModels...)
-	manifest := FreeModelManifest{SchemaVersion: 1, GeneratedAt: "2026-07-21T00:00:00Z", Providers: map[string]FreeProviderCatalog{
-		"groq": {Policy: "all-listed", FreeBasis: "free plan", BillingWarning: "rate limited"},
+	manifest := FreeModelManifest{SchemaVersion: 2, GeneratedAt: "2026-07-21T00:00:00Z", Providers: map[string]FreeProviderCatalog{
+		"groq": {FreeBasis: "free plan", BillingWarning: "rate limited", Models: []DiscoveredModel{{ID: "free", Functions: []string{"chat"}}}},
 	}}
 	applied := applyFreeModelManifest(original, manifest)
 	if !reflect.DeepEqual(original, before) {
 		t.Fatalf("input specs were mutated: before=%#v after=%#v", before, original)
 	}
-	if applied[0].DiscoveryPolicy != "zero-price" || applied[0].Filter != FilterZeroPrice {
-		t.Fatalf("openrouter fallback was lost: %#v", applied[0])
-	}
-	if applied[1].DiscoveryPolicy != "all-listed" || applied[1].Filter != FilterAll || len(applied[1].AllowedModels) != 0 {
-		t.Fatalf("all-listed was not normalized: %#v", applied[1])
+	if len(applied[0].DiscoveredModels) != 0 || len(applied[1].DiscoveredModels) != 1 {
+		t.Fatalf("manifest models were not applied: %#v", applied)
 	}
 	if applied[1].BillingWarning != "rate limited" || applied[1].FreeBasis != "free plan" || applied[1].ManifestGeneratedAt == "" {
 		t.Fatalf("manifest metadata was not applied: %#v", applied[1])
 	}
 }
 
-func TestBuiltinStatusIncludesManifestPolicy(t *testing.T) {
+func TestBuiltinStatusIncludesFormulaCatalog(t *testing.T) {
 	status := BuiltinStatusWithEnv(DefaultEnvMap())
 	for _, item := range status {
 		if item["id"] == "openrouter" {
-			if item["discovery_policy"] != "inventory" || item["free_basis"] == "" || item["manifest_generated_at"] == "" {
+			if item["catalog_status"] != "ready" || item["formula_model_count"].(int) == 0 || item["free_basis"] == "" || item["manifest_generated_at"] == "" {
 				t.Fatalf("manifest status is incomplete: %#v", item)
 			}
 			return

@@ -145,6 +145,10 @@ func probeCandidates(h *Handler, force bool) ([]probeJob, int) {
 	jobs := make([]probeJob, 0)
 	skipped := 0
 	for _, model := range h.catalog.Models() {
+		if !h.catalog.ProviderConfigured(model.Provider) {
+			skipped++
+			continue
+		}
 		var enabled bool
 		model, enabled = h.routes.Apply(model)
 		if !enabled || len(model.Functions) == 0 {

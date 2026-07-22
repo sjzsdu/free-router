@@ -194,6 +194,10 @@ func (h *Handler) resetHealth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "model is required")
 		return
 	}
+	if err := h.catalog.RestoreModel(input.Model); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
 	h.health.Reset(input.Model, input.Capability)
 	writeJSON(w, http.StatusOK, map[string]any{"reset": true, "model": input.Model, "capability": input.Capability})
 }
@@ -214,7 +218,7 @@ func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request, escapedID
 		writeError(w, http.StatusBadGateway, message)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "provider": providerID, "models": count, "latency_ms": time.Since(started).Milliseconds()})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "provider": providerID, "formula_models": count, "latency_ms": time.Since(started).Milliseconds()})
 }
 
 func (h *Handler) saveCredential(w http.ResponseWriter, r *http.Request) {
@@ -235,7 +239,6 @@ func (h *Handler) saveCredential(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	h.refreshProviderAsync(input.Provider)
 	writeJSON(w, http.StatusOK, map[string]any{"saved": true, "backend": backend, "models": len(h.catalog.Models())})
 }
 
@@ -261,17 +264,7 @@ func (h *Handler) reloadProviders() error {
 			return err
 		}
 	}
-	return h.catalog.PruneDisabled()
-}
-
-func (h *Handler) refreshProviderAsync(providerID string) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := h.catalog.RefreshProvider(ctx, providerID); err != nil {
-			slog.Warn("provider model refresh failed", "provider", providerID, "error", err)
-		}
-	}()
+	return nil
 }
 
 func (h *Handler) refreshAllAsync() {

@@ -1,34 +1,27 @@
 {
-  "generated_at": "2026-07-21T11:56:55Z",
+  "generated_at": "2026-07-22T03:56:04Z",
   "providers": {
     "baichuan": {
       "billing_warning": "新用户赠送金有效期有限，余额耗尽后接口按平台价格计费。",
       "free_basis": "Models consume time-limited new-account gift credits.",
-      "policy": "all-listed",
       "source_urls": [
         "https://platform.baichuan-ai.com/"
       ]
     },
     "bigmodel": {
-      "allowed_model_patterns": [
-        "*flash*"
-      ],
       "free_basis": "The provider documents Flash variants as free models.",
-      "policy": "allowlist",
       "source_urls": [
         "https://open.bigmodel.cn/"
       ]
     },
     "cerebras": {
       "free_basis": "Models exposed to a configured free-tier account are limited by that tier.",
-      "policy": "all-listed",
       "source_urls": [
         "https://inference-docs.cerebras.ai/support/rate-limits"
       ]
     },
     "cloudflare": {
       "free_basis": "Workers AI includes a daily free allocation measured in Neurons.",
-      "policy": "all-listed",
       "source_urls": [
         "https://developers.cloudflare.com/workers-ai/platform/pricing/"
       ]
@@ -36,7 +29,6 @@
     "dashscope": {
       "billing_warning": "新人额度通常仅 30～90 天；请在百炼控制台开启免费额度用完即停。",
       "free_basis": "Models consume new-user or model-specific free quota and may become billable after exhaustion.",
-      "policy": "all-listed",
       "source_urls": [
         "https://help.aliyun.com/zh/model-studio/getting-started/models"
       ]
@@ -175,7 +167,6 @@
           "verified_at": "2026-07-21T06:22:05Z"
         }
       ],
-      "policy": "inventory",
       "source_urls": [
         "https://ai.google.dev/gemini-api/docs/rate-limits",
         "https://aistudio.google.com/apikey"
@@ -183,35 +174,30 @@
     },
     "github-models": {
       "free_basis": "GitHub Models provides rate-limited model experimentation at no cost.",
-      "policy": "all-listed",
       "source_urls": [
         "https://docs.github.com/en/github-models/prototyping-with-ai-models"
       ]
     },
     "groq": {
       "free_basis": "Models available to an account on the provider Free Plan are subject to free-plan rate limits.",
-      "policy": "all-listed",
       "source_urls": [
         "https://console.groq.com/docs/rate-limits"
       ]
     },
     "huggingface": {
       "free_basis": "Inference Providers requests consume the account's monthly free credits.",
-      "policy": "all-listed",
       "source_urls": [
         "https://huggingface.co/docs/inference-providers/pricing"
       ]
     },
     "mistral": {
       "free_basis": "Models exposed to an Experiment Plan account are subject to experiment-plan limits.",
-      "policy": "all-listed",
       "source_urls": [
         "https://docs.mistral.ai/deployment/ai-studio/tier/"
       ]
     },
     "modelscope": {
       "free_basis": "Models exposed to the inference account consume its free inference quota.",
-      "policy": "all-listed",
       "source_urls": [
         "https://modelscope.cn/docs/model-service/API-Inference/intro"
       ]
@@ -530,14 +516,12 @@
           "verified_at": "2026-07-21T11:56:55Z"
         }
       ],
-      "policy": "inventory",
       "source_urls": [
         "https://build.nvidia.com/"
       ]
     },
     "ollama-cloud": {
       "free_basis": "Models exposed to a configured free-tier account are subject to its usage limits.",
-      "policy": "all-listed",
       "source_urls": [
         "https://ollama.com/cloud"
       ]
@@ -580,13 +564,14 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-22T03:56:04Z"
         },
         {
           "context_length": 262144,
           "description": "Gemma 4 26B A4B IT is an instruction-tuned Mixture-of-Experts (MoE) model from Google DeepMind. Despite 25.2B total parameters, only 3.8B activate per token during inference — delivering near-31B quality at...",
           "functions": [
             "chat",
+            "chat-tools",
             "image-understanding",
             "video-understanding"
           ],
@@ -625,7 +610,45 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-22T03:56:04Z"
+        },
+        {
+          "context_length": 262144,
+          "description": "Gemma 4 31B Instruct is Google DeepMind's 30.7B dense multimodal model supporting text and image input with text output. Features a 256K token context window, configurable thinking/reasoning mode, native function...",
+          "functions": [
+            "chat",
+            "chat-tools",
+            "image-understanding",
+            "video-understanding"
+          ],
+          "id": "google/gemma-4-31b-it:free",
+          "input_modalities": [
+            "image",
+            "text",
+            "video"
+          ],
+          "max_output_tokens": 32768,
+          "name": "Google: Gemma 4 31B (free)",
+          "output_modalities": [
+            "text"
+          ],
+          "pricing": {
+            "completion": "0",
+            "prompt": "0"
+          },
+          "supported_parameters": [
+            "include_reasoning",
+            "max_tokens",
+            "reasoning",
+            "response_format",
+            "seed",
+            "temperature",
+            "tool_choice",
+            "tools",
+            "top_p"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-22T03:56:04Z"
         },
         {
           "context_length": 256000,
@@ -657,7 +680,7 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-22T03:56:04Z"
         },
         {
           "context_length": 256000,
@@ -696,10 +719,10 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-22T03:56:04Z"
         },
         {
-          "context_length": 1000000,
+          "context_length": 262144,
           "description": "NVIDIA Nemotron 3 Super is a 120B-parameter open hybrid MoE model, activating just 12B parameters for maximum compute efficiency and accuracy in complex multi-agent applications. Built on a hybrid Mamba-Transformer...",
           "functions": [
             "chat",
@@ -732,7 +755,7 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-22T03:56:04Z"
         },
         {
           "context_length": 1000000,
@@ -766,13 +789,14 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-22T03:56:04Z"
         },
         {
           "context_length": 128000,
           "description": "NVIDIA Nemotron 3.5 Content Safety is a compact 4B-parameter multimodal guardrail model from NVIDIA, fine-tuned from Google Gemma-3-4B. It moderates both inputs to and responses from LLMs and VLMs, accepting...",
           "functions": [
-            "image-understanding"
+            "image-understanding",
+            "moderation"
           ],
           "id": "nvidia/nemotron-3.5-content-safety:free",
           "input_modalities": [
@@ -797,7 +821,7 @@
             "top_p"
           ],
           "type": "moderation",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-22T03:56:04Z"
         },
         {
           "context_length": 128000,
@@ -834,7 +858,7 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-22T03:56:04Z"
         },
         {
           "context_length": 128000,
@@ -868,7 +892,7 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-22T03:56:04Z"
         },
         {
           "context_length": 131072,
@@ -911,7 +935,7 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-22T03:56:04Z"
         },
         {
           "context_length": 200000,
@@ -955,13 +979,14 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-22T03:56:04Z"
         },
         {
           "context_length": 262144,
           "description": "Laguna M.1 is the flagship coding agent model from [Poolside](https://poolside.ai/), optimized for complex software engineering tasks. Designed for agentic coding workflows, it supports tool calling and reasoning, with a 256K...",
           "functions": [
-            "chat"
+            "chat",
+            "chat-tools"
           ],
           "id": "poolside/laguna-m.1:free",
           "input_modalities": [
@@ -985,53 +1010,94 @@
             "tools"
           ],
           "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-22T03:56:04Z"
+        },
+        {
+          "context_length": 262144,
+          "description": "Laguna S 2.1 is the latest coding agent model from [Poolside](<https://poolside.ai/>). Laguna S 2.1 is a 118B total parameter model with 8B active parameters, scoring 70.2% on Terminal-Bench 2.1 and...",
+          "functions": [
+            "chat",
+            "chat-tools"
+          ],
+          "id": "poolside/laguna-s-2.1:free",
+          "input_modalities": [
+            "text"
+          ],
+          "max_output_tokens": 32768,
+          "name": "Poolside: Laguna S 2.1 (free)",
+          "output_modalities": [
+            "text"
+          ],
+          "pricing": {
+            "completion": "0",
+            "prompt": "0"
+          },
+          "supported_parameters": [
+            "include_reasoning",
+            "max_tokens",
+            "reasoning",
+            "temperature",
+            "tool_choice",
+            "tools"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-22T03:56:04Z"
+        },
+        {
+          "context_length": 262144,
+          "description": "Laguna XS 2.1 is the latest coding agent model in the 33B-A3B category from [Poolside](https://poolside.ai/) and a step forward from their Laguna XS.2 model (released in April 2026). It combines...",
+          "functions": [
+            "chat",
+            "chat-tools"
+          ],
+          "id": "poolside/laguna-xs-2.1:free",
+          "input_modalities": [
+            "text"
+          ],
+          "max_output_tokens": 32768,
+          "name": "Poolside: Laguna XS 2.1 (free)",
+          "output_modalities": [
+            "text"
+          ],
+          "pricing": {
+            "completion": "0",
+            "prompt": "0"
+          },
+          "supported_parameters": [
+            "include_reasoning",
+            "max_tokens",
+            "reasoning",
+            "temperature",
+            "tool_choice",
+            "tools"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-22T03:56:04Z"
         }
       ],
-      "policy": "inventory",
       "source_urls": [
         "https://openrouter.ai/api/v1/models"
       ]
     },
     "pollinations": {
       "free_basis": "Models exposed to the account consume the provider's free Pollen allocation.",
-      "policy": "all-listed",
       "source_urls": [
         "https://enter.pollinations.ai/"
       ]
     },
     "qianfan": {
-      "allowed_models": [
-        "ernie-speed-8k",
-        "ernie-speed-128k",
-        "ernie-lite-8k",
-        "ernie-tiny-8k"
-      ],
       "free_basis": "Long-term free models documented by the provider.",
-      "policy": "allowlist",
       "source_urls": [
         "https://cloud.baidu.com/doc/WENXINWORKSHOP/s/Fm2vrveyu"
       ]
     },
     "sambanova": {
       "free_basis": "Models exposed to a configured Free Tier account are subject to provider limits.",
-      "policy": "all-listed",
       "source_urls": [
         "https://cloud.sambanova.ai/"
       ]
     },
     "siliconflow": {
-      "allowed_models": [
-        "Qwen/Qwen3.5-4B",
-        "PaddlePaddle/PaddleOCR-VL-1.5",
-        "Qwen/Qwen3-8B",
-        "Qwen/Qwen2.5-7B-Instruct",
-        "THUDM/GLM-4-9B-0414",
-        "THUDM/GLM-Z1-9B-0414",
-        "deepseek-ai/DeepSeek-OCR",
-        "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
-        "tencent/Hunyuan-MT-7B"
-      ],
       "free_basis": "Models marked free by the provider catalog.",
       "models": [
         {
@@ -1098,7 +1164,6 @@
           "verified_at": "2026-07-21T06:22:05Z"
         }
       ],
-      "policy": "inventory",
       "source_urls": [
         "https://cloud.siliconflow.cn/models"
       ]
@@ -1106,7 +1171,6 @@
     "volcengine-ark": {
       "billing_warning": "免费额度按模型限量发放，耗尽后可能转为计费。",
       "free_basis": "Models consume model-specific trial quota and may become billable after exhaustion.",
-      "policy": "all-listed",
       "source_urls": [
         "https://www.volcengine.com/docs/82379/1099320"
       ]
@@ -1114,18 +1178,16 @@
     "xiaomi-mimo": {
       "billing_warning": "赠送额度用完后停止使用或按账户计费设置执行，请先确认余额。",
       "free_basis": "Models consume account gift credits; this is a limited credit rather than permanent zero pricing.",
-      "policy": "all-listed",
       "source_urls": [
         "https://platform.xiaomimimo.com/"
       ]
     },
     "zai": {
       "free_basis": "Models exposed to the configured free-model account are subject to provider limits.",
-      "policy": "all-listed",
       "source_urls": [
         "https://z.ai/model-api"
       ]
     }
   },
-  "schema_version": 1
+  "schema_version": 2
 }

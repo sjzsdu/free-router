@@ -53,7 +53,7 @@ func TestOpenRouterOAuthPKCEStoresKeyAndReloadsProvider(t *testing.T) {
 
 	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
 	custom := `[{"id":"openrouter","base_url":"` + upstream.URL + `"}]`
-	registry, err := provider.NewRegistryAllowEmpty(custom, vault.Get)
+	registry, err := provider.NewRegistry(custom, vault.Get)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestOpenRouterOAuthPKCEStoresKeyAndReloadsProvider(t *testing.T) {
 
 func TestOpenRouterOAuthRequiresLocalhostHost(t *testing.T) {
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
-	registry, _ := provider.NewRegistryAllowEmpty("")
+	registry, _ := provider.NewRegistry("")
 	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
 	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
 	handler := New(routes, models, vault, health.New(), Config{}, nil)

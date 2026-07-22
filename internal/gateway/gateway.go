@@ -134,6 +134,9 @@ func (g *Gateway) models(w http.ResponseWriter, _ *http.Request) {
 func (g *Gateway) routeAvailable(route routing.Route) bool {
 	for _, source := range g.catalog.Models() {
 		model := source
+		if _, configured := g.registry.Get(model.Provider); !configured {
+			continue
+		}
 		if g.config.Routes != nil {
 			var enabled bool
 			model, enabled = g.config.Routes.Apply(model)
@@ -439,6 +442,9 @@ func (g *Gateway) dynamicCandidates(route routing.Route, needsTools bool) []cata
 	groups := make(map[string][]catalog.Model)
 	var preferred *catalog.Model
 	for _, model := range g.catalog.Models() {
+		if _, configured := g.registry.Get(model.Provider); !configured {
+			continue
+		}
 		if g.config.Routes != nil {
 			var enabled bool
 			model, enabled = g.config.Routes.Apply(model)
@@ -503,6 +509,9 @@ func (g *Gateway) strictlyAvailable(models []catalog.Model, capability string) [
 func (g *Gateway) pickRemaining(route routing.Route, excluded map[string]bool, healthyOnly bool) (catalog.Model, bool) {
 	models := make([]catalog.Model, 0)
 	for _, model := range g.catalog.Models() {
+		if _, configured := g.registry.Get(model.Provider); !configured {
+			continue
+		}
 		if excluded[model.ID] {
 			continue
 		}

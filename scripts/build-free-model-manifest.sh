@@ -1,10 +1,16 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 3 ]; then
-  echo "usage: build-free-model-manifest.sh <current-manifest-json> <normalized-research-json> <timestamp>" >&2
+if [ "$#" -ne 4 ]; then
+  echo "usage: build-free-model-manifest.sh <current-manifest-json> <resolved-inventory-json> <timestamp> <candidate-file>" >&2
   exit 2
 fi
+
+candidate_file="$4"
+candidate_dir="$(dirname -- "$candidate_file")"
+mkdir -p "$candidate_dir"
+tmp="$(mktemp "$candidate_dir/.free-model-candidate.XXXXXX")"
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
 
 jq -cn --arg current "$1" --arg research "$2" --arg timestamp "$3" '
   def decode:
@@ -14,44 +20,40 @@ jq -cn --arg current "$1" --arg research "$2" --arg timestamp "$3" '
     else . end;
   def compact_object:
     with_entries(select(.value != null and .value != "" and .value != []));
-  def safe_transition($old; $new):
-    ($old == null) or
-    ($new == "inventory") or
-    ($new == "zero-price" and ($old.policy == "zero-price" or $old.policy == "all-listed" or $old.policy == "unverified")) or
-    ($new == "all-listed" and ($old.policy == "all-listed" or $old.policy == "unverified"));
   def entry_from($result):
     ({
-      policy: $result.policy,
       free_basis: $result.free_basis,
       billing_warning: $result.billing_warning,
       source_urls: $result.source_urls,
-      models: (if $result.policy == "inventory" then
-                 [$result.models[] | .verified_at = (if (.verified_at // "") == "" then $timestamp else .verified_at end)]
-               else [] end)
+      models: [$result.models[] | .verified_at = $timestamp] | sort_by(.id)
     } | compact_object);
 
   ($current | decode) as $manifest |
-  ($research | decode) as $results |
+  ($research | decode) as $inventory |
   if ($manifest | type) != "object" or ($manifest.providers | type) != "object" then
     error("current manifest is invalid")
-  elif ($results | type) != "array" then
-    error("normalized research must be an array")
+  elif ($inventory.results | type) != "array" then
+    error("resolved inventory must contain a results array")
   else
-    (reduce $results[] as $result
+    (reduce $inventory.results[] as $result
       ($manifest.providers;
-       . as $providers |
-       ($providers[$result.provider] // null) as $old |
-       if ($result.accepted == true) and safe_transition($old; $result.policy) then
-         .[$result.provider] = (($old // {}) * entry_from($result) | compact_object)
+       if $result.accepted == true and $result.authoritative == true and $result.abandoned == true then
+         del(.[$result.provider])
+       elif $result.accepted == true and $result.authoritative == true then
+         .[$result.provider] = entry_from($result)
        else
          .
        end)) as $providers |
     ($manifest.providers | map_values(compact_object)) as $old_providers |
     ($providers | map_values(compact_object)) as $new_providers |
     {
-      schema_version: 1,
+      schema_version: 2,
       generated_at: (if $new_providers == $old_providers then $manifest.generated_at else $timestamp end),
       providers: $new_providers
     }
   end
-'
+' > "$tmp"
+
+mv -f "$tmp" "$candidate_file"
+trap - EXIT HUP INT TERM
+cat "$candidate_file"

@@ -1,9 +1,14 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 2 ]; then
-  echo "usage: normalize-provider-candidates.sh <providers-json> <discovery-json>" >&2
+if [ "$#" -ne 3 ]; then
+  echo "usage: normalize-provider-candidates.sh <providers-json> <discovery-json> <provider|all>" >&2
   exit 2
+fi
+
+if [ "$3" != "all" ]; then
+  printf '%s\n' '{"candidates":[],"rejected_candidate_ids":[],"notes":"targeted provider run; global provider discovery skipped"}'
+  exit 0
 fi
 
 jq -cn --arg providers "$1" --arg discovery "$2" '

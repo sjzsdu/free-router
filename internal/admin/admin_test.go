@@ -56,7 +56,7 @@ func TestAdminUpdatesRouteConfiguration(t *testing.T) {
 
 func TestAdminRejectsRemoteAccessByDefault(t *testing.T) {
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
-	registry, _ := provider.NewRegistryAllowEmpty("")
+	registry, _ := provider.NewRegistry("")
 	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
 	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
 	handler := New(routes, models, vault, health.New(), Config{}, nil)
@@ -71,7 +71,7 @@ func TestAdminRejectsRemoteAccessByDefault(t *testing.T) {
 
 func TestAdminServesEmbeddedReactApp(t *testing.T) {
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
-	registry, _ := provider.NewRegistryAllowEmpty("")
+	registry, _ := provider.NewRegistry("")
 	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
 	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
 	handler := New(routes, models, vault, health.New(), Config{}, nil)
@@ -107,7 +107,7 @@ func TestCredentialSaveEnablesProviderWithoutDiscoveringModels(t *testing.T) {
 	defer upstream.Close()
 	custom := `[{"id":"test","base_url":"` + upstream.URL + `"}]`
 	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
-	registry, err := provider.NewRegistryAllowEmpty(custom, vault.Get)
+	registry, err := provider.NewRegistry(custom, vault.Get)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestCredentialSaveDoesNotContactProviderCatalog(t *testing.T) {
 	defer upstream.Close()
 	custom := `[{"id":"test","base_url":"` + upstream.URL + `"}]`
 	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
-	registry, _ := provider.NewRegistryAllowEmpty(custom, vault.Get)
+	registry, _ := provider.NewRegistry(custom, vault.Get)
 	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
 	handler := New(routes, models, vault, health.New(), Config{}, func() error { return registry.Reload(custom, vault.Get) })
@@ -169,7 +169,7 @@ func TestCredentialSaveDoesNotContactProviderCatalog(t *testing.T) {
 
 func TestAdminTokenAuthentication(t *testing.T) {
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
-	registry, _ := provider.NewRegistryAllowEmpty("")
+	registry, _ := provider.NewRegistry("")
 	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
 	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
 	handler := New(routes, models, vault, health.New(), Config{Token: "secret-token"}, nil)
@@ -195,7 +195,7 @@ func TestAdminTokenAuthentication(t *testing.T) {
 func TestRuntimeStatus(t *testing.T) {
 	t.Setenv("FREE_ROUTER_SERVICE_MANAGER", "launchd")
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
-	registry, _ := provider.NewRegistryAllowEmpty("")
+	registry, _ := provider.NewRegistry("")
 	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
 	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
 	handler := New(routes, models, vault, health.New(), Config{Version: "0.1.0"}, nil)
@@ -266,7 +266,7 @@ func TestGroqForbiddenProbeExplainsPermissionRestriction(t *testing.T) {
 
 func TestAdminRejectsCrossOriginMutation(t *testing.T) {
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
-	registry, _ := provider.NewRegistryAllowEmpty("")
+	registry, _ := provider.NewRegistry("")
 	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
 	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
 	handler := New(routes, models, vault, health.New(), Config{}, nil)
@@ -282,7 +282,7 @@ func TestAdminRejectsCrossOriginMutation(t *testing.T) {
 
 func TestAdminResetsFailedModelHealth(t *testing.T) {
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
-	registry, _ := provider.NewRegistryAllowEmpty("")
+	registry, _ := provider.NewRegistry("")
 	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
 	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
 	tracker := health.New()

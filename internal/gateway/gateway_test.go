@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -75,6 +76,55 @@ func TestAutoRetriesNextFreeModel(t *testing.T) {
 	}
 	if len(list.Data) != 1 || list.Data[0]["id"] != catalog.FunctionChat || list.Data[0]["owned_by"] != "free-router" {
 		t.Fatalf("stable capability models are missing: %#v", list.Data)
+	}
+}
+
+func TestFormulaCatalogWithoutCredentialsIsNotRoutable(t *testing.T) {
+	clearBuiltinKeys(t)
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "free-models.json")
+	manifest := `{
+		"schema_version": 2,
+		"generated_at": "2026-07-21T00:00:00Z",
+		"providers": {
+			"groq": {
+				"source_urls": ["https://console.groq.com/docs/models"],
+				"models": [{"id":"formula-chat","functions":["chat"]}]
+			}
+		}
+	}`
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := provider.NewRegistryWithManifest("", provider.DefaultEnvMap(), manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := catalog.New(registry, filepath.Join(dir, "models.json"), http.DefaultClient)
+	if err := store.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if models := store.Models(); len(models) != 1 || models[0].ID != "groq/formula-chat" {
+		t.Fatalf("Formula catalog was not loaded without credentials: %#v", models)
+	}
+
+	handler := New(store, registry, Config{}, http.DefaultClient)
+	modelsRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(modelsRecorder, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	var list struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.NewDecoder(modelsRecorder.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Data) != 0 {
+		t.Fatalf("unconfigured provider leaked into callable routes: %#v", list.Data)
+	}
+
+	chatRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(chatRecorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat","messages":[]}`)))
+	if chatRecorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", chatRecorder.Code, chatRecorder.Body.String())
 	}
 }
 
@@ -180,7 +230,7 @@ func TestCapabilityFailureDoesNotDisableAnotherFunctionOnSameModel(t *testing.T)
 
 func TestCapabilityAliasMustMatchOpenAIEndpoint(t *testing.T) {
 	clearBuiltinKeys(t)
-	registry, _ := provider.NewRegistryAllowEmpty("")
+	registry, _ := provider.NewRegistry("")
 	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
 	handler := New(store, registry, Config{Routes: routes}, http.DefaultClient)

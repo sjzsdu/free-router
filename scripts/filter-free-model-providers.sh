@@ -15,10 +15,16 @@ jq -cn --arg providers "$1" --arg target "$2" '
   ($providers | decode) as $all |
   if ($all | type) != "array" then
     error("provider list is invalid")
-  elif $target == "all" then
-    $all
   else
-    [$all[] | select(.id == $target)] |
-    if length == 0 then error("unknown provider: " + $target) else . end
+    (if $target == "all" then $all else [$all[] | select(.id == $target)] end) as $selected |
+    if ($selected | length) == 0 then
+      error("unknown provider: " + $target)
+    else
+      ({target: $target, all: ($target == "all"), providers: $selected} +
+       (reduce $selected[] as $provider ({};
+         .[$provider.id] = true |
+         .["research_" + ($provider.id | gsub("-"; "_"))] =
+           (($provider.model_discovery == "agent") or ($provider.model_discovery == "api-agent-filter")))))
+    end
   end
 '

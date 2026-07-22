@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +16,7 @@ import (
 	"github.com/sjzsdu/free-router/internal/provider"
 )
 
-func TestFormulaDiscoveryKeepsOnlyZeroPricedModels(t *testing.T) {
+func TestFormulaDiscoveryReturnsRawProviderCatalog(t *testing.T) {
 	clearBuiltinKeys(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"data":[
@@ -26,14 +27,14 @@ func TestFormulaDiscoveryKeepsOnlyZeroPricedModels(t *testing.T) {
 	}))
 	defer server.Close()
 
-	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"` + server.URL + `","api_key":"test","filter":"zero-price"}]`)
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"` + server.URL + `","api_key":"test"}]`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	store := New(registry, filepath.Join(t.TempDir(), "models.json"), server.Client())
 	discoverForTest(t, store)
 	models := store.Models()
-	if len(models) != 2 || models[0].ID != "test/free/a" || models[1].ID != "test/free/b" {
+	if len(models) != 3 || models[0].ID != "test/free/a" || models[1].ID != "test/free/b" || models[2].ID != "test/paid/model" {
 		t.Fatalf("unexpected models: %#v", models)
 	}
 	model := models[1]
@@ -50,6 +51,86 @@ func TestFormulaDiscoveryKeepsOnlyZeroPricedModels(t *testing.T) {
 	}
 }
 
+func TestOfficialCatalogZeroPricePolicyHandlesScalarAndTieredPricing(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"paid","pricing":{"prompt":"0.1","completion":"0"}},
+			{"id":"free-scalar","pricing":{"prompt":"0","completion":0}},
+			{"id":"free-tiered","pricing":{"prompt":[{"price":"0"},{"price":"0.000"}],"completion":[{"price":"0"}]}},
+			{"id":"paid-tiered","pricing":{"prompt":[{"price":"0"},{"price":"0.01"}],"completion":[{"price":"0"}]}},
+			{"id":"paid-per-unit","description":"30 second clips are priced at $0.04 per clip.","pricing":{"prompt":"0","completion":"0"}},
+			{"id":"unsupported-audio","type":"audio","pricing":{"prompt":"0","completion":"0"}}
+		]}`))
+	}))
+	defer server.Close()
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"` + server.URL + `","no_auth":true}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := New(registry, "", server.Client())
+	models, failures := store.DiscoverFromSpecs(context.Background(), []provider.Spec{{ID: "test", BaseURL: server.URL, NoAuth: true, FreeModelPolicy: "zero-price"}})
+	if len(failures) != 0 {
+		t.Fatalf("failures=%#v", failures)
+	}
+	if len(models) != 2 || models[0].UpstreamID != "free-scalar" || models[1].UpstreamID != "free-tiered" {
+		t.Fatalf("models=%#v", models)
+	}
+}
+
+func TestExplicitUnitPriceDetection(t *testing.T) {
+	for _, description := range []string{
+		"30 second clips are priced at $0.04 per clip.",
+		"Image generation costs US $1 per request.",
+	} {
+		if !explicitUnitPrice.MatchString(description) {
+			t.Errorf("explicit unit price not detected in %q", description)
+		}
+	}
+	for _, description := range []string{"free tier", "pricing is $0", "zero token price"} {
+		if explicitUnitPrice.MatchString(description) {
+			t.Errorf("false explicit unit price match in %q", description)
+		}
+	}
+}
+
+func TestModelFingerprintUsesStableRoutingMetadata(t *testing.T) {
+	base := Model{ID: "test/model", Type: "normal", Functions: []string{"chat-tools", "chat"}, ContextLength: 8192, SupportedParameters: []string{"tools", "stream"}, Pricing: Pricing{Prompt: "0", Completion: "0"}}
+	cosmetic := base
+	cosmetic.Name = "renamed"
+	cosmetic.Description = "new description"
+	cosmetic.Created = 12345
+	cosmetic.Functions = []string{"chat", "chat-tools"}
+	cosmetic.SupportedParameters = []string{"stream", "tools"}
+	if modelFingerprint(base) != modelFingerprint(cosmetic) {
+		t.Fatal("cosmetic metadata or slice ordering changed the model fingerprint")
+	}
+	changed := base
+	changed.ContextLength = 16384
+	if modelFingerprint(base) == modelFingerprint(changed) {
+		t.Fatal("routing metadata change did not change the model fingerprint")
+	}
+}
+
+func TestApplyQuarantineDoesNotMutateQuarantineState(t *testing.T) {
+	old := Model{ID: "test/model", Type: "normal", Functions: []string{"chat"}, ContextLength: 8192}
+	changed := old
+	changed.ContextLength = 16384
+	store := &Store{quarantine: map[string]string{old.ID: modelFingerprint(old)}}
+	if got := store.applyQuarantine([]Model{old, changed}); len(got) != 1 || got[0].ContextLength != changed.ContextLength {
+		t.Fatalf("filtered models = %#v", got)
+	}
+	if got := store.quarantine[old.ID]; got != modelFingerprint(old) {
+		t.Fatalf("applyQuarantine mutated quarantine state: %q", got)
+	}
+}
+
+func TestOfficialAudioTextEndpointIsTextToSpeech(t *testing.T) {
+	functions := inferFunctions(upstreamModel{ID: "universal-3-pro", Type: "audio", SupportedEndpoints: []string{"/audio/{text}"}}, "audio", []string{"audio"}, []string{"text"}, nil)
+	if len(functions) != 1 || functions[0] != FunctionTextToSpeech {
+		t.Fatalf("functions=%#v", functions)
+	}
+}
+
 func TestDiscoveredModelsConvertWithoutProviderCatalogRequest(t *testing.T) {
 	models := modelsFromDiscovery(provider.Spec{ID: "test", Tier: "free", DiscoveredModels: []provider.DiscoveredModel{{ID: "free-chat", Functions: []string{FunctionChatTools}, ContextLength: 32768, Pricing: provider.DiscoveredPricing{Prompt: "0", Completion: "0"}}}})
 	if len(models) != 1 || models[0].UpstreamID != "free-chat" || !models[0].Capabilities.ToolCall || models[0].Pricing.Prompt != "0" {
@@ -57,9 +138,33 @@ func TestDiscoveredModelsConvertWithoutProviderCatalogRequest(t *testing.T) {
 	}
 }
 
+func TestFormulaModelsLoadWithoutProviderCredentials(t *testing.T) {
+	clearBuiltinKeys(t)
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "free-models.json")
+	manifest := `{"schema_version":2,"generated_at":"test","providers":{"groq":{"source_urls":["https://example.com/models"],"models":[{"id":"free-chat","functions":["chat"]}]}}}`
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := provider.NewRegistryWithManifest("", provider.DefaultEnvMap(), manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := New(registry, filepath.Join(dir, "models.json"), http.DefaultClient)
+	if err := store.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.Models()) != 1 {
+		t.Fatalf("Formula models = %#v", store.Models())
+	}
+	if _, callable := store.Find("groq/free-chat"); callable {
+		t.Fatal("model without Provider credentials became callable")
+	}
+}
+
 func TestLegacyCacheIsRejected(t *testing.T) {
 	clearBuiltinKeys(t)
-	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"https://example.invalid/v1","no_auth":true,"filter":"zero-price"}]`)
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"https://example.invalid/v1","no_auth":true}]`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,14 +182,14 @@ func TestLegacyCacheIsRejected(t *testing.T) {
 	}
 }
 
-func TestUnverifiedInventoryPrunesCachedProviderModels(t *testing.T) {
+func TestEmptyFormulaCatalogPrunesCachedProviderModels(t *testing.T) {
 	clearBuiltinKeys(t)
 	t.Setenv("GROQ_API_KEY", "test")
 	manifestPath := filepath.Join(t.TempDir(), "free-models.json")
-	if err := os.WriteFile(manifestPath, []byte(`{"schema_version":1,"providers":{"groq":{"policy":"unverified","free_basis":"evidence expired"}}}`), 0o600); err != nil {
+	if err := os.WriteFile(manifestPath, []byte(`{"schema_version":2,"providers":{"groq":{"free_basis":"no verified models","models":[]}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	registry, err := provider.NewRegistryWithManifest("", provider.DefaultEnvMap(), manifestPath, false)
+	registry, err := provider.NewRegistryWithManifest("", provider.DefaultEnvMap(), manifestPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,33 +199,33 @@ func TestUnverifiedInventoryPrunesCachedProviderModels(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(store.Models()) != 0 {
-		t.Fatalf("unverified provider remained in cache: %#v", store.Models())
+		t.Fatalf("empty Formula provider remained in cache: %#v", store.Models())
 	}
 }
 
-func TestFailedModelStaysRemovedUntilFormulaManifestChanges(t *testing.T) {
+func TestFailedModelStaysRemovedAcrossUnrelatedFormulaManifestChanges(t *testing.T) {
 	clearBuiltinKeys(t)
 	t.Setenv("GROQ_API_KEY", "test")
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "free-models.json")
 	cachePath := filepath.Join(dir, "models.json")
-	writeManifest := func(generatedAt string) {
+	writeManifest := func(generatedAt string, contextLength int) {
 		t.Helper()
-		content := `{"schema_version":1,"generated_at":"` + generatedAt + `","providers":{"groq":{"policy":"inventory","source_urls":["https://example.com/models"],"models":[{"id":"verified-chat","functions":["chat"]}]}}}`
+		content := fmt.Sprintf(`{"schema_version":2,"generated_at":%q,"providers":{"groq":{"source_urls":["https://example.com/models"],"models":[{"id":"verified-chat","functions":["chat"],"context_length":%d}]}}}`, generatedAt, contextLength)
 		if err := os.WriteFile(manifestPath, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	newStore := func() *Store {
 		t.Helper()
-		registry, err := provider.NewRegistryWithManifest("", provider.DefaultEnvMap(), manifestPath, false)
+		registry, err := provider.NewRegistryWithManifest("", provider.DefaultEnvMap(), manifestPath)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return New(registry, cachePath, http.DefaultClient)
 	}
 
-	writeManifest("2026-07-21T00:00:00Z")
+	writeManifest("2026-07-21T00:00:00Z", 8192)
 	store := newStore()
 	if err := store.Bootstrap(context.Background()); err != nil || len(store.Models()) != 1 {
 		t.Fatalf("bootstrap err=%v models=%#v", err, store.Models())
@@ -133,10 +238,25 @@ func TestFailedModelStaysRemovedUntilFormulaManifestChanges(t *testing.T) {
 		t.Fatalf("failed model returned in same manifest: err=%v models=%#v", err, store.Models())
 	}
 
-	writeManifest("2026-07-22T00:00:00Z")
+	writeManifest("2026-07-22T00:00:00Z", 8192)
+	store = newStore()
+	if err := store.Bootstrap(context.Background()); err != nil || len(store.Models()) != 0 {
+		t.Fatalf("unchanged failed model returned after unrelated Formula update: err=%v models=%#v", err, store.Models())
+	}
+	if err := store.RestoreModel("groq/verified-chat"); err != nil || len(store.Models()) != 1 {
+		t.Fatalf("explicit reset did not restore quarantined model: err=%v models=%#v", err, store.Models())
+	}
+	if err := store.RemoveModel("groq/verified-chat"); err != nil {
+		t.Fatal(err)
+	}
+
+	writeManifest("2026-07-23T00:00:00Z", 16384)
 	store = newStore()
 	if err := store.Bootstrap(context.Background()); err != nil || len(store.Models()) != 1 {
-		t.Fatalf("new Formula manifest did not reintroduce model: err=%v models=%#v", err, store.Models())
+		t.Fatalf("changed model metadata did not make model eligible for retest: err=%v models=%#v", err, store.Models())
+	}
+	if _, ok := store.quarantine["groq/verified-chat"]; !ok {
+		t.Fatal("read-only quarantine filtering discarded the previous failure record")
 	}
 }
 
@@ -174,18 +294,6 @@ func TestMultimodalUnderstandingProbeUsesOpenAIContentParts(t *testing.T) {
 	discoverForTest(t, store)
 	if _, err := store.ProbeModel(context.Background(), "test/vision-model", FunctionImageUnderstanding); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestAllowedModelPatternsAreCaseInsensitive(t *testing.T) {
-	if !allowed(nil, []string{"*flash*"}, "GLM-4.7-Flash") {
-		t.Fatal("free Flash model should match")
-	}
-	if allowed(nil, []string{"*flash*"}, "glm-5") {
-		t.Fatal("paid model should not match")
-	}
-	if !allowed([]string{"hunyuan-lite"}, nil, "HUNYUAN-LITE") {
-		t.Fatal("exact allowlist should be case-insensitive")
 	}
 }
 

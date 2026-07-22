@@ -179,15 +179,13 @@ func runServer(ctx context.Context, opts options) error {
 	if err != nil {
 		return fmt.Errorf("load route configuration: %w", err)
 	}
-	registry, err := provider.NewRegistryWithManifest(opts.providers, provider.EnvMap(routes.Config().ProviderEnv), opts.freeModels, true, vault.Get)
+	registry, err := provider.NewRegistryWithManifest(opts.providers, provider.EnvMap(routes.Config().ProviderEnv), opts.freeModels, vault.Get)
 	if err != nil {
 		return err
 	}
 	store := catalog.New(registry, opts.cache, catalogHTTPClient())
-	if len(registry.All()) > 0 {
-		if err := store.Bootstrap(ctx); err != nil {
-			return fmt.Errorf("load free model catalog: %w", err)
-		}
+	if err := store.Bootstrap(ctx); err != nil {
+		return fmt.Errorf("load free model catalog: %w", err)
 	}
 
 	tracker := health.New()
@@ -206,7 +204,7 @@ func runServer(ctx context.Context, opts options) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		slog.Info("free-router started", "addr", opts.addr, "providers", len(registry.All()), "models", len(store.Models()))
+		slog.Info("free-router started", "addr", opts.addr, "providers", len(registry.All()), "formula_providers", len(registry.CatalogAll()), "models", len(store.Models()))
 		errCh <- server.ListenAndServe()
 	}()
 
@@ -229,7 +227,7 @@ func newRegistry(opts options) (*provider.Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return provider.NewRegistryWithManifest(opts.providers, envMap, opts.freeModels, false, vault.Get)
+	return provider.NewRegistryWithManifest(opts.providers, envMap, opts.freeModels, vault.Get)
 }
 
 func configuredEnvMap(opts options) (provider.EnvMap, error) {

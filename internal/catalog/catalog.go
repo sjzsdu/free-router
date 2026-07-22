@@ -3,6 +3,7 @@ package catalog
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -12,8 +13,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +23,8 @@ import (
 
 	"github.com/sjzsdu/free-router/internal/provider"
 )
+
+var explicitUnitPrice = regexp.MustCompile(`(?i)\b(?:priced at|costs?)\s+(?:US\s*)?\$\s*[0-9]`)
 
 //go:embed assets/probe.wav.b64
 var probeWAVBase64 string
@@ -46,8 +49,6 @@ const (
 	FunctionRerank             = "rerank"
 	FunctionModeration         = "moderation"
 )
-
-var ErrUnverifiedInventory = errors.New("free model inventory is unverified")
 
 type Model struct {
 	ID                  string       `json:"id"`
@@ -123,8 +124,8 @@ type upstreamModel struct {
 	Reasoning           flexibleBool `json:"reasoning"`
 	Vision              flexibleBool `json:"vision"`
 	Pricing             struct {
-		Prompt     string `json:"prompt"`
-		Completion string `json:"completion"`
+		Prompt     flexibleString `json:"prompt"`
+		Completion flexibleString `json:"completion"`
 	} `json:"pricing"`
 	Architecture struct {
 		InputModalities  []string `json:"input_modalities"`
@@ -142,23 +143,25 @@ type modelsResponse struct {
 }
 
 type Store struct {
-	registry  *provider.Registry
-	cache     string
-	client    *http.Client
-	refreshMu sync.Mutex
-	mu        sync.RWMutex
-	models    []Model
-	updated   time.Time
+	registry   *provider.Registry
+	cache      string
+	client     *http.Client
+	refreshMu  sync.Mutex
+	mu         sync.RWMutex
+	models     []Model
+	quarantine map[string]string
+	updated    time.Time
 }
 
 type cacheFile struct {
-	SchemaVersion       int     `json:"schema_version"`
-	ManifestGeneratedAt string  `json:"manifest_generated_at"`
-	Models              []Model `json:"models"`
+	SchemaVersion      int               `json:"schema_version"`
+	CatalogFingerprint string            `json:"catalog_fingerprint"`
+	Models             []Model           `json:"models"`
+	Quarantined        map[string]string `json:"quarantined,omitempty"`
 }
 
 func New(registry *provider.Registry, cache string, client *http.Client) *Store {
-	return &Store{registry: registry, cache: cache, client: client}
+	return &Store{registry: registry, cache: cache, client: client, quarantine: make(map[string]string)}
 }
 
 func (s *Store) Bootstrap(ctx context.Context) error {
@@ -175,29 +178,22 @@ func (s *Store) Refresh(ctx context.Context) error {
 	s.refreshMu.Lock()
 	defer s.refreshMu.Unlock()
 	merged := make([]Model, 0)
-	for _, spec := range s.registry.All() {
+	for _, spec := range s.registry.CatalogAll() {
 		merged = append(merged, modelsFromDiscovery(spec)...)
 	}
+	merged = s.applyQuarantine(merged)
 	sort.Slice(merged, func(i, j int) bool { return merged[i].ID < merged[j].ID })
 	s.set(merged, time.Now())
 	return s.saveCache(merged)
 }
 
 func cacheEligible(spec provider.Spec, model Model) bool {
-	if len(spec.DiscoveredModels) == 0 {
-		return false
+	for _, discovered := range spec.DiscoveredModels {
+		if discovered.ID == model.UpstreamID {
+			return true
+		}
 	}
-	return modelEligible(spec, model.UpstreamID, model.Pricing.Prompt, model.Pricing.Completion)
-}
-
-func modelEligible(spec provider.Spec, modelID, promptPrice, completionPrice string) bool {
-	if modelID == "" || spec.DiscoveryPolicy == "unverified" {
-		return false
-	}
-	if !allowed(spec.AllowedModels, spec.AllowedModelPatterns, modelID) {
-		return false
-	}
-	return spec.Filter != provider.FilterZeroPrice || (isZero(promptPrice) && isZero(completionPrice))
+	return false
 }
 
 // RefreshProvider reapplies one Provider's Formula inventory without network discovery.
@@ -205,11 +201,12 @@ func (s *Store) RefreshProvider(ctx context.Context, providerID string) error {
 	_ = ctx
 	s.refreshMu.Lock()
 	defer s.refreshMu.Unlock()
-	spec, ok := s.registry.Get(providerID)
+	spec, ok := s.registry.CatalogGet(providerID)
 	if !ok {
-		return fmt.Errorf("provider %q is not configured", providerID)
+		return fmt.Errorf("provider %q is not in the Formula catalog", providerID)
 	}
 	models := modelsFromDiscovery(spec)
+	models = s.applyQuarantine(models)
 	merged := make([]Model, 0, len(s.Models())+len(models))
 	for _, model := range s.Models() {
 		if model.Provider != providerID {
@@ -225,27 +222,9 @@ func (s *Store) RefreshProvider(ctx context.Context, providerID string) error {
 	return nil
 }
 
-// PruneDisabled removes cached models whose provider is no longer configured.
-func (s *Store) PruneDisabled() error {
-	s.refreshMu.Lock()
-	defer s.refreshMu.Unlock()
-	current := s.Models()
-	models := make([]Model, 0, len(current))
-	for _, model := range current {
-		if _, enabled := s.registry.Get(model.Provider); enabled {
-			models = append(models, model)
-		}
-	}
-	s.set(models, time.Now())
-	return s.saveCache(models)
-}
-
 // fetchUpstream is reserved for the maintainer discovery command used by the Formula.
 // Runtime catalog refreshes never call it.
 func (s *Store) fetchUpstream(ctx context.Context, spec provider.Spec) ([]Model, error) {
-	if spec.DiscoveryPolicy == "unverified" {
-		return nil, fmt.Errorf("%w; rerun the discovery formula", ErrUnverifiedInventory)
-	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, spec.ModelsEndpoint(), nil)
 	if err != nil {
 		return nil, err
@@ -283,7 +262,7 @@ func (s *Store) fetchUpstream(ctx context.Context, spec provider.Spec) ([]Model,
 		if spec.UseNameAsID && candidate.Name != "" {
 			candidate.ID = candidate.Name
 		}
-		if !modelEligible(spec, candidate.ID, candidate.Pricing.Prompt, candidate.Pricing.Completion) {
+		if candidate.ID == "" {
 			continue
 		}
 		input := candidate.InputModalities
@@ -303,6 +282,23 @@ func (s *Store) fetchUpstream(ctx context.Context, spec provider.Spec) ([]Model,
 		modelType := classifyModel(candidate, input, output)
 		capabilities := inferCapabilities(candidate, modelType, input, parameters)
 		functions := inferFunctions(candidate, modelType, input, output, parameters)
+		// An official catalog may include models for endpoints free-router cannot
+		// route safely. Keep those models out of the authoritative inventory
+		// instead of emitting a structurally invalid manifest or guessing.
+		if len(functions) == 0 {
+			continue
+		}
+		if spec.FreeModelPolicy == "zero-price" {
+			if !(candidate.Pricing.Prompt.ZeroValue() && candidate.Pricing.Completion.ZeroValue()) {
+				continue
+			}
+			// Some catalogs expose zero token prices while charging per generated
+			// image, clip, song, or request. An explicit unit price in the official
+			// model description overrides the incomplete token-price fields.
+			if explicitUnitPrice.MatchString(candidate.Description) {
+				continue
+			}
+		}
 		models = append(models, Model{
 			ID: spec.ID + "/" + candidate.ID, Provider: spec.ID, UpstreamID: candidate.ID,
 			Name: candidate.Name, Description: candidate.Description, OwnedBy: candidate.OwnedBy, Created: candidate.Created,
@@ -310,10 +306,13 @@ func (s *Store) fetchUpstream(ctx context.Context, spec provider.Spec) ([]Model,
 			ContextLength: contextLength, MaxOutputTokens: maxOutputTokens,
 			InputModalities: input, OutputModalities: output, SupportedParameters: parameters,
 			SupportedEndpoints: candidate.SupportedEndpoints, Capabilities: capabilities,
-			Pricing: Pricing{Prompt: candidate.Pricing.Prompt, Completion: candidate.Pricing.Completion},
+			Pricing: Pricing{Prompt: candidate.Pricing.Prompt.Value, Completion: candidate.Pricing.Completion.Value},
 		})
 	}
 	if len(models) == 0 {
+		if spec.FreeModelPolicy == "zero-price" && len(candidates) > 0 {
+			return []Model{}, nil
+		}
 		return nil, errors.New("no eligible models returned")
 	}
 	return models, nil
@@ -322,7 +321,7 @@ func (s *Store) fetchUpstream(ctx context.Context, spec provider.Spec) ([]Model,
 func modelsFromDiscovery(spec provider.Spec) []Model {
 	models := make([]Model, 0, len(spec.DiscoveredModels))
 	for _, candidate := range spec.DiscoveredModels {
-		if !modelEligible(spec, candidate.ID, candidate.Pricing.Prompt, candidate.Pricing.Completion) {
+		if candidate.ID == "" {
 			continue
 		}
 		modelType := candidate.Type
@@ -405,7 +404,13 @@ func (s *Store) Probe(ctx context.Context, providerID string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return len(models), nil
+	matched := 0
+	for _, model := range models {
+		if cacheEligible(spec, model) {
+			matched++
+		}
+	}
+	return matched, nil
 }
 
 // DiscoverFromProviders fetches fresh upstream catalogs for Formula maintenance.
@@ -450,6 +455,38 @@ func (s *Store) DiscoverFromProviders(ctx context.Context, providerIDs ...string
 	sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
 	sort.Slice(failures, func(i, j int) bool { return failures[i].Provider < failures[j].Provider })
 	s.set(models, time.Now())
+	return models, failures
+}
+
+// DiscoverFromSpecs fetches explicit provider catalog specifications. Formula
+// maintenance uses this to try official /models endpoints even when inference
+// credentials are absent; authenticated endpoints then report a normal fetch
+// failure instead of silently falling back to agent discovery.
+func (s *Store) DiscoverFromSpecs(ctx context.Context, providers []provider.Spec) ([]Model, []DiscoveryFailure) {
+	type result struct {
+		provider string
+		models   []Model
+		err      error
+	}
+	results := make(chan result, len(providers))
+	for _, spec := range providers {
+		go func(spec provider.Spec) {
+			models, err := s.fetchUpstream(ctx, spec)
+			results <- result{provider: spec.ID, models: models, err: err}
+		}(spec)
+	}
+	models := make([]Model, 0)
+	failures := make([]DiscoveryFailure, 0)
+	for range providers {
+		item := <-results
+		if item.err != nil {
+			failures = append(failures, DiscoveryFailure{Provider: item.provider, Error: item.err.Error()})
+			continue
+		}
+		models = append(models, item.models...)
+	}
+	sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
+	sort.Slice(failures, func(i, j int) bool { return failures[i].Provider < failures[j].Provider })
 	return models, failures
 }
 
@@ -673,6 +710,11 @@ func (s *Store) Find(id string) (Model, bool) {
 	return Model{}, false
 }
 
+func (s *Store) ProviderConfigured(providerID string) bool {
+	_, ok := s.registry.Get(providerID)
+	return ok
+}
+
 type Status struct {
 	Count     int        `json:"count"`
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
@@ -715,8 +757,9 @@ func (s *Store) set(models []Model, updated time.Time) {
 	s.mu.Unlock()
 }
 
-// RemoveModel permanently removes a failed model from the cache for the current
-// Formula manifest version. A newer manifest may introduce it again for retesting.
+// RemoveModel removes a failed model and records its metadata fingerprint. Formula
+// updates do not revive the same broken model; changed metadata makes it eligible
+// for retesting.
 func (s *Store) RemoveModel(modelID string) error {
 	s.refreshMu.Lock()
 	defer s.refreshMu.Unlock()
@@ -726,6 +769,9 @@ func (s *Store) RemoveModel(modelID string) error {
 	for _, model := range current {
 		if model.ID == modelID {
 			removed = true
+			s.mu.Lock()
+			s.quarantine[model.ID] = modelFingerprint(model)
+			s.mu.Unlock()
 			continue
 		}
 		models = append(models, model)
@@ -733,6 +779,49 @@ func (s *Store) RemoveModel(modelID string) error {
 	if !removed {
 		return nil
 	}
+	s.set(models, time.Now())
+	return s.saveCache(models)
+}
+
+// RestoreModel clears a model quarantine after an explicit operator reset and
+// re-adds the current Formula definition so it can be probed again.
+func (s *Store) RestoreModel(modelID string) error {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	s.mu.RLock()
+	_, quarantined := s.quarantine[modelID]
+	s.mu.RUnlock()
+	if !quarantined {
+		return nil
+	}
+	var restored Model
+	found := false
+	for _, spec := range s.registry.CatalogAll() {
+		for _, model := range modelsFromDiscovery(spec) {
+			if model.ID == modelID {
+				restored = model
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("model %q is no longer in the Formula catalog", modelID)
+	}
+	models := s.Models()
+	for _, model := range models {
+		if model.ID == modelID {
+			return nil
+		}
+	}
+	s.mu.Lock()
+	delete(s.quarantine, modelID)
+	s.mu.Unlock()
+	models = append(models, restored)
+	sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
 	s.set(models, time.Now())
 	return s.saveCache(models)
 }
@@ -746,12 +835,18 @@ func (s *Store) loadCache() error {
 	if err := json.Unmarshal(data, &cached); err != nil {
 		return fmt.Errorf("decode cache: %w", err)
 	}
-	if cached.SchemaVersion != 1 || cached.ManifestGeneratedAt != s.manifestGeneratedAt() {
+	if cached.SchemaVersion != 4 {
+		return errors.New("unsupported model cache schema")
+	}
+	s.mu.Lock()
+	s.quarantine = cloneMap(cached.Quarantined)
+	s.mu.Unlock()
+	if cached.CatalogFingerprint != s.catalogFingerprint() {
 		return errors.New("cache was produced from a different Formula manifest")
 	}
 	models := make([]Model, 0, len(cached.Models))
 	for _, model := range cached.Models {
-		if spec, enabled := s.registry.Get(model.Provider); enabled && cacheEligible(spec, model) {
+		if spec, exists := s.registry.CatalogGet(model.Provider); exists && cacheEligible(spec, model) {
 			if model.Type == "" {
 				model.Type = classifyID(model.UpstreamID)
 				model.Free = true
@@ -775,7 +870,10 @@ func (s *Store) saveCache(models []Model) error {
 	if err := os.MkdirAll(filepath.Dir(s.cache), 0o700); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(cacheFile{SchemaVersion: 1, ManifestGeneratedAt: s.manifestGeneratedAt(), Models: models}, "", "  ")
+	s.mu.RLock()
+	quarantined := cloneMap(s.quarantine)
+	s.mu.RUnlock()
+	data, err := json.MarshalIndent(cacheFile{SchemaVersion: 4, CatalogFingerprint: s.catalogFingerprint(), Models: models, Quarantined: quarantined}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -786,46 +884,73 @@ func (s *Store) saveCache(models []Model) error {
 	return os.Rename(tmp, s.cache)
 }
 
-func (s *Store) manifestGeneratedAt() string {
-	var generatedAt string
-	for _, spec := range s.registry.All() {
-		if spec.ManifestGeneratedAt > generatedAt {
-			generatedAt = spec.ManifestGeneratedAt
+func (s *Store) applyQuarantine(models []Model) []Model {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	filtered := make([]Model, 0, len(models))
+	for _, model := range models {
+		fingerprint, quarantined := s.quarantine[model.ID]
+		if !quarantined {
+			filtered = append(filtered, model)
+			continue
 		}
+		if fingerprint == modelFingerprint(model) {
+			continue
+		}
+		filtered = append(filtered, model)
 	}
-	return generatedAt
+	return filtered
 }
 
-func isZero(value string) bool {
-	if value == "" {
-		return false
+func modelFingerprint(model Model) string {
+	type fingerprint struct {
+		ID                  string   `json:"id"`
+		Type                string   `json:"type"`
+		Functions           []string `json:"functions"`
+		ContextLength       int      `json:"context_length"`
+		MaxOutputTokens     int      `json:"max_output_tokens"`
+		InputModalities     []string `json:"input_modalities"`
+		OutputModalities    []string `json:"output_modalities"`
+		SupportedParameters []string `json:"supported_parameters"`
+		SupportedEndpoints  []string `json:"supported_endpoints"`
+		Pricing             Pricing  `json:"pricing"`
 	}
-	price, err := strconv.ParseFloat(value, 64)
-	return err == nil && price == 0
+	data, _ := json.Marshal(fingerprint{
+		ID: model.ID, Type: model.Type, Functions: sortedStrings(model.Functions),
+		ContextLength: model.ContextLength, MaxOutputTokens: model.MaxOutputTokens,
+		InputModalities: sortedStrings(model.InputModalities), OutputModalities: sortedStrings(model.OutputModalities),
+		SupportedParameters: sortedStrings(model.SupportedParameters), SupportedEndpoints: sortedStrings(model.SupportedEndpoints),
+		Pricing: model.Pricing,
+	})
+	return fmt.Sprintf("%x", sha256.Sum256(data))
+}
+
+func (s *Store) catalogFingerprint() string {
+	type catalogEntry struct {
+		Provider string   `json:"provider"`
+		Models   []string `json:"models"`
+	}
+	entries := make([]catalogEntry, 0)
+	for _, spec := range s.registry.CatalogAll() {
+		entry := catalogEntry{Provider: spec.ID}
+		for _, model := range modelsFromDiscovery(spec) {
+			entry.Models = append(entry.Models, modelFingerprint(model))
+		}
+		entries = append(entries, entry)
+	}
+	data, _ := json.Marshal(entries)
+	return fmt.Sprintf("%x", sha256.Sum256(data))
+}
+
+func sortedStrings(values []string) []string {
+	result := append([]string(nil), values...)
+	sort.Strings(result)
+	return result
 }
 
 func contains(values []string, wanted string) bool {
 	for _, value := range values {
 		if value == wanted {
-			return true
-		}
-	}
-	return false
-}
-
-func allowed(allowlist, patterns []string, model string) bool {
-	if len(allowlist) == 0 && len(patterns) == 0 {
-		return true
-	}
-	for _, allowedModel := range allowlist {
-		if strings.EqualFold(allowedModel, model) {
-			return true
-		}
-	}
-	model = strings.ToLower(model)
-	for _, pattern := range patterns {
-		matched, err := path.Match(strings.ToLower(pattern), model)
-		if err == nil && matched {
 			return true
 		}
 	}
@@ -933,6 +1058,8 @@ func inferFunctions(candidate upstreamModel, modelType string, input, output, pa
 			add(FunctionSpeechToText)
 		case strings.Contains(value, "audio/speech"):
 			add(FunctionTextToSpeech)
+		case strings.Contains(value, "audio") && strings.Contains(value, "{text}"):
+			add(FunctionTextToSpeech)
 		case strings.Contains(value, "video"):
 			add(FunctionVideoGeneration)
 		case strings.Contains(value, "image"):
@@ -1034,6 +1161,50 @@ type flexibleBool struct {
 	Value bool
 	Known bool
 }
+
+type flexibleString struct {
+	Value string
+	Known bool
+	Zero  bool
+}
+
+func (value *flexibleString) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		value.Value = text
+		value.Known = true
+		parsed, err := strconv.ParseFloat(text, 64)
+		value.Zero = err == nil && parsed == 0
+		return nil
+	}
+	var number json.Number
+	if err := json.Unmarshal(data, &number); err == nil {
+		value.Value = number.String()
+		value.Known = true
+		parsed, err := strconv.ParseFloat(number.String(), 64)
+		value.Zero = err == nil && parsed == 0
+		return nil
+	}
+	var tiers []struct {
+		Price flexibleString `json:"price"`
+	}
+	if err := json.Unmarshal(data, &tiers); err == nil && len(tiers) > 0 {
+		value.Known = true
+		value.Zero = true
+		for _, tier := range tiers {
+			if !tier.Price.Known || !tier.Price.Zero {
+				value.Zero = false
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func (value flexibleString) ZeroValue() bool { return value.Known && value.Zero }
 
 func (value *flexibleBool) UnmarshalJSON(data []byte) error {
 	if string(data) == "null" {

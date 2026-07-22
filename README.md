@@ -34,7 +34,7 @@
 
 ### 中国大陆免费源的筛选原则
 
-内置中国大陆来源目前包括 ModelScope、SiliconFlow、智谱开放平台、百度千帆、Xiaomi MiMo、阿里云百炼、火山方舟和百川智能。免费模型名单、能力验证结果和判定证据统一维护在版本化数据清单中，不再写死在 Go 代码里；没有经过 Formula 实际调用验证的模型不会进入运行目录。
+内置中国大陆来源目前包括 ModelScope、SiliconFlow、智谱开放平台、百度千帆、Xiaomi MiMo、阿里云百炼、火山方舟和百川智能。免费模型名单和判定证据统一维护在版本化数据清单中，不再写死在 Go 代码里；真实调用结果属于本机运行诊断，不会反向污染官方模型源数据。
 
 `gift-credits`、`new-user-free-quota`、`free-trial-quota` 都属于额度型来源，并非永久免费。只有用户配置对应 Key 后它们才会启用，管理页面会持续显示计费警告。百炼用户应先开启“免费额度用完即停”；其他额度型平台应关闭后付费或确保账户没有可扣余额。Kimi 当前按输入/输出计费，MiniMax 当前使用付费 Token Plan、Credits 或按量计费，因此没有作为免费来源内置。
 
@@ -197,7 +197,7 @@ OPENAI_API_KEY=任意非空字符串
 
 进入 Admin 的模型页时，系统会后台检测状态未知或检测缓存已超过 24 小时的全部“模型 + 能力”组合。文本能力使用 1 token 的最短请求；图片、音频、视频理解分别使用内嵌的 8×8 PNG、0.1 秒 WAV 和极小 MP4；生成能力使用最小真实任务。同一 Provider 串行、全局最多并发 3 个，普通能力单次超时 10 秒，图片/视频生成最长等待 2 分钟。测试素材通过 Go Embed 打入同一个二进制，用户不需要额外维护资源文件。
 
-检测结果缓存 24 小时；点击“重新检测全部”会在确认后忽略缓存强制重检，图片/视频生成任务可能消耗少量免费额度。Video 接口返回任务已受理即视为探测成功，不等待完整成片。任一能力探测失败都会把整个模型从运行缓存删除；诊断记录仍保留在异常列表中。该模型只有在新版 Formula 清单再次验证通过后才会重新进入目录。
+检测结果缓存 24 小时；点击“重新检测全部”会在确认后忽略缓存强制重检，图片/视频生成任务可能消耗少量免费额度。Video 接口返回任务已受理即视为探测成功，不等待完整成片。任一能力探测失败都会把整个模型从运行缓存删除；诊断记录仍保留在异常列表中。只有 Formula 的官方模型目录发生新变化时，本地缓存才会重建。
 
 ## 直接指定模型
 
@@ -304,23 +304,30 @@ free-router onboard --force            # 明确覆盖已有配置
 
 ## 模型缓存与自维护
 
-免费资格、运行缓存和健康状态是三类独立数据：
+可信模型目录、调用凭据和健康状态是三类独立数据：
 
-1. `internal/provider/free-models.json` 是版本化的免费资格清单，通过 Go Embed 随二进制发布；Provider 连接地址和鉴权逻辑仍留在 Go 代码中。
-2. 运行时只接受清单中 `policy=inventory` 且列出具体模型的数据；启动、保存凭据和手动刷新均不会请求 Provider `/models` 扩充目录。
-3. `~/.free-router/models.json` 是带有 Formula `generated_at` 的可用模型缓存。模型调用或 Admin 探测失败后会立即从该缓存删除，同一版清单下重启也不会复活。
-4. 只有 Formula 发布了新 `generated_at`，缓存才会从新版 inventory 重建，被淘汰模型才有机会在重新验证后恢复。
-5. 可用 `--free-models FILE` 或 `FREE_ROUTER_FREE_MODELS` 临时加载外部清单，无需重新构建二进制。
+1. `internal/provider/free-models.json` 是 Formula 产出的版本化数据文件，通过 Go Embed 随二进制发布；每个 Provider 只有经过官方证据确认的 `models[]`，不再存在 policy 或运行时 allowlist。
+2. 读取和缓存 Formula 模型不需要配置 API Key。API Key 只负责启用对应 Provider 的实际调用能力，不参与模型发现，也不会改变目录内容。
+3. 启动、保存凭据和 Admin 操作均不会请求 Provider `/models` 扩充目录。运行时代码只消费 Formula 数据，Provider 连接地址和鉴权逻辑仍留在 Go 代码中。
+4. `~/.free-router/models.json` 是带有 Formula `generated_at` 的本地目录缓存。模型调用或 Admin 探测失败后会立即从缓存删除，并记录模型元数据指纹；重启或 Formula 仅更新其他模型时都不会复活。
+5. 被隔离模型只有自身元数据发生变化，或用户显式重新检测并验证成功后才会恢复。单纯发布新的 `generated_at` 不会清空故障隔离。
+6. 可用 `--free-models FILE` 或 `FREE_ROUTER_FREE_MODELS` 临时加载外部清单，无需重新构建二进制。
 
-### 并发更新免费模型清单
+### 按 Provider 更新免费模型清单
 
-仓库提供 [.tt/formulas/discover-free-models.toml](./.tt/formulas/discover-free-models.toml)。它为每个内置 Provider 启动独立并发调研分支，只接受官网文档、官方价格页或官方 API 作为免费证据；维护专用命令会读取已配置 Provider 的官方目录，对每个声明能力执行最小真实请求，只有至少一个能力成功的模型才写入 inventory。调研输出会先经过确定性的归一化和逐 Provider 校验，再保守合并、原子写入清单，并调用 Go 的语义校验器。
+仓库提供 [.tt/formulas/discover-free-models.toml](./.tt/formulas/discover-free-models.toml)。模型发现按 Provider 明确分为三种模式：
 
-Formula 结束报告会区分 `attempted_at` 和真正发生数据变化的 `generated_at`，并列出接受/拒绝数量和被拒绝的 Provider。一次调研执行成功不等于数据已更新；只有通过证据和结构校验的变化才会推进清单时间戳。
+- `api`：官方 `/models` 是权威模型源；Formula 直接使用接口结果，并按官方零价字段或该 Provider 的免费套餐规则过滤。
+- `api-agent-filter`：官方 `/models` 提供权威 ID 候选集，专属 Agent 只负责根据官方价格页和免费额度说明筛选；Agent 不能创造接口未返回的 ID。
+- `agent`：Provider 没有可用的官方模型目录，由专属 Agent 从官方模型文档、价格页和 API 文档生成完整清单；Agent 无法得到可靠模型时，Formula 直接放弃并从清单删除该 Provider。
+
+模型发现不以本机是否配置 API Key 作为前置条件：公开接口会直接读取；需要鉴权的官方接口在有凭据时读取，没有凭据或遇到 401、403、429、超时等暂时失败时保留旧清单，避免一次网络或账户故障造成误删。`agent` 与 `api-agent-filter` 的调研只接受官方资料；其中 `api-agent-filter` 必须和本次官方接口结果取交集。
+
+写入前有确定性质量门禁：被选 Provider 只能按本次权威结果完整替换；未选择的 Provider 不得变化；官方接口失败的 Provider 必须保留；Agent 权威结果为空的 Provider 必须删除。Formula 最后由 `reporter` Agent 根据审计数据生成 Markdown，列出官方接口更新、Agent 更新、放弃项、接口失败保留项及模型数量变化。通过门禁后 Formula 会直接更新 `internal/provider/free-models.json` 和 `generated_at`。
 
 Formula 不需要日期参数；发生有效数据变化时，会使用实际运行时刻更新 `generated_at`，并为新发现且缺少时间的模型补上 `verified_at`。
 
-`provider` 变量默认为 `all`。指定 Provider 后，官方目录读取、能力探测和 inventory 合并都只作用于该 Provider，其他 Provider 的清单保持不变；目标 Provider 必须已经配置 API Key。
+`provider` 变量默认为 `all`。指定 Provider 后，官方目录读取、必要的专属 Agent 调研和清单替换只作用于该 Provider，其他 Provider 保持不变。对于必须鉴权的 `/models`，未配置 Key 时本次不会更新该 Provider；它不会回退为 Agent 猜测模型。
 
 ```bash
 tt formula validate .tt/formulas/discover-free-models.toml
@@ -331,11 +338,19 @@ go run . validate-model-data internal/provider/free-models.json
 make test-formula
 ```
 
+Formula 会在写入前运行与程序启动时相同的严格清单校验。单个 Provider 一次新增超过 50 个模型、删除超过 20 个模型，或全局新增超过 100、删除超过 50 时，质量门禁默认拒绝写入并在报告中列出变化。只有人工复核 diff 后才应显式放行：
+
+```bash
+make discover-free-models PROVIDER=nvidia ALLOW_LARGE_CHANGES=true
+```
+
+显式放行只绕过规模熔断，不会绕过 schema、官方来源、免费策略或权威目录一致性校验。无法映射到 free-router 固定能力的上游模型会被排除，不会以空 `functions` 写入清单。
+
 维护者定期运行 Formula、复核 diff 后提交数据文件即可；业务代码无需跟着模型名单变化。若只想在本机立即使用生成结果，可把清单复制到 `~/.free-router/free-models.json`，并设置 `FREE_ROUTER_FREE_MODELS` 后重启服务。
 
 ## 接入任意免费源
 
-任何 OpenAI 兼容服务都可以通过 `FREE_ROUTER_PROVIDERS` 配置连接，但运行模型仍必须由外部 Formula manifest 明确提供 inventory；仅配置连接和 API Key 不会在运行时自动导入 `/models`。建议只引用密钥环境变量：
+任何 OpenAI 兼容服务都可以通过 `FREE_ROUTER_PROVIDERS` 配置连接，但模型仍必须由外部 Formula manifest 的同名 Provider `models[]` 明确提供；仅配置连接和 API Key 不会在运行时自动导入 `/models`。建议只引用密钥环境变量：
 
 ```bash
 export MY_FREE_API_KEY=xxx
@@ -363,7 +378,7 @@ export FREE_ROUTER_PROVIDERS='[
 }
 ```
 
-如果源的 `/models` 提供 OpenRouter 风格的 pricing，可设置 `"filter": "zero-price"`，只允许价格为零的模型；其他源默认信任用户明确配置的免费账户。
+免费判断只在 Formula 中完成。运行时 Provider 配置不接受过滤策略，也不会根据 `/models` 或价格字段自行猜测免费模型。
 
 ## 命令
 
