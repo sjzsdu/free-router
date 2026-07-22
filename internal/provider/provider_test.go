@@ -216,10 +216,23 @@ func TestCreditProvidersExposeBillingWarnings(t *testing.T) {
 }
 
 func TestBuiltinsHaveOfficialRegistrationURLs(t *testing.T) {
+	expected := map[string]string{
+		"mistral":        "https://console.mistral.ai/home?profile_dialog=api-keys",
+		"dashscope":      "https://bailian.console.aliyun.com/cn-beijing/?tab=app#/api-key",
+		"volcengine-ark": "https://console.volcengine.com/ark/region:ark+cn-beijing/apikey",
+		"baichuan":       "https://platform.baichuan-ai.com/homePage",
+		"cloudflare":     "https://dash.cloudflare.com/?to=%2F%3Aaccount%2Fai%2Fworkers-ai",
+	}
 	for _, spec := range builtins() {
 		parsed, err := url.Parse(spec.RegisterURL)
 		if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
 			t.Errorf("provider %s has invalid registration URL %q", spec.ID, spec.RegisterURL)
+		}
+		if want, ok := expected[spec.ID]; ok && spec.RegisterURL != want {
+			t.Errorf("provider %s registration URL = %q, want %q", spec.ID, spec.RegisterURL, want)
+		}
+		if spec.ID == "baichuan" && spec.RegisterLabel != "申请接入" {
+			t.Errorf("baichuan registration label = %q, want 申请接入", spec.RegisterLabel)
 		}
 	}
 }

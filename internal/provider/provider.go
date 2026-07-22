@@ -36,6 +36,7 @@ type Spec struct {
 	FreeKind            string            `json:"free_kind,omitempty"`
 	BillingWarning      string            `json:"billing_warning,omitempty"`
 	RegisterURL         string            `json:"register_url,omitempty"`
+	RegisterLabel       string            `json:"register_label,omitempty"`
 	OAuth               bool              `json:"oauth,omitempty"`
 	UseNameAsID         bool              `json:"use_name_as_id,omitempty"`
 	ModelDiscovery      string            `json:"model_discovery,omitempty"`
@@ -516,7 +517,7 @@ func BuiltinStatusWithManifest(envMap EnvMap, manifestPath string, resolvers ...
 			"id": spec.ID, "envs": effectiveEnvNames(spec, envMap), "matched_env": matchedEnv,
 			"requires": spec.RequiredEnvs, "missing_required": missingRequired,
 			"configured": configured, "source": source, "tier": spec.Tier, "free_kind": spec.FreeKind,
-			"billing_warning": spec.BillingWarning, "register_url": spec.RegisterURL, "oauth": spec.OAuth,
+			"billing_warning": spec.BillingWarning, "register_url": spec.RegisterURL, "register_label": spec.RegisterLabel, "oauth": spec.OAuth,
 			"catalog_status": catalogStatus, "formula_model_count": len(spec.DiscoveredModels), "free_basis": spec.FreeBasis, "source_urls": spec.SourceURLs,
 			"discovery_status": discoveryStatus, "discovery_message": discoveryMessage,
 			"model_discovery": spec.ModelDiscovery, "free_model_policy": spec.FreeModelPolicy,
@@ -591,7 +592,7 @@ func builtins() []Spec {
 		{ID: "pollinations", BaseURL: "https://gen.pollinations.ai/v1", APIKeyEnv: "POLLINATIONS_API_KEY", ModelDiscovery: "api-agent-filter", FreeModelPolicy: "all", Tier: "free-credits", RegisterURL: "https://enter.pollinations.ai/"},
 		{ID: "huggingface", BaseURL: "https://router.huggingface.co/v1", APIKeyEnv: "HF_TOKEN", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-credits", RegisterURL: "https://huggingface.co/settings/tokens"},
 		{ID: "nvidia", BaseURL: "https://integrate.api.nvidia.com/v1", APIKeyEnv: "NVIDIA_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-credits", RegisterURL: "https://build.nvidia.com/settings/api-keys"},
-		{ID: "mistral", BaseURL: "https://api.mistral.ai/v1", APIKeyEnv: "MISTRAL_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-experiment-plan", RegisterURL: "https://console.mistral.ai/api-keys"},
+		{ID: "mistral", BaseURL: "https://api.mistral.ai/v1", APIKeyEnv: "MISTRAL_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-experiment-plan", RegisterURL: "https://console.mistral.ai/home?profile_dialog=api-keys"},
 		{ID: "sambanova", BaseURL: "https://api.sambanova.ai/v1", APIKeyEnv: "SAMBANOVA_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-tier", RegisterURL: "https://cloud.sambanova.ai/apis"},
 		{ID: "ollama-cloud", BaseURL: "https://api.ollama.com/v1", APIKeyEnv: "OLLAMA_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-tier", RegisterURL: "https://ollama.com/settings/keys"},
 		{ID: "modelscope", BaseURL: "https://api-inference.modelscope.cn/v1", APIKeyEnv: "MODELSCOPE_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-tier", RegisterURL: "https://modelscope.cn/my/myaccesstoken"},
@@ -603,17 +604,17 @@ func builtins() []Spec {
 		{
 			ID: "dashscope", BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", APIKeyEnv: "DASHSCOPE_API_KEY", ModelDiscovery: "api-agent-filter", FreeModelPolicy: "all",
 			Tier: "new-user-free-quota", FreeKind: "trial", BillingWarning: "新人额度通常仅 30～90 天；请在百炼控制台开启免费额度用完即停。",
-			RegisterURL: "https://bailian.console.aliyun.com/?apiKey=1#/api-key",
+			RegisterURL: "https://bailian.console.aliyun.com/cn-beijing/?tab=app#/api-key",
 		},
 		{
 			ID: "volcengine-ark", BaseURL: "https://ark.cn-beijing.volces.com/api/v3", APIKeyEnv: "ARK_API_KEY", ModelDiscovery: "agent",
 			Tier: "free-trial-quota", FreeKind: "trial", BillingWarning: "免费额度按模型限量发放，耗尽后可能转为计费。",
-			RegisterURL: "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey",
+			RegisterURL: "https://console.volcengine.com/ark/region:ark+cn-beijing/apikey",
 		},
 		{
 			ID: "baichuan", BaseURL: "https://api.baichuan-ai.com/v1", APIKeyEnv: "BAICHUAN_API_KEY", ModelDiscovery: "agent",
 			Tier: "new-user-gift-credit", FreeKind: "credit", BillingWarning: "新用户赠送金有效期有限，余额耗尽后接口按平台价格计费。",
-			RegisterURL: "https://platform.baichuan-ai.com/console/apikey",
+			RegisterURL: "https://platform.baichuan-ai.com/homePage", RegisterLabel: "申请接入",
 		},
 		{
 			ID: "bigmodel", BaseURL: "https://open.bigmodel.cn/api/paas/v4", ModelDiscovery: "agent",
@@ -629,6 +630,6 @@ func builtins() []Spec {
 			APIKeyEnv: "SILICONFLOW_API_KEY", Tier: "free-models", RegisterURL: "https://cloud.siliconflow.cn/account/ak",
 		},
 		{ID: "zai", BaseURL: "https://api.z.ai/api/paas/v4", APIKeyEnv: "ZAI_API_KEY", ModelDiscovery: "api-agent-filter", FreeModelPolicy: "all", Tier: "free-models", RegisterURL: "https://z.ai/manage-apikey/apikey-list"},
-		{ID: "cloudflare", BaseURL: "https://api.cloudflare.com/client/v4/accounts/" + cloudflareAccount + "/ai/v1", ModelsURL: "https://api.cloudflare.com/client/v4/accounts/" + cloudflareAccount + "/ai/models/search", APIKeyEnv: "CLOUDFLARE_API_TOKEN", RequiredEnvs: []string{"CLOUDFLARE_ACCOUNT_ID"}, UseNameAsID: true, ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "10000-neurons-per-day", RegisterURL: "https://dash.cloudflare.com/profile/api-tokens"},
+		{ID: "cloudflare", BaseURL: "https://api.cloudflare.com/client/v4/accounts/" + cloudflareAccount + "/ai/v1", ModelsURL: "https://api.cloudflare.com/client/v4/accounts/" + cloudflareAccount + "/ai/models/search", APIKeyEnv: "CLOUDFLARE_API_TOKEN", RequiredEnvs: []string{"CLOUDFLARE_ACCOUNT_ID"}, UseNameAsID: true, ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "10000-neurons-per-day", RegisterURL: "https://dash.cloudflare.com/?to=%2F%3Aaccount%2Fai%2Fworkers-ai"},
 	}
 }

@@ -75,6 +75,7 @@ export interface ProviderStatus {
   manifest_generated_at?: string
   manifest_error?: string
   register_url?: string
+  register_label?: string
   oauth?: boolean
 }
 
