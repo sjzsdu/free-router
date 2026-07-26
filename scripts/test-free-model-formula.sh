@@ -124,6 +124,32 @@ test "$(jq -r '.providers.groq.models[0].id' "$status_target")" = "verified-chat
 test "$(jq -r '.providers.groq.discovery_status' "$status_target")" = "awaiting-approval"
 test "$(jq -r '.providers.pollinations.discovery_status' "$status_target")" = "validation-failed"
 
+verification_candidate="$candidate_dir/verification-failed.json"
+cat > "$verification_candidate" <<'EOF'
+{"schema_version":2,"generated_at":"2026-07-21T00:00:00Z","providers":{"gemini":{"source_urls":["https://example.com/pricing"],"models":[{"id":"models/gemini-test","functions":["chat"]}],"discovery_status":"verification-failed","discovery_message":"agent could not identify free models from official catalog; provider abandoned"}}}
+EOF
+verification_target="$candidate_dir/verification-target.json"
+printf '%s' '{"schema_version":2,"providers":{"gemini":{"models":[{"id":"gemini-old","functions":["chat"]}]},"groq":{"source_urls":["https://console.groq.com/docs/rate-limits"],"models":[{"id":"groq-old","functions":["chat"]}]}}}' > "$verification_target"
+verification_write="$(FREE_ROUTER_MANIFEST_TARGET="$verification_target" FREE_ROUTER_ROOT="$root" sh "$write_manifest" "$verification_candidate" true)"
+test "$(printf '%s' "$verification_write" | jq -r '.applied')" = "true"
+test "$(printf '%s' "$verification_write" | jq -r '.changed')" = "true"
+test "$(jq '.providers.gemini.models | length' "$verification_target")" -eq 0
+test "$(jq -r '.providers.gemini.discovery_status' "$verification_target")" = "verification-failed"
+test "$(jq -r '.providers.groq.models[0].id' "$verification_target")" = "groq-old"
+
+awaiting_candidate="$candidate_dir/awaiting-approval.json"
+cat > "$awaiting_candidate" <<'EOF'
+{"schema_version":2,"generated_at":"2026-07-21T00:00:00Z","providers":{"groq":{"source_urls":["https://example.com/free"],"models":[{"id":"groq-new","functions":["chat"]}],"discovery_status":"awaiting-approval","discovery_message":"pending human review"}}}
+EOF
+awaiting_target="$candidate_dir/awaiting-target.json"
+printf '%s' '{"schema_version":2,"providers":{"groq":{"models":[{"id":"groq-old","functions":["chat"]}],"discovery_status":"ready"},"gemini":{"source_urls":["https://ai.google.dev/gemini-api/docs/pricing"],"models":[{"id":"gemini-old","functions":["chat"]}],"discovery_status":"ready"}}}' > "$awaiting_target"
+awaiting_write="$(FREE_ROUTER_MANIFEST_TARGET="$awaiting_target" FREE_ROUTER_ROOT="$root" sh "$write_manifest" "$awaiting_candidate" true)"
+test "$(printf '%s' "$awaiting_write" | jq -r '.applied')" = "true"
+test "$(printf '%s' "$awaiting_write" | jq -r '.changed')" = "true"
+test "$(jq -r '.providers.groq.models[0].id' "$awaiting_target")" = "groq-new"
+test "$(jq -r '.providers.groq.discovery_status' "$awaiting_target")" = "awaiting-approval"
+test "$(jq -r '.providers.gemini.models[0].id' "$awaiting_target")" = "gemini-old"
+
 large_models="$(jq -cn '[range(0;51) | {id:("model-" + tostring),functions:["chat"]}]')"
 large_candidate="$(jq -cn --argjson models "$large_models" '{schema_version:2,providers:{groq:{models:$models}}}')"
 large_inventory="$(jq -cn --argjson models "$large_models" '{results:[{provider:"groq",source:"api",authoritative:true,accepted:true,abandoned:false,models:$models}]}')"

@@ -29,8 +29,8 @@ func TestSiliconFlowDiscoversOnlyChatModels(t *testing.T) {
 	if endpoint.Query().Get("type") != "text" || endpoint.Query().Get("sub_type") != "chat" {
 		t.Fatalf("unexpected models endpoint: %s", endpoint)
 	}
-	if len(spec.DiscoveredModels) == 0 {
-		t.Fatal("siliconflow must load Formula models")
+	if len(spec.DiscoveredModels) == 0 && spec.DiscoveryStatus != "verification-failed" {
+		t.Fatalf("siliconflow should either load Formula models or surface verification-failed, got status=%q", spec.DiscoveryStatus)
 	}
 }
 
@@ -129,6 +129,30 @@ func TestManifestPricingMustBeNonNegativeNumericStrings(t *testing.T) {
 			t.Errorf("invalid price %q accepted", value)
 		}
 	}
+}
+
+func TestBuiltinStatusWithManifestTreatsVerificationFailedProvidersAsEmptyCatalog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "free-models.json")
+	content := `{"schema_version":2,"generated_at":"test","providers":{"gemini":{"source_urls":["https://example.com/pricing"],"models":[{"id":"models/gemini-test","functions":["chat"]}],"discovery_status":"verification-failed","discovery_message":"agent could not identify free models from official catalog; provider abandoned"}}}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status := BuiltinStatusWithManifest(DefaultEnvMap(), path)
+	for _, item := range status {
+		if item["id"] == "gemini" {
+			if item["catalog_status"] != "empty" {
+				t.Fatalf("verification-failed provider must not be routable: %#v", item)
+			}
+			if item["formula_model_count"] != 0 {
+				t.Fatalf("verification-failed provider must expose zero formula models: %#v", item)
+			}
+			if item["discovery_status"] != "verification-failed" {
+				t.Fatalf("unexpected discovery status: %#v", item)
+			}
+			return
+		}
+	}
+	t.Fatal("gemini status not found")
 }
 
 func TestManifestDiscoveryStatusIsValidatedAndExposed(t *testing.T) {

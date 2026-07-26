@@ -62,11 +62,35 @@ tmp="$(mktemp "$target_dir/.free-models.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT HUP INT TERM
 
 jq -er '
+  def normalize_provider:
+    (.discovery_status // "") as $status
+    | if $status == "verification-failed" then
+        .models = []
+      elif $status == "confirmed-empty" then
+        .models = []
+      elif $status == "ready" then
+        if ((.models // []) | length) > 0 then
+          .discovery_status = "ready"
+        else
+          .models = [] | .discovery_status = "confirmed-empty"
+        end
+      else
+        .
+      end;
   if type == "string" then fromjson else . end
   | if type == "array" and length == 1 then .[0].content else . end
   | if type == "string" then fromjson else . end
   | if type == "object" and has("providers") then . else error("expected a model manifest object") end
-' "$candidate_file" > "$tmp"
+  | .providers |= with_entries(.value |= ((. // {}) | .models = (.models // []) | normalize_provider))
+  | . as $candidate
+  | reduce (input.providers // {} | to_entries[]) as $item
+      ($candidate;
+        if .providers[$item.key] == null then
+          .providers[$item.key] = $item.value
+        else
+          .
+        end)
+' "$candidate_file" "$target" > "$tmp"
 
 project_root="${FREE_ROUTER_ROOT:-$(pwd)}"
 case "$tmp" in

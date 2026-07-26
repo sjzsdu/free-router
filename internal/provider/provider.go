@@ -214,9 +214,24 @@ func applyFreeModelManifest(specs []Spec, manifest FreeModelManifest) []Spec {
 		if entry.BillingWarning != "" {
 			result[index].BillingWarning = entry.BillingWarning
 		}
-		result[index].DiscoveredModels = append([]DiscoveredModel(nil), entry.Models...)
+		if discoveryCatalogEnabled(entry.DiscoveryStatus) {
+			result[index].DiscoveredModels = append([]DiscoveredModel(nil), entry.Models...)
+		} else {
+			result[index].DiscoveredModels = nil
+		}
 	}
 	return result
+}
+
+func discoveryCatalogEnabled(status string) bool {
+	switch status {
+	case "", "ready", "awaiting-approval":
+		return true
+	case "verification-failed":
+		return false
+	default:
+		return true
+	}
 }
 
 func (spec Spec) ModelsEndpoint() string {
