@@ -113,7 +113,7 @@ func TestCredentialSaveEnablesProviderWithoutDiscoveringModels(t *testing.T) {
 	}
 	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
-	handler := New(routes, models, vault, health.New(), Config{}, func() error { return registry.Reload(custom, vault.Get) })
+	handler := New(routes, models, vault, health.New(), Config{}, func(map[string][]string) (func(), error) { return nil, registry.Reload(custom, vault.Get) })
 	request := httptest.NewRequest(http.MethodPost, "/admin/api/credentials", bytes.NewBufferString(`{"provider":"test","api_key":"secret"}`))
 	request.RemoteAddr = "127.0.0.1:1234"
 	recorder := httptest.NewRecorder()
@@ -146,7 +146,7 @@ func TestCredentialSaveDoesNotContactProviderCatalog(t *testing.T) {
 	registry, _ := provider.NewRegistry(custom, vault.Get)
 	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
-	handler := New(routes, models, vault, health.New(), Config{}, func() error { return registry.Reload(custom, vault.Get) })
+	handler := New(routes, models, vault, health.New(), Config{}, func(map[string][]string) (func(), error) { return nil, registry.Reload(custom, vault.Get) })
 	request := httptest.NewRequest(http.MethodPost, "/admin/api/credentials", bytes.NewBufferString(`{"provider":"test","api_key":"secret"}`))
 	request.RemoteAddr = "127.0.0.1:1234"
 	recorder := httptest.NewRecorder()

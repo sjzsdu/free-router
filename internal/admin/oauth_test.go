@@ -63,7 +63,7 @@ func TestOpenRouterOAuthPKCEStoresKeyAndReloadsProvider(t *testing.T) {
 		OAuthHTTPClient:    upstream.Client(),
 		OpenRouterAuthURL:  "https://auth.example/authorize",
 		OpenRouterTokenURL: upstream.URL + "/token",
-	}, func() error { return registry.Reload(custom, vault.Get) })
+	}, func(map[string][]string) (func(), error) { return nil, registry.Reload(custom, vault.Get) })
 
 	start := httptest.NewRequest(http.MethodPost, "/admin/api/oauth/openrouter/start", nil)
 	start.Host = "localhost:1314"

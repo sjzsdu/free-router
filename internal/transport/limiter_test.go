@@ -23,25 +23,25 @@ func TestLimiterAcquireRelease(t *testing.T) {
 		t.Fatalf("second acquire failed: %v", err2)
 	}
 
-	semAvailable := false
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
 		err3 := limiter.Acquire(context.Background())
-		if err3 != nil {
-			t.Fatalf("third acquire failed: %v", err3)
-		}
-		semAvailable = true
-		close(done)
+		done <- err3
 	}()
 
 	time.Sleep(50 * time.Millisecond)
-	if semAvailable {
+	select {
+	case <-done:
 		t.Fatal("third acquire should block until release")
+	default:
 	}
 
 	limiter.Release()
 	select {
-	case <-done:
+	case err3 := <-done:
+		if err3 != nil {
+			t.Fatalf("third acquire failed: %v", err3)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("third acquire should succeed after release")
 	}
@@ -116,7 +116,9 @@ func TestLimiterConcurrentRequests(t *testing.T) {
 	defer limiter.Close()
 
 	var wg sync.WaitGroup
-	inProgress := make(chan int, 10)
+	var mu sync.Mutex
+	maxInProgress := 0
+	currentInProgress := 0
 
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
@@ -126,12 +128,23 @@ func TestLimiterConcurrentRequests(t *testing.T) {
 				t.Errorf("acquire %d failed: %v", id, err)
 				return
 			}
-			inProgress <- id
+			mu.Lock()
+			currentInProgress++
+			if currentInProgress > maxInProgress {
+				maxInProgress = currentInProgress
+			}
+			mu.Unlock()
 			time.Sleep(10 * time.Millisecond)
-			<-inProgress
+			mu.Lock()
+			currentInProgress--
+			mu.Unlock()
 			limiter.Release()
 		}(i)
 	}
 
 	wg.Wait()
+
+	if maxInProgress > 5 {
+		t.Fatalf("max concurrent requests exceeded: %d > 5", maxInProgress)
+	}
 }

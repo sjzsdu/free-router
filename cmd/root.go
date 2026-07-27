@@ -199,8 +199,13 @@ func runServer(ctx context.Context, opts options) error {
 	tracker := health.New()
 	httpClient := transport.NewClient(transport.NewConfig())
 	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts, Routes: routes, Health: tracker, APIToken: opts.apiToken}, httpClient)
-	reloadProviders := func(providerEnv map[string][]string) error {
-		return registry.ReloadWithManifest(opts.providers, provider.EnvMap(providerEnv), opts.freeModels, vault.Get)
+	reloadProviders := func(providerEnv map[string][]string) (func(), error) {
+		rollback := registry.Backup()
+		if err := registry.ReloadWithManifest(opts.providers, provider.EnvMap(providerEnv), opts.freeModels, vault.Get); err != nil {
+			rollback()
+			return nil, err
+		}
+		return rollback, nil
 	}
 	handler.Handle("GET /admin", http.RedirectHandler("/admin/", http.StatusTemporaryRedirect))
 	handler.Handle("/admin/", admin.New(routes, store, vault, tracker, admin.Config{AllowRemote: opts.adminAllowRemote, Token: opts.adminToken, Version: version, FreeModels: opts.freeModels}, reloadProviders))

@@ -1,6 +1,7 @@
 package health
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -263,5 +264,63 @@ func TestAuthRecoveryResetsProviderState(t *testing.T) {
 	}
 	if !tracker.Available("provider/other", "chat") {
 		t.Fatal("success should recover all models from same provider")
+	}
+}
+
+func TestTryAcquireRespectsCooldownPeriod(t *testing.T) {
+	tracker := New()
+	now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
+	tracker.now = func() time.Time { return now }
+
+	for i := 0; i < DefaultFailureThreshold; i++ {
+		tracker.Failure("provider/model", "chat", 0, 500, "error", 0)
+	}
+
+	if tracker.Available("provider/model", "chat") {
+		t.Fatal("model should be unavailable during cooldown")
+	}
+
+	if tracker.TryAcquire("provider/model", "chat") {
+		t.Fatal("TryAcquire should return false during cooldown (available=false first_acquire=false)")
+	}
+
+	now = now.Add(DefaultCoolDownMax + time.Second)
+	if !tracker.Available("provider/model", "chat") {
+		t.Fatal("model should be available after cooldown")
+	}
+
+	if !tracker.TryAcquire("provider/model", "chat") {
+		t.Fatal("TryAcquire should return true after cooldown")
+	}
+}
+
+func TestTryAcquireConcurrentCooldownProtection(t *testing.T) {
+	tracker := New()
+	now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
+	tracker.now = func() time.Time { return now }
+
+	for i := 0; i < DefaultFailureThreshold; i++ {
+		tracker.Failure("provider/model", "chat", 0, 500, "error", 0)
+	}
+
+	if tracker.Available("provider/model", "chat") {
+		t.Fatal("model should be unavailable during cooldown")
+	}
+
+	var wg sync.WaitGroup
+	successCount := 0
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if tracker.TryAcquire("provider/model", "chat") {
+				successCount++
+			}
+		}()
+	}
+	wg.Wait()
+
+	if successCount != 0 {
+		t.Fatalf("TryAcquire should reject all requests during cooldown, got %d successes", successCount)
 	}
 }

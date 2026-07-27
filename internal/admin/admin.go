@@ -30,7 +30,7 @@ type Handler struct {
 	catalog            *catalog.Store
 	vault              *credentials.Vault
 	config             Config
-	reload             func() error
+	reload             func(map[string][]string) (func(), error)
 	health             *health.Tracker
 	probes             *probeManager
 	static             http.Handler
@@ -51,7 +51,7 @@ type Config struct {
 	OpenRouterTokenURL string
 }
 
-func New(routes *routing.Store, models *catalog.Store, vault *credentials.Vault, tracker *health.Tracker, config Config, reload func() error) *Handler {
+func New(routes *routing.Store, models *catalog.Store, vault *credentials.Vault, tracker *health.Tracker, config Config, reload func(map[string][]string) (func(), error)) *Handler {
 	staticFS, _ := fs.Sub(assets, "dist")
 	client := config.OAuthHTTPClient
 	if client == nil {
@@ -165,9 +165,12 @@ func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
 
 	previousConfig := h.routes.Config()
 
+	var rollback func()
 	validateFunc := func(newConfig routing.Config) error {
 		if !reflect.DeepEqual(previousConfig.ProviderEnv, newConfig.ProviderEnv) {
-			if err := h.reloadProviders(); err != nil {
+			var err error
+			rollback, err = h.reloadProviders(newConfig.ProviderEnv)
+			if err != nil {
 				return err
 			}
 		}
@@ -175,6 +178,9 @@ func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.routes.UpdateTransactional(config, validateFunc); err != nil {
+		if rollback != nil {
+			rollback()
+		}
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -238,12 +244,22 @@ func (h *Handler) saveCredential(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid credential")
 		return
 	}
+	oldKey, _ := h.vault.Get(input.Provider)
 	backend, err := h.vault.Set(input.Provider, input.APIKey)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.reloadProviders(); err != nil {
+	rollback, err := h.reloadProviders(h.routes.Config().ProviderEnv)
+	if err != nil {
+		if oldKey != "" {
+			_, _ = h.vault.Set(input.Provider, oldKey)
+		} else {
+			_ = h.vault.Delete(input.Provider)
+		}
+		if rollback != nil {
+			rollback()
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -255,24 +271,30 @@ func (h *Handler) deleteCredential(w http.ResponseWriter, r *http.Request, provi
 		writeError(w, http.StatusBadRequest, "provider is required")
 		return
 	}
+	oldKey, _ := h.vault.Get(providerID)
 	if err := h.vault.Delete(providerID); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	if err := h.reloadProviders(); err != nil {
+	rollback, err := h.reloadProviders(h.routes.Config().ProviderEnv)
+	if err != nil {
+		if oldKey != "" {
+			_, _ = h.vault.Set(providerID, oldKey)
+		}
+		if rollback != nil {
+			rollback()
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"removed": true, "models": len(h.catalog.Models())})
 }
 
-func (h *Handler) reloadProviders() error {
+func (h *Handler) reloadProviders(providerEnv map[string][]string) (func(), error) {
 	if h.reload != nil {
-		if err := h.reload(); err != nil {
-			return err
-		}
+		return h.reload(providerEnv)
 	}
-	return nil
+	return nil, nil
 }
 
 func (h *Handler) refreshAllAsync() {

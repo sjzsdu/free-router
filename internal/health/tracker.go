@@ -4,6 +4,7 @@ import (
 	"math/rand"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -38,6 +39,7 @@ type State struct {
 	FailureThreshold    int       `json:"failure_threshold"`
 	CooldownUntil       time.Time `json:"cooldown_until,omitempty"`
 	LastFailureAt       time.Time `json:"last_failure_at,omitempty"`
+	InFlight            int32     `json:"in_flight"`
 }
 
 type Summary struct {
@@ -78,11 +80,60 @@ func (t *Tracker) Available(model, capability string) bool {
 			if !t.isStateAvailable(pState.Status, pState.CooldownUntil) {
 				return false
 			}
+			if pState.Status == StatusHalfOpen && atomic.LoadInt32(&pState.InFlight) > 0 {
+				return false
+			}
 		}
 	}
 
 	state := t.states[stateKey(model, capability)]
-	return state == nil || t.isStateAvailable(state.Status, state.CooldownUntil)
+	if state == nil {
+		return true
+	}
+	if !t.isStateAvailable(state.Status, state.CooldownUntil) {
+		return false
+	}
+	if state.Status == StatusHalfOpen && atomic.LoadInt32(&state.InFlight) > 0 {
+		return false
+	}
+	return true
+}
+
+func (t *Tracker) TryAcquire(model, capability string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	provider := providerFromModel(model)
+	if provider != "" {
+		if pState := t.providerStates[provider]; pState != nil {
+			t.checkAndTransition(pState)
+			if !t.isStateAvailable(pState.Status, pState.CooldownUntil) {
+				return false
+			}
+			if pState.Status == StatusHalfOpen {
+				if atomic.LoadInt32(&pState.InFlight) > 0 {
+					return false
+				}
+				atomic.AddInt32(&pState.InFlight, 1)
+			}
+		}
+	}
+
+	state := t.states[stateKey(model, capability)]
+	if state == nil {
+		return true
+	}
+	t.checkAndTransition(state)
+	if !t.isStateAvailable(state.Status, state.CooldownUntil) {
+		return false
+	}
+	if state.Status == StatusHalfOpen {
+		if atomic.LoadInt32(&state.InFlight) > 0 {
+			return false
+		}
+		atomic.AddInt32(&state.InFlight, 1)
+	}
+	return true
 }
 
 func (t *Tracker) isStateAvailable(status string, cooldownUntil time.Time) bool {
@@ -93,6 +144,17 @@ func (t *Tracker) isStateAvailable(status string, cooldownUntil time.Time) bool 
 		return t.now().After(cooldownUntil)
 	default:
 		return false
+	}
+}
+
+func (t *Tracker) checkAndTransition(state *State) {
+	if t.now().After(state.CooldownUntil) {
+		switch state.Status {
+		case StatusOpen:
+			state.Status = StatusHalfOpen
+		case StatusCooling:
+			state.Status = StatusHalfOpen
+		}
 	}
 }
 
@@ -109,6 +171,7 @@ func (t *Tracker) Success(model, capability string, latency time.Duration, statu
 	state.LastUsedAt = t.now()
 	state.Status = StatusHealthy
 	state.CooldownUntil = time.Time{}
+	atomic.StoreInt32(&state.InFlight, 0)
 	state.AverageLatencyMS = rollingAverage(state.AverageLatencyMS, state.Requests, float64(latency.Microseconds())/1000)
 
 	provider := providerFromModel(model)
@@ -117,6 +180,7 @@ func (t *Tracker) Success(model, capability string, latency time.Duration, statu
 		pState.ConsecutiveFailures = 0
 		pState.Status = StatusHealthy
 		pState.CooldownUntil = time.Time{}
+		atomic.StoreInt32(&pState.InFlight, 0)
 	}
 }
 
@@ -150,6 +214,7 @@ func (t *Tracker) Failure(model, capability string, latency time.Duration, statu
 			pState.LastUsedAt = t.now()
 			pState.Status = StatusOpen
 			pState.CooldownUntil = t.now().Add(t.cooldownFor(pState.ConsecutiveFailures))
+			atomic.StoreInt32(&pState.InFlight, 0)
 		}
 		return
 	}
@@ -167,6 +232,7 @@ func (t *Tracker) Failure(model, capability string, latency time.Duration, statu
 	if errType == ErrorRateLimit && retryAfter > 0 {
 		state.Status = StatusCooling
 		state.CooldownUntil = t.now().Add(retryAfter)
+		atomic.StoreInt32(&state.InFlight, 0)
 		return
 	}
 
@@ -176,6 +242,7 @@ func (t *Tracker) Failure(model, capability string, latency time.Duration, statu
 	} else {
 		state.Status = StatusDegraded
 	}
+	atomic.StoreInt32(&state.InFlight, 0)
 }
 
 func (t *Tracker) ProbeSuccess(model, capability string, latency time.Duration) {
@@ -369,12 +436,15 @@ func classifyError(status int) ErrorType {
 	switch {
 	case status == 0:
 		return ErrorNetwork
-	case status >= 400 && status < 401:
-		return ErrorClient
-	case status == 401 || status == 403:
-		return ErrorAuth
-	case status == 429:
-		return ErrorRateLimit
+	case status >= 400 && status < 500:
+		switch status {
+		case 401, 403:
+			return ErrorAuth
+		case 429:
+			return ErrorRateLimit
+		default:
+			return ErrorClient
+		}
 	case status >= 500:
 		return ErrorServer
 	default:

@@ -326,3 +326,49 @@ func TestCustomEnvironmentAliasesPrecedeBuiltins(t *testing.T) {
 		t.Fatalf("merged aliases = %#v", got)
 	}
 }
+
+func TestRegistryBackupRestorePreservesState(t *testing.T) {
+	registry := &Registry{
+		providers: map[string]Spec{"provider1": {ID: "provider1", APIKey: "key1"}},
+		catalog:   map[string]Spec{"catalog1": {ID: "catalog1"}},
+	}
+
+	rollback := registry.Backup()
+
+	registry.providers["provider1"] = Spec{ID: "provider1", APIKey: "modified-key"}
+	registry.catalog["catalog1"] = Spec{ID: "catalog1", FreeBasis: "modified"}
+
+	rollback()
+
+	if spec, ok := registry.providers["provider1"]; !ok || spec.APIKey != "key1" {
+		t.Fatalf("providers not restored: %#v", spec)
+	}
+	if spec, ok := registry.catalog["catalog1"]; !ok || spec.FreeBasis != "" {
+		t.Fatalf("catalog not restored: %#v", spec)
+	}
+}
+
+func TestRegistryConcurrentBackupRestoreIsolation(t *testing.T) {
+	registry := &Registry{
+		providers: map[string]Spec{"provider": {ID: "provider", APIKey: "v1"}},
+		catalog:   map[string]Spec{},
+	}
+
+	rollback1 := registry.Backup()
+
+	registry.providers["provider"] = Spec{ID: "provider", APIKey: "v2"}
+
+	rollback2 := registry.Backup()
+
+	registry.providers["provider"] = Spec{ID: "provider", APIKey: "v3"}
+
+	rollback2()
+	if spec := registry.providers["provider"]; spec.APIKey != "v2" {
+		t.Fatalf("rollback2 should restore v2, got %q", spec.APIKey)
+	}
+
+	rollback1()
+	if spec := registry.providers["provider"]; spec.APIKey != "v1" {
+		t.Fatalf("rollback1 should restore v1, got %q", spec.APIKey)
+	}
+}

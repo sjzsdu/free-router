@@ -130,12 +130,22 @@ func (h *Handler) finishOpenRouterOAuth(w http.ResponseWriter, r *http.Request, 
 		h.oauthRedirect(w, r, false, err.Error())
 		return
 	}
+	oldKey, _ := h.vault.Get("openrouter")
 	if _, err := h.vault.Set("openrouter", key); err != nil {
 		h.oauthRedirect(w, r, false, "无法安全保存 OpenRouter 凭据")
 		return
 	}
 	if h.reload != nil {
-		if err := h.reload(); err != nil {
+		rollback, err := h.reload(h.routes.Config().ProviderEnv)
+		if err != nil {
+			if oldKey != "" {
+				_, _ = h.vault.Set("openrouter", oldKey)
+			} else {
+				_ = h.vault.Delete("openrouter")
+			}
+			if rollback != nil {
+				rollback()
+			}
 			h.oauthRedirect(w, r, false, "凭据已保存，但 Provider 热加载失败")
 			return
 		}

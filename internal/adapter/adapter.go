@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/sjzsdu/free-router/internal/catalog"
@@ -184,7 +185,7 @@ type nopCloser struct {
 
 func (n *nopCloser) Read(p []byte) (int, error) {
 	if n.pos >= len(n.data) {
-		return 0, nil
+		return 0, io.EOF
 	}
 	copied := copy(p, n.data[n.pos:])
 	n.pos += copied

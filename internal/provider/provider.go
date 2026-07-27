@@ -282,6 +282,34 @@ type Registry struct {
 	catalog   map[string]Spec
 }
 
+type registryState struct {
+	providers map[string]Spec
+	catalog   map[string]Spec
+}
+
+func (r *Registry) Backup() func() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	state := &registryState{
+		providers: copyMap(r.providers),
+		catalog:   copyMap(r.catalog),
+	}
+	return func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.providers = state.providers
+		r.catalog = state.catalog
+	}
+}
+
+func copyMap[K comparable, V any](m map[K]V) map[K]V {
+	result := make(map[K]V, len(m))
+	for k, v := range m {
+		result[k] = v
+	}
+	return result
+}
+
 type KeyResolver func(providerID string) (string, bool)
 
 type EnvMap map[string][]string

@@ -256,6 +256,9 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 	}
 
 	for index, model := range candidates {
+		if !g.tracker.TryAcquire(model.ID, capability) {
+			continue
+		}
 		request["model"] = model.UpstreamID
 		payload, err := json.Marshal(request)
 		if err != nil {
@@ -268,7 +271,8 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 		if err != nil {
 			g.tracker.Failure(model.ID, capability, time.Since(started), 0, err.Error(), 0)
 			slog.Warn("provider request failed", "provider", model.Provider, "model", model.UpstreamID, "error", err)
-			if index+1 < len(candidates) {
+			decision := g.shouldRetry(model, capability, 0, false, index)
+			if decision.ShouldRetry && index+1 < len(candidates) {
 				g.metrics.RecordFallback()
 				continue
 			}
@@ -276,6 +280,7 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 			g.metrics.RecordFailure(time.Since(started), 0)
 			return
 		}
+		providerAdapter := g.adapterReg.Get(model.Provider)
 		decision := g.shouldRetry(model, capability, resp.StatusCode, resp.ContentLength > 0, index)
 		if decision.ShouldRetry && index+1 < len(candidates) {
 			g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, resp.Status, parseRetryAfter(resp.Header.Get("Retry-After")))
@@ -290,6 +295,23 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 				g.metrics.RecordRateLimit()
 			}
 			continue
+		}
+		normalizedResp, err := providerAdapter.NormalizeResponse(resp)
+		if err != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+			resp.Body.Close()
+			g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, err.Error(), 0)
+			writeError(w, http.StatusBadGateway, err.Error())
+			g.metrics.RecordFailure(time.Since(started), resp.StatusCode)
+			return
+		}
+		if normalizedResp.Error != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+			resp.Body.Close()
+			g.tracker.Failure(model.ID, capability, time.Since(started), normalizedResp.Error.StatusCode, normalizedResp.Error.Message, 0)
+			writeError(w, normalizedResp.Error.StatusCode, normalizedResp.Error.Message)
+			g.metrics.RecordFailure(time.Since(started), normalizedResp.Error.StatusCode)
+			return
 		}
 		g.recordResponse(model.ID, capability, time.Since(started), resp)
 		result := copyResponse(w, resp, model)
@@ -344,6 +366,9 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 		return
 	}
 	for index, model := range candidates {
+		if !g.tracker.TryAcquire(model.ID, capability) {
+			continue
+		}
 		payload, contentType, err := rewriteMultipartModel(body, params["boundary"], model.UpstreamID)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "could not encode multipart request")
@@ -354,7 +379,8 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 		resp, err := g.forward(r, model, payload, endpoint, contentType)
 		if err != nil {
 			g.tracker.Failure(model.ID, capability, time.Since(started), 0, err.Error(), 0)
-			if index+1 < len(candidates) {
+			decision := g.shouldRetry(model, capability, 0, false, index)
+			if decision.ShouldRetry && index+1 < len(candidates) {
 				g.metrics.RecordFallback()
 				continue
 			}
@@ -362,6 +388,7 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 			g.metrics.RecordFailure(time.Since(started), 0)
 			return
 		}
+		providerAdapter := g.adapterReg.Get(model.Provider)
 		decision := g.shouldRetry(model, capability, resp.StatusCode, resp.ContentLength > 0, index)
 		if decision.ShouldRetry && index+1 < len(candidates) {
 			g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, resp.Status, parseRetryAfter(resp.Header.Get("Retry-After")))
@@ -375,6 +402,23 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 				g.metrics.RecordRateLimit()
 			}
 			continue
+		}
+		normalizedResp, err := providerAdapter.NormalizeResponse(resp)
+		if err != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+			resp.Body.Close()
+			g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, err.Error(), 0)
+			writeError(w, http.StatusBadGateway, err.Error())
+			g.metrics.RecordFailure(time.Since(started), resp.StatusCode)
+			return
+		}
+		if normalizedResp.Error != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+			resp.Body.Close()
+			g.tracker.Failure(model.ID, capability, time.Since(started), normalizedResp.Error.StatusCode, normalizedResp.Error.Message, 0)
+			writeError(w, normalizedResp.Error.StatusCode, normalizedResp.Error.Message)
+			g.metrics.RecordFailure(time.Since(started), normalizedResp.Error.StatusCode)
+			return
 		}
 		g.recordResponse(model.ID, capability, time.Since(started), resp)
 		result := copyResponse(w, resp, model)
@@ -688,22 +732,26 @@ func (g *Gateway) forward(original *http.Request, model catalog.Model, body []by
 	}
 	defer limiter.(*transport.Limiter).Release()
 
-	req, err := http.NewRequestWithContext(original.Context(), http.MethodPost, spec.APIEndpoint(endpoint), bytes.NewReader(body))
+	providerAdapter := g.adapterReg.Get(model.Provider)
+	reqHeaders := make(map[string]string)
+	if accept := original.Header.Get("Accept"); accept != "" {
+		reqHeaders["Accept"] = accept
+	}
+
+	req, err := providerAdapter.BuildRequest(adapter.Request{
+		Context:     original.Context(),
+		Method:      http.MethodPost,
+		Endpoint:    endpoint,
+		Model:       model,
+		Provider:    spec,
+		Body:        body,
+		ContentType: contentType,
+		Headers:     reqHeaders,
+		Stream:      original.Header.Get("Accept") == "text/event-stream" || strings.Contains(original.Header.Get("Accept"), "event-stream"),
+		Function:    endpoint,
+	})
 	if err != nil {
 		return nil, err
-	}
-	headers := make(map[string]string, len(spec.Headers)+4)
-	for key, value := range spec.Headers {
-		headers[key] = value
-	}
-	spec.ApplyAuth(headers)
-	headers["Content-Type"] = contentType
-	headers["User-Agent"] = "free-router/0.2"
-	if accept := original.Header.Get("Accept"); accept != "" {
-		headers["Accept"] = accept
-	}
-	for key, value := range headers {
-		req.Header.Set(key, value)
 	}
 	return g.client.Do(req)
 }

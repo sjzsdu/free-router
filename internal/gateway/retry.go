@@ -60,19 +60,17 @@ func (p RetryPolicy) ShouldRetry(reqType RequestType, statusCode int, hasRespons
 	}
 
 	if reqType == RequestNonIdempotent && !p.AllowNonIdempotent {
-		if statusCode == http.StatusRequestTimeout || statusCode == http.StatusGatewayTimeout {
-			if hasResponseBody {
-				return RetryDecision{ShouldRetry: false, Reason: "timeout after response body on non-idempotent request"}
-			}
-		} else {
-			if hasResponseBody || statusCode >= 200 && statusCode < 300 {
-				return RetryDecision{ShouldRetry: false, Reason: "non-idempotent request already processed"}
-			}
-			if statusCode == http.StatusBadRequest || statusCode == http.StatusUnauthorized ||
-				statusCode == http.StatusForbidden || statusCode == http.StatusNotFound ||
-				statusCode == http.StatusUnprocessableEntity {
-				return RetryDecision{ShouldRetry: false, Reason: "client error on non-idempotent request"}
-			}
+		switch {
+		case statusCode == 0:
+			return RetryDecision{ShouldRetry: false, Reason: "connection error on non-idempotent request"}
+		case statusCode >= 500:
+			return RetryDecision{ShouldRetry: false, Reason: "server error on non-idempotent request"}
+		case statusCode == http.StatusRequestTimeout || statusCode == http.StatusGatewayTimeout:
+			return RetryDecision{ShouldRetry: false, Reason: "timeout on non-idempotent request"}
+		case statusCode >= 400:
+			return RetryDecision{ShouldRetry: false, Reason: "client error on non-idempotent request"}
+		case statusCode >= 200:
+			return RetryDecision{ShouldRetry: false, Reason: "non-idempotent request already processed"}
 		}
 	}
 
@@ -90,9 +88,6 @@ func (p RetryPolicy) ShouldRetry(reqType RequestType, statusCode int, hasRespons
 		return RetryDecision{ShouldRetry: false, Reason: "rate limit not retryable"}
 
 	case statusCode == http.StatusRequestTimeout || statusCode == http.StatusGatewayTimeout:
-		if reqType == RequestNonIdempotent && hasResponseBody {
-			return RetryDecision{ShouldRetry: false, Reason: "timeout after response body on non-idempotent request"}
-		}
 		return RetryDecision{ShouldRetry: true, Reason: "timeout", Delay: backoffDelay(attempt, p.MaxRetryDelay)}
 
 	case statusCode >= 400 && statusCode < 500:

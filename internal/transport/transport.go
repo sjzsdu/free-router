@@ -7,34 +7,34 @@ import (
 )
 
 const (
-	DefaultConnectTimeout       = 10 * time.Second
-	DefaultTLSHandshakeTimeout  = 10 * time.Second
+	DefaultConnectTimeout        = 10 * time.Second
+	DefaultTLSHandshakeTimeout   = 10 * time.Second
 	DefaultResponseHeaderTimeout = 20 * time.Second
-	DefaultIdleConnTimeout      = 90 * time.Second
-	DefaultMaxIdleConns         = 100
-	DefaultMaxIdleConnsPerHost  = 10
-	DefaultWriteTimeout         = 30 * time.Second
+	DefaultIdleConnTimeout       = 90 * time.Second
+	DefaultMaxIdleConns          = 100
+	DefaultMaxIdleConnsPerHost   = 10
+	DefaultWriteTimeout          = 30 * time.Second
 )
 
 type Config struct {
-	ConnectTimeout       time.Duration
-	TLSHandshakeTimeout  time.Duration
+	ConnectTimeout        time.Duration
+	TLSHandshakeTimeout   time.Duration
 	ResponseHeaderTimeout time.Duration
-	IdleConnTimeout      time.Duration
-	MaxIdleConns         int
-	MaxIdleConnsPerHost  int
-	WriteTimeout         time.Duration
+	IdleConnTimeout       time.Duration
+	MaxIdleConns          int
+	MaxIdleConnsPerHost   int
+	WriteTimeout          time.Duration
 }
 
 func NewConfig() Config {
 	return Config{
-		ConnectTimeout:       DefaultConnectTimeout,
-		TLSHandshakeTimeout:  DefaultTLSHandshakeTimeout,
+		ConnectTimeout:        DefaultConnectTimeout,
+		TLSHandshakeTimeout:   DefaultTLSHandshakeTimeout,
 		ResponseHeaderTimeout: DefaultResponseHeaderTimeout,
-		IdleConnTimeout:      DefaultIdleConnTimeout,
-		MaxIdleConns:         DefaultMaxIdleConns,
-		MaxIdleConnsPerHost:  DefaultMaxIdleConnsPerHost,
-		WriteTimeout:         DefaultWriteTimeout,
+		IdleConnTimeout:       DefaultIdleConnTimeout,
+		MaxIdleConns:          DefaultMaxIdleConns,
+		MaxIdleConnsPerHost:   DefaultMaxIdleConnsPerHost,
+		WriteTimeout:          DefaultWriteTimeout,
 	}
 }
 

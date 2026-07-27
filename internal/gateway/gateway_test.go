@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sjzsdu/free-router/internal/catalog"
 	"github.com/sjzsdu/free-router/internal/health"
@@ -330,6 +331,8 @@ func TestMultipartFailureKeepsModelAndExplicitSuccessRecoversCapability(t *testi
 	if tracker.Available(modelID, catalog.FunctionSpeechToText) {
 		t.Fatal("failed speech-to-text capability remained available")
 	}
+
+	time.Sleep(health.DefaultCoolDownMax + time.Second)
 
 	recovered := httptest.NewRecorder()
 	handler.ServeHTTP(recovered, newMultipartRequest(t, "/v1/audio/transcriptions", modelID))

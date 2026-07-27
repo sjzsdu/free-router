@@ -55,12 +55,12 @@ func TestRetryPolicyShouldRetry(t *testing.T) {
 		{"idempotent 400", RequestIdempotent, 400, false, 0, false, "client error not retryable"},
 		{"idempotent 401", RequestIdempotent, 401, false, 0, false, "client error not retryable"},
 		{"idempotent 404", RequestIdempotent, 404, false, 0, false, "client error not retryable"},
-		{"non-idempotent 500 no body", RequestNonIdempotent, 500, false, 0, true, "server error"},
-		{"non-idempotent 500 with body", RequestNonIdempotent, 500, true, 0, false, "non-idempotent request already processed"},
+		{"non-idempotent 500 no body", RequestNonIdempotent, 500, false, 0, false, "server error on non-idempotent request"},
+		{"non-idempotent 500 with body", RequestNonIdempotent, 500, true, 0, false, "server error on non-idempotent request"},
 		{"non-idempotent 400", RequestNonIdempotent, 400, false, 0, false, "client error on non-idempotent request"},
 		{"non-idempotent 200 with body", RequestNonIdempotent, 200, true, 0, false, "non-idempotent request already processed"},
 		{"max attempts exceeded", RequestIdempotent, 500, false, 3, false, "max attempts exceeded"},
-		{"non-idempotent timeout with body", RequestNonIdempotent, 408, true, 0, false, "timeout after response body on non-idempotent request"},
+		{"non-idempotent timeout with body", RequestNonIdempotent, 408, true, 0, false, "timeout on non-idempotent request"},
 	}
 
 	for _, tt := range tests {
@@ -113,11 +113,11 @@ func TestShouldRetryNonIdempotentDuplicatePrevention(t *testing.T) {
 		attempt       int
 		expectedRetry bool
 	}{
-		{"image generation 500 no body", 500, 0, 0, true},
+		{"image generation 500 no body", 500, 0, 0, false},
 		{"image generation 500 with body", 500, 100, 0, false},
 		{"image generation 200", http.StatusOK, 100, 0, false},
 		{"image generation 400", 400, 0, 0, false},
-		{"image generation timeout no body", 408, 0, 0, true},
+		{"image generation timeout no body", 408, 0, 0, false},
 		{"image generation timeout with body", 408, 100, 0, false},
 	}
 

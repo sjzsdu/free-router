@@ -1,9 +1,10 @@
 FROM node:20-alpine AS frontend-build
 WORKDIR /src
+COPY go.mod go.sum VERSION ./
 COPY web/package.json web/package-lock.json ./
-RUN npm ci
-COPY web/ .
-RUN npm run build
+RUN npm ci --prefix web
+COPY web/ web/
+RUN npm run build --prefix web
 
 FROM golang:1.24-alpine AS backend-build
 WORKDIR /src

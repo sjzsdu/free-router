@@ -27,12 +27,12 @@ func NewRateLimitConfig() RateLimitConfig {
 }
 
 type Limiter struct {
-	sem       chan struct{}
-	tokens    chan struct{}
-	ticker    *time.Ticker
-	queue     chan struct{}
-	closed    bool
-	mu        sync.Mutex
+	sem    chan struct{}
+	tokens chan struct{}
+	ticker *time.Ticker
+	queue  chan struct{}
+	closed bool
+	mu     sync.Mutex
 }
 
 func NewLimiter(config RateLimitConfig) *Limiter {
