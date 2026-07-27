@@ -842,7 +842,7 @@ func (s *Store) loadCache() error {
 	s.quarantine = cloneMap(cached.Quarantined)
 	s.mu.Unlock()
 	if cached.CatalogFingerprint != s.catalogFingerprint() {
-		return errors.New("cache was produced from a different Formula manifest")
+		return errors.New("cache was produced from a different free model manifest")
 	}
 	models := make([]Model, 0, len(cached.Models))
 	for _, model := range cached.Models {

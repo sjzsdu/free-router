@@ -1,241 +1,1869 @@
 {
-  "generated_at": "2026-07-22T03:56:04Z",
+  "schema_version": 2,
+  "generated_at": "2026-07-27T05:40:09Z",
   "providers": {
     "baichuan": {
-      "billing_warning": "新用户赠送金有效期有限，余额耗尽后接口按平台价格计费。",
-      "free_basis": "Models consume time-limited new-account gift credits.",
+      "free_basis": "2024年5月22日下午起注册的新用户获赠80元，注册后生效，有效期3个月；官方折算示例为Baichuan2-Turbo约1000万Tokens。此前已注册且认证的用户曾额外获赠40元，有效期3个月，该批赠送金现已过期。",
+      "billing_warning": "赠送金不可提现、转让或开票。赠送金耗尽后，如消耗账户另有充值余额，后续API调用按各模型现行价格从账户余额扣除；总余额不足时停止服务并返回429，需充值，不提供自动后付费。",
       "source_urls": [
-        "https://platform.baichuan-ai.com/"
+        "https://platform.baichuan-ai.com/prices",
+        "https://platform.baichuan-ai.com/article/consume-agreement",
+        "https://platform.baichuan-ai.com/docs/errCode",
+        "https://platform.baichuan-ai.com/docs/api"
       ],
-      "discovery_status": "awaiting-approval",
-      "discovery_message": "Formula 已发现 11 个模型，但本次模型变化尚未通过质量门禁"
-    },
-    "bigmodel": {
-      "free_basis": "The provider documents Flash variants as free models.",
-      "source_urls": [
-        "https://open.bigmodel.cn/"
-      ],
-      "discovery_status": "validation-failed",
-      "discovery_message": "provider result did not match the required schema or evidence rules"
-    },
-    "cerebras": {
-      "free_basis": "Models exposed to a configured free-tier account are limited by that tier.",
-      "source_urls": [
-        "https://inference-docs.cerebras.ai/support/rate-limits"
-      ],
-      "discovery_status": "discovery-failed",
-      "discovery_message": "models endpoint returned 403 Forbidden: error code: 1009"
-    },
-    "cloudflare": {
-      "free_basis": "Workers AI includes a daily free allocation measured in Neurons.",
-      "source_urls": [
-        "https://developers.cloudflare.com/workers-ai/platform/pricing/"
-      ],
-      "discovery_status": "discovery-failed",
-      "discovery_message": "fetch models: Get \"https://api.cloudflare.com/client/v4/accounts//ai/models/search\": unexpected EOF"
-    },
-    "dashscope": {
-      "billing_warning": "新人额度通常仅 30～90 天；请在百炼控制台开启免费额度用完即停。",
-      "free_basis": "Models consume new-user or model-specific free quota and may become billable after exhaustion.",
-      "source_urls": [
-        "https://help.aliyun.com/zh/model-studio/getting-started/models"
-      ],
-      "discovery_status": "awaiting-approval",
-      "discovery_message": "Formula 已发现 28 个模型，但本次模型变化尚未通过质量门禁"
-    },
-    "gemini": {
-      "free_basis": "Access via Google AI Studio free-tier key subject to free-tier limits; not a permanent free model.",
+      "discovery_status": "ready",
+      "discovery_message": "agent inventory accepted",
       "models": [
         {
           "functions": [
             "chat"
           ],
-          "id": "models/gemini-2.5-flash",
-          "owned_by": "google",
-          "pricing": {},
-          "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "id": "Baichuan-M2",
+          "source_urls": [
+            "https://platform.baichuan-ai.com/prices"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
+          "functions": [
+            "chat"
+          ],
+          "id": "Baichuan-M2-Plus",
+          "source_urls": [
+            "https://platform.baichuan-ai.com/prices"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Baichuan-M3",
+          "source_urls": [
+            "https://platform.baichuan-ai.com/prices"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Baichuan-M3-Plus",
+          "source_urls": [
+            "https://platform.baichuan-ai.com/prices"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Baichuan2-53B",
+          "source_urls": [
+            "https://platform.baichuan-ai.com/prices"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Baichuan2-Turbo",
+          "source_urls": [
+            "https://platform.baichuan-ai.com/prices",
+            "https://platform.baichuan-ai.com/docs/api"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Baichuan3-Turbo",
+          "source_urls": [
+            "https://platform.baichuan-ai.com/prices"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Baichuan3-Turbo-128k",
+          "source_urls": [
+            "https://platform.baichuan-ai.com/prices"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Baichuan4",
+          "source_urls": [
+            "https://platform.baichuan-ai.com/prices"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Baichuan4-Air",
+          "source_urls": [
+            "https://platform.baichuan-ai.com/prices"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Baichuan4-Turbo",
+          "source_urls": [
+            "https://platform.baichuan-ai.com/prices"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        }
+      ]
+    },
+    "bigmodel": {
+      "discovery_status": "validation-failed",
+      "discovery_message": "provider result did not match the required schema or evidence rules"
+    },
+    "cerebras": {
+      "discovery_message": "models endpoint returned 403 Forbidden: error code: 1009",
+      "discovery_status": "discovery-failed",
+      "free_basis": "Models exposed to a configured free-tier account are limited by that tier.",
+      "source_urls": [
+        "https://inference-docs.cerebras.ai/support/rate-limits"
+      ]
+    },
+    "cloudflare": {
+      "discovery_message": "fetch models: Get \"https://api.cloudflare.com/client/v4/accounts//ai/models/search\": unexpected EOF",
+      "discovery_status": "discovery-failed",
+      "free_basis": "Workers AI includes a daily free allocation measured in Neurons.",
+      "source_urls": [
+        "https://developers.cloudflare.com/workers-ai/platform/pricing/"
+      ]
+    },
+    "dashscope": {
+      "free_basis": "首次开通百炼后自动发放模型独立的新人限时免费额度；下列模型经官方价格表逐项确认均为100万Token，不是永久零价。",
+      "billing_warning": "有效期为开通百炼、模型发布或申请通过之日起90天（取较晚者）；仅抵扣实时推理，Batch不适用。除glm-5.2、glm-5.1在新加坡国际部署也明确有额度外，其余按华北2（北京）中国内地部署口径；额度耗尽或过期后，已认证账户未开启“免费额度用完即停”将按量计费。",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/getting-started/models",
+        "https://help.aliyun.com/zh/model-studio/model-pricing",
+        "https://help.aliyun.com/zh/model-studio/new-free-quota",
+        "https://help.aliyun.com/zh/model-studio/qwen-api-reference",
+        "https://help.aliyun.com/zh/model-studio/deepseek-api",
+        "https://help.aliyun.com/zh/model-studio/kimi-api",
+        "https://help.aliyun.com/zh/model-studio/minimax-api"
+      ],
+      "discovery_status": "ready",
+      "discovery_message": "official API unavailable; inventory recovered from official documentation",
+      "models": [
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "MiniMax-M2.5",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/minimax-api"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "deepseek-v3.2",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/deepseek-api"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "deepseek-v4-flash",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/deepseek-api"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "deepseek-v4-pro",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/deepseek-api"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "glm-4.5",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/model-pricing"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "glm-4.5-air",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/model-pricing"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "glm-4.6",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/model-pricing"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "glm-4.7",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/model-pricing"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "glm-5",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/model-pricing"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "glm-5.1",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/model-pricing"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "glm-5.2",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/model-pricing"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "kimi-k2.5",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/kimi-api"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "kimi-k2.6",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/kimi-api"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "kimi-k2.7-code",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/kimi-api"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "qwen-flash",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "qwen-long",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/long-context-qwen-long"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "qwen-plus",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "qwen-plus-latest",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "qwen-turbo",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "qwen3-coder-flash",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/qwen-coder"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "qwen3.5-flash",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "qwen3.5-plus",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "qwen3.6-flash",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "qwen3.6-plus",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "qwen3.7-flash",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "qwen3.7-max",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "qwen3.7-plus",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "qwq-plus",
+          "source_urls": [
+            "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        }
+      ]
+    },
+    "gemini": {
+      "free_basis": "Google Gemini Developer API pricing explicitly marks Standard-tier input/output as Free of charge, or lists the Gemma 4 family under Free Tier; access remains subject to model-specific free quotas.",
+      "billing_warning": "Free Tier is quota-limited and free-tier content may be used to improve Google products. Enabling paid-tier billing can incur usage charges.",
+      "source_urls": [
+        "https://ai.google.dev/gemini-api/docs/models",
+        "https://ai.google.dev/gemini-api/docs/pricing",
+        "https://ai.google.dev/gemini-api/docs/rate-limits",
+        "https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api",
+        "https://ai.google.dev/gemma/docs/core/model_card_4"
+      ],
+      "discovery_status": "ready",
+      "discovery_message": "official catalog filtered by free-policy agent",
+      "models": [
+        {
+          "context_length": 1048576,
+          "functions": [
+            "chat"
+          ],
+          "id": "models/gemini-2.5-flash",
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+          ],
+          "max_output_tokens": 65536,
+          "output_modalities": [
+            "text"
+          ],
+          "owned_by": "google",
+          "pricing": {},
+          "source_urls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash",
+            "https://ai.google.dev/gemini-api/docs/pricing"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 1048576,
+          "functions": [
+            "chat"
+          ],
+          "id": "models/gemini-2.5-flash-lite",
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "max_output_tokens": 65536,
+          "output_modalities": [
+            "text"
+          ],
+          "owned_by": "google",
+          "pricing": {},
+          "source_urls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash-lite",
+            "https://ai.google.dev/gemini-api/docs/pricing"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 8192,
+          "functions": [
+            "text-to-speech"
+          ],
+          "id": "models/gemini-2.5-flash-preview-tts",
+          "input_modalities": [
+            "text"
+          ],
+          "max_output_tokens": 16384,
+          "output_modalities": [
+            "audio"
+          ],
+          "owned_by": "google",
+          "pricing": {},
+          "source_urls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash-preview-tts",
+            "https://ai.google.dev/gemini-api/docs/pricing"
+          ],
+          "type": "audio",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 1048576,
+          "functions": [
+            "chat"
+          ],
+          "id": "models/gemini-2.5-pro",
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "max_output_tokens": 65536,
+          "output_modalities": [
+            "text"
+          ],
+          "owned_by": "google",
+          "pricing": {},
+          "source_urls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-pro",
+            "https://ai.google.dev/gemini-api/docs/pricing"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 1048576,
           "functions": [
             "chat"
           ],
           "id": "models/gemini-3-flash-preview",
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "max_output_tokens": 65536,
+          "output_modalities": [
+            "text"
+          ],
           "owned_by": "google",
           "pricing": {},
+          "source_urls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-3-flash-preview",
+            "https://ai.google.dev/gemini-api/docs/pricing"
+          ],
           "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
+          "context_length": 1048576,
           "functions": [
             "chat"
           ],
           "id": "models/gemini-3.1-flash-lite",
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "max_output_tokens": 65536,
+          "output_modalities": [
+            "text"
+          ],
           "owned_by": "google",
           "pricing": {},
+          "source_urls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite",
+            "https://ai.google.dev/gemini-api/docs/pricing"
+          ],
           "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
+          "context_length": 131072,
           "functions": [
             "chat"
           ],
-          "id": "models/gemini-3.1-flash-lite-preview",
+          "id": "models/gemini-3.1-flash-live-preview",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "max_output_tokens": 65536,
+          "output_modalities": [
+            "text",
+            "audio"
+          ],
           "owned_by": "google",
           "pricing": {},
+          "source_urls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-live-preview",
+            "https://ai.google.dev/gemini-api/docs/pricing"
+          ],
           "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
+          "context_length": 8192,
+          "functions": [
+            "text-to-speech"
+          ],
+          "id": "models/gemini-3.1-flash-tts-preview",
+          "input_modalities": [
+            "text"
+          ],
+          "max_output_tokens": 16384,
+          "output_modalities": [
+            "audio"
+          ],
+          "owned_by": "google",
+          "pricing": {},
+          "source_urls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-tts-preview",
+            "https://ai.google.dev/gemini-api/docs/pricing"
+          ],
+          "type": "audio",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 1048576,
           "functions": [
             "chat"
           ],
           "id": "models/gemini-3.5-flash",
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "max_output_tokens": 65536,
+          "output_modalities": [
+            "text"
+          ],
           "owned_by": "google",
           "pricing": {},
+          "source_urls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash",
+            "https://ai.google.dev/gemini-api/docs/pricing"
+          ],
           "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
+          "context_length": 1048576,
+          "functions": [
+            "chat"
+          ],
+          "id": "models/gemini-3.5-flash-lite",
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "max_output_tokens": 65536,
+          "output_modalities": [
+            "text"
+          ],
+          "owned_by": "google",
+          "pricing": {},
+          "source_urls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite",
+            "https://ai.google.dev/gemini-api/docs/pricing"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 131072,
+          "functions": [
+            "chat"
+          ],
+          "id": "models/gemini-3.5-live-translate-preview",
+          "input_modalities": [
+            "audio"
+          ],
+          "max_output_tokens": 65536,
+          "output_modalities": [
+            "audio",
+            "text"
+          ],
+          "owned_by": "google",
+          "pricing": {},
+          "source_urls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-3.5-live-translate-preview",
+            "https://ai.google.dev/gemini-api/docs/pricing"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 1048576,
+          "functions": [
+            "chat"
+          ],
+          "id": "models/gemini-3.6-flash",
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "max_output_tokens": 65536,
+          "output_modalities": [
+            "text"
+          ],
+          "owned_by": "google",
+          "pricing": {},
+          "source_urls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash",
+            "https://ai.google.dev/gemini-api/docs/pricing"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 2048,
           "functions": [
             "embedding"
           ],
           "id": "models/gemini-embedding-001",
+          "input_modalities": [
+            "text"
+          ],
+          "max_output_tokens": 0,
+          "output_modalities": [
+            "embedding"
+          ],
           "owned_by": "google",
           "pricing": {},
+          "source_urls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-embedding-001",
+            "https://ai.google.dev/gemini-api/docs/pricing"
+          ],
           "type": "embedding",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
+          "context_length": 8192,
           "functions": [
             "embedding"
           ],
           "id": "models/gemini-embedding-2",
-          "owned_by": "google",
-          "pricing": {},
-          "type": "embedding",
-          "verified_at": "2026-07-21T06:22:05Z"
-        },
-        {
-          "functions": [
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "max_output_tokens": 0,
+          "output_modalities": [
             "embedding"
           ],
-          "id": "models/gemini-embedding-2-preview",
           "owned_by": "google",
           "pricing": {},
+          "source_urls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-embedding-2",
+            "https://ai.google.dev/gemini-api/docs/pricing"
+          ],
           "type": "embedding",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
-          "functions": [
-            "chat"
-          ],
-          "id": "models/gemini-flash-latest",
-          "owned_by": "google",
-          "pricing": {},
-          "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
-        },
-        {
-          "functions": [
-            "chat"
-          ],
-          "id": "models/gemini-flash-lite-latest",
-          "owned_by": "google",
-          "pricing": {},
-          "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
-        },
-        {
+          "context_length": 131072,
           "functions": [
             "chat"
           ],
           "id": "models/gemini-robotics-er-1.6-preview",
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+          ],
+          "max_output_tokens": 65536,
+          "output_modalities": [
+            "text"
+          ],
           "owned_by": "google",
           "pricing": {},
+          "source_urls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-robotics-er-1.6-preview",
+            "https://ai.google.dev/gemini-api/docs/pricing"
+          ],
           "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
+          "context_length": 262144,
           "functions": [
             "chat"
           ],
           "id": "models/gemma-4-26b-a4b-it",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "max_output_tokens": 0,
+          "output_modalities": [
+            "text"
+          ],
           "owned_by": "google",
           "pricing": {},
+          "source_urls": [
+            "https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api",
+            "https://ai.google.dev/gemma/docs/core/model_card_4",
+            "https://ai.google.dev/gemini-api/docs/pricing"
+          ],
           "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 262144,
+          "functions": [
+            "chat"
+          ],
+          "id": "models/gemma-4-31b-it",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "max_output_tokens": 0,
+          "output_modalities": [
+            "text"
+          ],
+          "owned_by": "google",
+          "pricing": {},
+          "source_urls": [
+            "https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api",
+            "https://ai.google.dev/gemma/docs/core/model_card_4",
+            "https://ai.google.dev/gemini-api/docs/pricing"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        }
+      ]
+    },
+    "github-models": {
+      "discovery_message": "models endpoint returned 401 Unauthorized: Unauthorized",
+      "discovery_status": "discovery-failed",
+      "free_basis": "GitHub Models provides rate-limited model experimentation at no cost.",
+      "source_urls": [
+        "https://docs.github.com/en/github-models/prototyping-with-ai-models"
+      ]
+    },
+    "groq": {
+      "free_basis": "Groq官方Rate Limits页面为这些当前目录ID列出明确的Free Plan模型级RPM/RPD/TPM/TPD或ASH/ASD限额。",
+      "source_urls": [
+        "https://console.groq.com/docs/models",
+        "https://console.groq.com/docs/rate-limits",
+        "https://console.groq.com/docs/deprecations",
+        "https://console.groq.com/docs/tool-use/overview"
+      ],
+      "discovery_status": "ready",
+      "discovery_message": "official API unavailable; inventory recovered from official documentation",
+      "models": [
+        {
+          "context_length": 4000,
+          "functions": [
+            "text-to-speech"
+          ],
+          "id": "canopylabs/orpheus-arabic-saudi",
+          "max_output_tokens": 50000,
+          "source_urls": [
+            "https://console.groq.com/docs/model/canopylabs/orpheus-arabic-saudi"
+          ],
+          "supported_parameters": [],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 4000,
+          "functions": [
+            "text-to-speech"
+          ],
+          "id": "canopylabs/orpheus-v1-english",
+          "max_output_tokens": 50000,
+          "source_urls": [
+            "https://console.groq.com/docs/model/canopylabs/orpheus-v1-english"
+          ],
+          "supported_parameters": [],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 131072,
+          "functions": [
+            "chat"
+          ],
+          "id": "groq/compound",
+          "max_output_tokens": 8192,
+          "source_urls": [
+            "https://console.groq.com/docs/compound/systems/compound"
+          ],
+          "supported_parameters": [
+            "response_format"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 131072,
+          "functions": [
+            "chat"
+          ],
+          "id": "groq/compound-mini",
+          "max_output_tokens": 8192,
+          "source_urls": [
+            "https://console.groq.com/docs/compound/systems/compound-mini"
+          ],
+          "supported_parameters": [
+            "response_format"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 131072,
+          "functions": [
+            "chat",
+            "chat-tools"
+          ],
+          "id": "llama-3.1-8b-instant",
+          "max_output_tokens": 131072,
+          "source_urls": [
+            "https://console.groq.com/docs/model/llama-3.1-8b-instant"
+          ],
+          "supported_parameters": [
+            "parallel_tool_calls",
+            "response_format",
+            "tool_choice",
+            "tools"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 131072,
+          "functions": [
+            "chat",
+            "chat-tools"
+          ],
+          "id": "llama-3.3-70b-versatile",
+          "max_output_tokens": 32768,
+          "source_urls": [
+            "https://console.groq.com/docs/model/llama-3.3-70b-versatile"
+          ],
+          "supported_parameters": [
+            "parallel_tool_calls",
+            "response_format",
+            "tool_choice",
+            "tools"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 512,
+          "functions": [
+            "moderation"
+          ],
+          "id": "meta-llama/llama-prompt-guard-2-22m",
+          "max_output_tokens": 512,
+          "source_urls": [
+            "https://console.groq.com/docs/model/meta-llama/llama-prompt-guard-2-22m"
+          ],
+          "supported_parameters": [],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 512,
+          "functions": [
+            "moderation"
+          ],
+          "id": "meta-llama/llama-prompt-guard-2-86m",
+          "max_output_tokens": 512,
+          "source_urls": [
+            "https://console.groq.com/docs/model/meta-llama/llama-prompt-guard-2-86m"
+          ],
+          "supported_parameters": [
+            "response_format"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 131072,
+          "functions": [
+            "chat",
+            "chat-tools"
+          ],
+          "id": "openai/gpt-oss-120b",
+          "max_output_tokens": 65536,
+          "source_urls": [
+            "https://console.groq.com/docs/model/openai/gpt-oss-120b"
+          ],
+          "supported_parameters": [
+            "include_reasoning",
+            "reasoning_effort",
+            "reasoning_format",
+            "response_format",
+            "tool_choice",
+            "tools"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 131072,
+          "functions": [
+            "chat",
+            "chat-tools"
+          ],
+          "id": "openai/gpt-oss-20b",
+          "max_output_tokens": 65536,
+          "source_urls": [
+            "https://console.groq.com/docs/model/openai/gpt-oss-20b"
+          ],
+          "supported_parameters": [
+            "include_reasoning",
+            "reasoning_effort",
+            "reasoning_format",
+            "response_format",
+            "tool_choice",
+            "tools"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 131072,
+          "functions": [
+            "moderation"
+          ],
+          "id": "openai/gpt-oss-safeguard-20b",
+          "max_output_tokens": 65536,
+          "source_urls": [
+            "https://console.groq.com/docs/model/openai/gpt-oss-safeguard-20b"
+          ],
+          "supported_parameters": [
+            "include_reasoning",
+            "reasoning_format",
+            "response_format"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 131072,
+          "functions": [
+            "chat",
+            "chat-tools",
+            "image-understanding"
+          ],
+          "id": "qwen/qwen3.6-27b",
+          "max_output_tokens": 16384,
+          "source_urls": [
+            "https://console.groq.com/docs/model/qwen/qwen3.6-27b"
+          ],
+          "supported_parameters": [
+            "include_reasoning",
+            "parallel_tool_calls",
+            "reasoning_effort",
+            "reasoning_format",
+            "response_format",
+            "tool_choice",
+            "tools"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 0,
+          "functions": [
+            "speech-to-text"
+          ],
+          "id": "whisper-large-v3",
+          "max_output_tokens": 0,
+          "source_urls": [
+            "https://console.groq.com/docs/model/whisper-large-v3"
+          ],
+          "supported_parameters": [],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 0,
+          "functions": [
+            "speech-to-text"
+          ],
+          "id": "whisper-large-v3-turbo",
+          "max_output_tokens": 0,
+          "source_urls": [
+            "https://console.groq.com/docs/model/whisper-large-v3-turbo"
+          ],
+          "supported_parameters": [],
+          "verified_at": "2026-07-27T05:40:09Z"
+        }
+      ]
+    },
+    "huggingface": {
+      "free_basis": "Hugging Face Router 按账户每月发放 Inference Providers credits：Free 用户 $0.10（可能调整）、PRO 用户 $2、Team/Enterprise 每席位 $2；这是账户额度，不代表模型零价，且仅适用于通过 Hugging Face 路由并符合条件的 providers。",
+      "billing_warning": "月度 credits 耗尽后不会继续免费；需购买额外 credits 才能继续按 provider 原价计费。使用自定义 provider key 时 credits 不适用，由该 provider 直接计费。",
+      "source_urls": [
+        "https://huggingface.co/docs/inference-providers/pricing",
+        "https://huggingface.co/docs/inference-providers/index",
+        "https://huggingface.co/docs/inference-providers/tasks/chat-completion",
+        "https://huggingface.co/docs/inference-providers/hub-api"
+      ],
+      "discovery_status": "ready",
+      "discovery_message": "official API unavailable; inventory recovered from official documentation",
+      "models": [
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "deepseek-ai/DeepSeek-R1",
+          "source_urls": [
+            "https://huggingface.co/docs/inference-providers/index",
+            "https://huggingface.co/deepseek-ai/DeepSeek-R1"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
             "chat"
           ],
-          "id": "models/gemma-4-31b-it",
-          "owned_by": "google",
-          "pricing": {},
-          "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "id": "deepseek-ai/DeepSeek-V4-Pro",
+          "source_urls": [
+            "https://huggingface.co/docs/inference-providers/hub-api"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "google/gemma-3-27b-it",
+          "source_urls": [
+            "https://huggingface.co/docs/inference-providers/hub-api",
+            "https://huggingface.co/google/gemma-3-27b-it"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "google/gemma-4-31B-it",
+          "source_urls": [
+            "https://huggingface.co/docs/inference-providers/tasks/chat-completion",
+            "https://huggingface.co/google/gemma-4-31B-it"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "openai/gpt-oss-120b",
+          "source_urls": [
+            "https://huggingface.co/docs/inference-providers/tasks/chat-completion",
+            "https://huggingface.co/openai/gpt-oss-120b"
+          ],
+          "verified_at": "2026-07-27T05:40:09Z"
         }
-      ],
-      "source_urls": [
-        "https://ai.google.dev/gemini-api/docs/rate-limits",
-        "https://aistudio.google.com/apikey"
-      ],
-      "discovery_status": "awaiting-approval",
-      "discovery_message": "Formula 已发现 17 个模型，但本次模型变化尚未通过质量门禁"
-    },
-    "github-models": {
-      "free_basis": "GitHub Models provides rate-limited model experimentation at no cost.",
-      "source_urls": [
-        "https://docs.github.com/en/github-models/prototyping-with-ai-models"
-      ],
-      "discovery_status": "discovery-failed",
-      "discovery_message": "models endpoint returned 401 Unauthorized: Unauthorized"
-    },
-    "groq": {
-      "free_basis": "Models available to an account on the provider Free Plan are subject to free-plan rate limits.",
-      "source_urls": [
-        "https://console.groq.com/docs/rate-limits"
-      ],
-      "discovery_status": "awaiting-approval",
-      "discovery_message": "Formula 已发现 14 个模型，但本次模型变化尚未通过质量门禁"
-    },
-    "huggingface": {
-      "free_basis": "Inference Providers requests consume the account's monthly free credits.",
-      "source_urls": [
-        "https://huggingface.co/docs/inference-providers/pricing"
-      ],
-      "discovery_status": "awaiting-approval",
-      "discovery_message": "Formula 已发现 5 个模型，但本次模型变化尚未通过质量门禁"
+      ]
     },
     "mistral": {
+      "discovery_message": "fetch models: Get \"https://api.mistral.ai/v1/models\": EOF",
+      "discovery_status": "discovery-failed",
       "free_basis": "Models exposed to an Experiment Plan account are subject to experiment-plan limits.",
       "source_urls": [
         "https://docs.mistral.ai/deployment/ai-studio/tier/"
-      ],
-      "discovery_status": "discovery-failed",
-      "discovery_message": "fetch models: Get \"https://api.mistral.ai/v1/models\": EOF"
+      ]
     },
     "modelscope": {
       "free_basis": "Models exposed to the inference account consume its free inference quota.",
       "source_urls": [
         "https://modelscope.cn/docs/model-service/API-Inference/intro"
       ],
-      "discovery_status": "awaiting-approval",
-      "discovery_message": "Formula 已发现 55 个模型，但本次模型变化尚未通过质量门禁"
-    },
-    "nvidia": {
-      "free_basis": "Build API access is provided with rate-limited evaluation credits.",
+      "discovery_status": "ready",
+      "discovery_message": "official catalog accepted",
       "models": [
         {
           "functions": [
             "chat"
           ],
-          "id": "abacusai/dracarys-llama-3.1-70b-instruct",
-          "owned_by": "abacusai",
+          "id": "LLM-Research/Llama-4-Maverick-17B-128E-Instruct",
+          "owned_by": "system",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "MedAIBase/AntAngelMed",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "MiniMax/MiniMax-M1-80k",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "MiniMax/MiniMax-M2.5",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "MiniMax/MiniMax-M2.7",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "MiniMax/MiniMax-M3",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "image-generation"
+          ],
+          "id": "MusePublic/Qwen-Image-Edit",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "image",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "OpenGVLab/InternVL3_5-241B-A28B",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "PaddlePaddle/ERNIE-4.5-0.3B-PT",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "PaddlePaddle/ERNIE-4.5-21B-A3B-PT",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "PaddlePaddle/ERNIE-4.5-300B-A47B-PT",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "PaddlePaddle/ERNIE-4.5-VL-28B-A3B-PT",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "image-generation"
+          ],
+          "id": "Qwen/Qwen-Image-Edit",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "image",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3-14B",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3-235B-A22B",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3-235B-A22B-Thinking-2507",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3-30B-A3B",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3-30B-A3B-Thinking-2507",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3-32B",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3-4B",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3-8B",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3-Next-80B-A3B-Thinking",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3-VL-235B-A22B-Instruct",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3-VL-8B-Instruct",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3-VL-8B-Thinking",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3.5-122B-A10B",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3.5-27B",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3.5-35B-A3B",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen3.5-397B-A17B",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Shanghai_AI_Laboratory/Intern-S1",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Shanghai_AI_Laboratory/Intern-S1-mini",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Shanghai_AI_Laboratory/Intern-S2-Preview",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Tencent-Hunyuan/Hy3",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "XGenerationLab/XiYanSQL-QwenCoder-32B-2412",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "XGenerationLab/XiYanSQL-QwenCoder-32B-2504",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "XiaomiMiMo/MiMo-V2-Flash",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "ZhipuAI/GLM-4.7-Flash",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "ZhipuAI/GLM-5",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "ZhipuAI/GLM-5.1",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "ZhipuAI/GLM-5.2",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "deepseek-ai/DeepSeek-V3.2",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "deepseek-ai/DeepSeek-V4-Flash",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "deepseek-ai/DeepSeek-V4-Pro",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "iic/GUI-Owl-1.5-8B-Instruct",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "iic/GUI-Owl-1.5-8B-Think",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "meituan-longcat/LongCat-Flash-Lite",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "mistralai/Mistral-Large-Instruct-2407",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "moonshotai/Kimi-K2.5",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nex-agi/Nex-N2-Pro",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "opencompass/CompassJudger-1-32B-Instruct",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "stepfun-ai/Step-3.5-Flash",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "stepfun-ai/Step-3.7-Flash",
+          "owned_by": "system",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        }
+      ]
+    },
+    "nvidia": {
+      "free_basis": "Build API access is provided with rate-limited evaluation credits.",
+      "source_urls": [
+        "https://build.nvidia.com/"
+      ],
+      "discovery_status": "ready",
+      "discovery_message": "official catalog accepted",
+      "models": [
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "01-ai/yi-large",
+          "owned_by": "01-ai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "adept/fuyu-8b",
+          "owned_by": "adept",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "ai21labs/jamba-1.5-large-instruct",
+          "owned_by": "ai21labs",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "aisingapore/sea-lion-7b-instruct",
+          "owned_by": "aisingapore",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "embedding"
+          ],
+          "id": "baai/bge-m3",
+          "owned_by": "baai",
+          "pricing": {},
+          "type": "embedding",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "bigcode/starcoder2-15b",
+          "owned_by": "bigcode",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "databricks/dbrx-instruct",
+          "owned_by": "databricks",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "deepseek-ai/deepseek-coder-6.7b-instruct",
+          "owned_by": "deepseek-ai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "deepseek-ai/deepseek-v4-flash",
+          "owned_by": "deepseek-ai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -245,7 +1873,37 @@
           "owned_by": "deepseek-ai",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "google/codegemma-1.1-7b",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "google/codegemma-7b",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "google/deplot",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -255,37 +1913,107 @@
           "owned_by": "google",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
             "chat"
           ],
-          "id": "google/gemma-2-2b-it",
+          "id": "google/gemma-2b",
           "owned_by": "google",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
             "chat"
           ],
-          "id": "google/gemma-3n-e2b-it",
+          "id": "google/gemma-3-12b-it",
           "owned_by": "google",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
             "chat"
           ],
-          "id": "google/gemma-3n-e4b-it",
+          "id": "google/gemma-3-4b-it",
           "owned_by": "google",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "google/gemma-4-31b-it",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "google/recurrentgemma-2b",
+          "owned_by": "google",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "ibm/granite-3.0-3b-a800m-instruct",
+          "owned_by": "ibm",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "ibm/granite-3.0-8b-instruct",
+          "owned_by": "ibm",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "ibm/granite-34b-code-instruct",
+          "owned_by": "ibm",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "ibm/granite-8b-code-instruct",
+          "owned_by": "ibm",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "meta/codellama-70b",
+          "owned_by": "meta",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -295,7 +2023,7 @@
           "owned_by": "meta",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -305,7 +2033,7 @@
           "owned_by": "meta",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -315,7 +2043,17 @@
           "owned_by": "meta",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "meta/llama-3.2-1b-instruct",
+          "owned_by": "meta",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -325,7 +2063,137 @@
           "owned_by": "meta",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "meta/llama-3.2-90b-vision-instruct",
+          "owned_by": "meta",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "meta/llama-3.3-70b-instruct",
+          "owned_by": "meta",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "moderation"
+          ],
+          "id": "meta/llama-guard-4-12b",
+          "owned_by": "meta",
+          "pricing": {},
+          "type": "moderation",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "meta/llama2-70b",
+          "owned_by": "meta",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "microsoft/kosmos-2",
+          "owned_by": "microsoft",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "microsoft/phi-3-vision-128k-instruct",
+          "owned_by": "microsoft",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "microsoft/phi-3.5-moe-instruct",
+          "owned_by": "microsoft",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "minimaxai/minimax-m3",
+          "owned_by": "minimaxai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "mistralai/codestral-22b-instruct-v0.1",
+          "owned_by": "mistralai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "mistralai/mistral-7b-instruct-v0.3",
+          "owned_by": "mistralai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "mistralai/mistral-large",
+          "owned_by": "mistralai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "mistralai/mistral-large-2-instruct",
+          "owned_by": "mistralai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "mistralai/mistral-medium-3.5-128b",
+          "owned_by": "mistralai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -335,37 +2203,67 @@
           "owned_by": "mistralai",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
             "chat"
           ],
-          "id": "mistralai/mistral-small-4-119b-2603",
+          "id": "mistralai/mixtral-8x22b-v0.1",
           "owned_by": "mistralai",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
             "chat"
           ],
-          "id": "mistralai/mixtral-8x7b-instruct-v0.1",
-          "owned_by": "mistralai",
+          "id": "moonshotai/kimi-k2.6",
+          "owned_by": "moonshotai",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
             "chat"
           ],
-          "id": "nvidia/gliner-pii",
+          "id": "nv-mistralai/mistral-nemo-12b-instruct",
+          "owned_by": "nv-mistralai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "video-generation"
+          ],
+          "id": "nvidia/ai-synthetic-video-detector",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "video",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/cosmos-reason2-8b",
           "owned_by": "nvidia",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "embedding"
+          ],
+          "id": "nvidia/embed-qa-4",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "embedding",
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -375,7 +2273,67 @@
           "owned_by": "nvidia",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/ising-calibration-1.5-31b",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "moderation"
+          ],
+          "id": "nvidia/llama-3.1-nemoguard-8b-content-safety",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "moderation",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "moderation"
+          ],
+          "id": "nvidia/llama-3.1-nemoguard-8b-topic-control",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "moderation",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/llama-3.1-nemotron-51b-instruct",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/llama-3.1-nemotron-70b-instruct",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/llama-3.1-nemotron-nano-8b-v1",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -385,7 +2343,57 @@
           "owned_by": "nvidia",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "moderation"
+          ],
+          "id": "nvidia/llama-3.1-nemotron-safety-guard-8b-v3",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "moderation",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "embedding"
+          ],
+          "id": "nvidia/llama-3.2-nemoretriever-1b-vlm-embed-v1",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "embedding",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "embedding"
+          ],
+          "id": "nvidia/llama-3.2-nv-embedqa-1b-v1",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "embedding",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/llama-3.3-nemotron-super-49b-v1",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -395,7 +2403,57 @@
           "owned_by": "nvidia",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "embedding"
+          ],
+          "id": "nvidia/llama-nemotron-embed-1b-v2",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "embedding",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "embedding"
+          ],
+          "id": "nvidia/llama-nemotron-embed-vl-1b-v2",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "embedding",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/llama3-chatqa-1.5-70b",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/mistral-nemo-minitron-8b-8k-instruct",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/nemoretriever-parse",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -405,7 +2463,7 @@
           "owned_by": "nvidia",
           "pricing": {},
           "type": "embedding",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -415,7 +2473,7 @@
           "owned_by": "nvidia",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -425,7 +2483,7 @@
           "owned_by": "nvidia",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -435,7 +2493,47 @@
           "owned_by": "nvidia",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/nemotron-3-ultra-550b-a55b",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "moderation"
+          ],
+          "id": "nvidia/nemotron-3.5-content-safety",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "moderation",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/nemotron-4-340b-instruct",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/nemotron-4-340b-reward",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -445,7 +2543,47 @@
           "owned_by": "nvidia",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/nemotron-nano-12b-v2-vl",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/nemotron-nano-3-30b-a3b",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/nemotron-parse",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/neva-22b",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -455,7 +2593,47 @@
           "owned_by": "nvidia",
           "pricing": {},
           "type": "embedding",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "embedding"
+          ],
+          "id": "nvidia/nv-embedcode-7b-v1",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "embedding",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "embedding"
+          ],
+          "id": "nvidia/nv-embedqa-e5-v5",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "embedding",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "embedding"
+          ],
+          "id": "nvidia/nv-embedqa-mistral-7b-v2",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "embedding",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/nvclip",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -465,7 +2643,17 @@
           "owned_by": "nvidia",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/riva-translate-4b-instruct",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -475,7 +2663,27 @@
           "owned_by": "nvidia",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "nvidia/vila",
+          "owned_by": "nvidia",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "openai/gpt-oss-120b",
+          "owned_by": "openai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -485,7 +2693,7 @@
           "owned_by": "openai",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -495,27 +2703,17 @@
           "owned_by": "poolside",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
-            "chat"
+            "embedding"
           ],
-          "id": "sarvamai/sarvam-m",
-          "owned_by": "sarvamai",
+          "id": "snowflake/arctic-embed-l",
+          "owned_by": "snowflake",
           "pricing": {},
-          "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
-        },
-        {
-          "functions": [
-            "chat"
-          ],
-          "id": "stepfun-ai/step-3.5-flash",
-          "owned_by": "stepfun-ai",
-          "pricing": {},
-          "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "type": "embedding",
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
@@ -525,35 +2723,95 @@
           "owned_by": "stepfun-ai",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "video-generation"
+          ],
+          "id": "thinkingmachines/inkling",
+          "owned_by": "thinkingmachines",
+          "pricing": {},
+          "type": "video",
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "functions": [
             "chat"
           ],
-          "id": "upstage/solar-10.7b-instruct",
-          "owned_by": "upstage",
+          "id": "writer/palmyra-creative-122b",
+          "owned_by": "writer",
           "pricing": {},
           "type": "normal",
-          "verified_at": "2026-07-21T11:56:55Z"
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "writer/palmyra-fin-70b-32k",
+          "owned_by": "writer",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "writer/palmyra-med-70b",
+          "owned_by": "writer",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "writer/palmyra-med-70b-32k",
+          "owned_by": "writer",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "z-ai/glm-5.2",
+          "owned_by": "z-ai",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "zyphra/zamba2-7b-instruct",
+          "owned_by": "zyphra",
+          "pricing": {},
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
         }
-      ],
-      "source_urls": [
-        "https://build.nvidia.com/"
-      ],
-      "discovery_status": "awaiting-approval",
-      "discovery_message": "Formula 已发现 102 个模型，但本次模型变化尚未通过质量门禁"
+      ]
     },
     "ollama-cloud": {
+      "discovery_message": "fetch models: Get \"https://api.ollama.com/v1/models\": unexpected EOF",
+      "discovery_status": "discovery-failed",
       "free_basis": "Models exposed to a configured free-tier account are subject to its usage limits.",
       "source_urls": [
         "https://ollama.com/cloud"
-      ],
-      "discovery_status": "discovery-failed",
-      "discovery_message": "fetch models: Get \"https://api.ollama.com/v1/models\": unexpected EOF"
+      ]
     },
     "openrouter": {
       "free_basis": "Both prompt and completion prices reported by the provider are zero.",
+      "source_urls": [
+        "https://openrouter.ai/api/v1/models"
+      ],
+      "discovery_status": "ready",
+      "discovery_message": "official catalog accepted",
       "models": [
         {
           "context_length": 256000,
@@ -590,7 +2848,7 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-22T03:56:04Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "context_length": 262144,
@@ -636,7 +2894,7 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-22T03:56:04Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "context_length": 262144,
@@ -674,7 +2932,47 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-22T03:56:04Z"
+          "verified_at": "2026-07-27T05:40:09Z"
+        },
+        {
+          "context_length": 262144,
+          "description": "*Ling-3.0-flash* is a *124B-parameter Mixture-of-Experts (MoE) model*, with approximately *5.1B parameters activated per token*. The model is designed with *token efficiency and production-scale agentic inference* as key priorities, enabling developers...",
+          "functions": [
+            "chat",
+            "chat-tools"
+          ],
+          "id": "inclusionai/ling-3.0-flash:free",
+          "input_modalities": [
+            "text"
+          ],
+          "max_output_tokens": 32768,
+          "name": "Ling-3.0-flash (free)",
+          "output_modalities": [
+            "text"
+          ],
+          "pricing": {
+            "completion": "0",
+            "prompt": "0"
+          },
+          "supported_parameters": [
+            "frequency_penalty",
+            "include_reasoning",
+            "logprobs",
+            "max_tokens",
+            "presence_penalty",
+            "reasoning",
+            "repetition_penalty",
+            "seed",
+            "stop",
+            "temperature",
+            "tool_choice",
+            "tools",
+            "top_k",
+            "top_logprobs",
+            "top_p"
+          ],
+          "type": "normal",
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "context_length": 256000,
@@ -706,7 +3004,7 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-22T03:56:04Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "context_length": 256000,
@@ -745,7 +3043,7 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-22T03:56:04Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "context_length": 262144,
@@ -781,7 +3079,7 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-22T03:56:04Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "context_length": 1000000,
@@ -815,7 +3113,7 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-22T03:56:04Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "context_length": 128000,
@@ -847,7 +3145,7 @@
             "top_p"
           ],
           "type": "moderation",
-          "verified_at": "2026-07-22T03:56:04Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "context_length": 128000,
@@ -884,7 +3182,7 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-22T03:56:04Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "context_length": 128000,
@@ -918,7 +3216,7 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-22T03:56:04Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "context_length": 131072,
@@ -961,7 +3259,7 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-22T03:56:04Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "context_length": 200000,
@@ -1005,7 +3303,7 @@
             "top_p"
           ],
           "type": "normal",
-          "verified_at": "2026-07-22T03:56:04Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "context_length": 262144,
@@ -1036,7 +3334,7 @@
             "tools"
           ],
           "type": "normal",
-          "verified_at": "2026-07-22T03:56:04Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "context_length": 262144,
@@ -1067,7 +3365,7 @@
             "tools"
           ],
           "type": "normal",
-          "verified_at": "2026-07-22T03:56:04Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         },
         {
           "context_length": 262144,
@@ -1098,20 +3396,11 @@
             "tools"
           ],
           "type": "normal",
-          "verified_at": "2026-07-22T03:56:04Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         }
-      ],
-      "source_urls": [
-        "https://openrouter.ai/api/v1/models"
-      ],
-      "discovery_status": "awaiting-approval",
-      "discovery_message": "Formula 已发现 16 个模型，但本次模型变化尚未通过质量门禁"
+      ]
     },
     "pollinations": {
-      "free_basis": "Models exposed to the account consume the provider's free Pollen allocation.",
-      "source_urls": [
-        "https://enter.pollinations.ai/"
-      ],
       "discovery_status": "verification-failed",
       "discovery_message": "agent could not identify free models from official catalog; provider abandoned"
     },
@@ -1124,112 +3413,55 @@
       "discovery_message": "official catalog contains no eligible free models; provider abandoned"
     },
     "sambanova": {
+      "discovery_message": "fetch models: Get \"https://api.sambanova.ai/v1/models\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "discovery_status": "discovery-failed",
       "free_basis": "Models exposed to a configured Free Tier account are subject to provider limits.",
       "source_urls": [
         "https://cloud.sambanova.ai/"
-      ],
-      "discovery_status": "discovery-failed",
-      "discovery_message": "fetch models: Get \"https://api.sambanova.ai/v1/models\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)"
+      ]
     },
     "siliconflow": {
-      "free_basis": "Models marked free by the provider catalog.",
+      "discovery_status": "verification-failed",
+      "discovery_message": "agent could not identify free models from official catalog; provider abandoned"
+    },
+    "volcengine-ark": {
+      "free_basis": "官方产品页列明Doubao-Seed-2.1-pro、Doubao-Seed-2.1-turbo、Doubao-Seed-Evolving各有50万tokens试用额度；仅Doubao-Seed-Evolving同时核实到固定公共Model ID并可由项目的北京方舟/api/v3端点直接调用。",
+      "billing_warning": "Doubao-Seed-Evolving免费额度耗尽后按量计费：6元/百万输入tokens、30元/百万输出tokens；服务地域为华北2（北京，cn-beijing）。官方公开产品页未注明这50万tokens的领取条件和有效期，须以方舟开通管理页实际显示的到期时间为准，不能视为永久免费。",
+      "source_urls": [
+        "https://www.volcengine.com/docs/82379/1099320",
+        "https://www.volcengine.com/docs/82379/1544106",
+        "https://www.volcengine.com/docs/82379/1554711",
+        "https://www.volcengine.com/product/ark",
+        "https://www.volcengine.com/docs/82379/2373740"
+      ],
+      "discovery_status": "ready",
+      "discovery_message": "agent inventory accepted",
       "models": [
         {
           "functions": [
             "chat"
           ],
-          "id": "Qwen/Qwen2.5-7B-Instruct",
-          "pricing": {},
-          "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
-        },
-        {
-          "functions": [
-            "chat"
+          "id": "doubao-seed-evolving",
+          "source_urls": [
+            "https://www.volcengine.com/product/ark",
+            "https://www.volcengine.com/docs/82379/2373740"
           ],
-          "id": "Qwen/Qwen3-8B",
-          "pricing": {},
-          "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
-        },
-        {
-          "functions": [
-            "chat"
-          ],
-          "id": "THUDM/GLM-4-9B-0414",
-          "pricing": {},
-          "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
-        },
-        {
-          "functions": [
-            "chat"
-          ],
-          "id": "THUDM/GLM-Z1-9B-0414",
-          "pricing": {},
-          "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
-        },
-        {
-          "functions": [
-            "chat"
-          ],
-          "id": "deepseek-ai/DeepSeek-OCR",
-          "pricing": {},
-          "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
-        },
-        {
-          "functions": [
-            "chat"
-          ],
-          "id": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
-          "pricing": {},
-          "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
-        },
-        {
-          "functions": [
-            "chat"
-          ],
-          "id": "tencent/Hunyuan-MT-7B",
-          "pricing": {},
-          "type": "normal",
-          "verified_at": "2026-07-21T06:22:05Z"
+          "verified_at": "2026-07-27T05:40:09Z"
         }
-      ],
-      "source_urls": [
-        "https://cloud.siliconflow.cn/models"
-      ],
-      "discovery_status": "verification-failed",
-      "discovery_message": "agent could not identify free models from official catalog; provider abandoned"
-    },
-    "volcengine-ark": {
-      "billing_warning": "免费额度按模型限量发放，耗尽后可能转为计费。",
-      "free_basis": "Models consume model-specific trial quota and may become billable after exhaustion.",
-      "source_urls": [
-        "https://www.volcengine.com/docs/82379/1099320"
-      ],
-      "discovery_status": "awaiting-approval",
-      "discovery_message": "Formula 已发现 1 个模型，但本次模型变化尚未通过质量门禁"
+      ]
     },
     "xiaomi-mimo": {
       "billing_warning": "赠送额度用完后停止使用或按账户计费设置执行，请先确认余额。",
+      "discovery_message": "models endpoint returned 401 Unauthorized: Invalid API Key",
+      "discovery_status": "discovery-failed",
       "free_basis": "Models consume account gift credits; this is a limited credit rather than permanent zero pricing.",
       "source_urls": [
         "https://platform.xiaomimimo.com/"
-      ],
-      "discovery_status": "discovery-failed",
-      "discovery_message": "models endpoint returned 401 Unauthorized: Invalid API Key"
+      ]
     },
     "zai": {
-      "free_basis": "Models exposed to the configured free-model account are subject to provider limits.",
-      "source_urls": [
-        "https://z.ai/model-api"
-      ],
       "discovery_status": "verification-failed",
       "discovery_message": "agent could not identify free models from official catalog; provider abandoned"
     }
-  },
-  "schema_version": 2
+  }
 }

@@ -13,7 +13,7 @@ endif
 LDFLAGS := -s -w
 
 .DEFAULT_GOAL := help
-.PHONY: help build web-install web-build web-check install uninstall daemon-install daemon-start daemon-stop daemon-restart daemon-status daemon-logs daemon-uninstall run discover-free-models validate-free-models test test-formula test-race test-cover vet fmt fmt-check version-check check tidy clean
+.PHONY: help build web-install web-build web-check install uninstall daemon-install daemon-start daemon-stop daemon-restart daemon-status daemon-logs daemon-uninstall run validate-free-models test test-race test-cover vet fmt fmt-check version-check check tidy clean
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -65,17 +65,11 @@ uninstall: ## Remove the installed binary
 run: web-build ## Run the service
 	$(GO) run -ldflags="$(LDFLAGS)" . serve
 
-discover-free-models: ## Research providers and safely update the free model manifest
-	tt formula run discover-free-models --dir .tt/formulas --var provider=$(or $(PROVIDER),all) --var allow_large_changes=$(or $(ALLOW_LARGE_CHANGES),false)
-
 validate-free-models: ## Validate the generated free model manifest
 	$(GO) run . validate-model-data internal/provider/free-models.json
 
 test: ## Run unit and integration tests
 	$(GO) test ./...
-
-test-formula: ## Test free-model discovery normalization and merge rules
-	sh scripts/test-free-model-formula.sh
 
 test-race: ## Run tests with the race detector
 	$(GO) test -race ./...
@@ -98,7 +92,7 @@ version-check: ## Verify the binary reports the VERSION file value
 	@actual="$$($(GO) run . version)"; \
 	if [ "$$actual" != "$(VERSION)" ]; then echo "version mismatch: VERSION=$(VERSION), binary=$$actual"; exit 1; fi
 
-check: fmt-check version-check vet test test-formula web-check ## Run all required checks
+check: fmt-check version-check vet test web-check ## Run all required checks
 
 tidy: ## Update and verify Go module metadata
 	$(GO) mod tidy

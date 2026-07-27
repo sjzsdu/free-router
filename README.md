@@ -306,51 +306,27 @@ free-router onboard --force            # 明确覆盖已有配置
 
 可信模型目录、调用凭据和健康状态是三类独立数据：
 
-1. `internal/provider/free-models.json` 是 Formula 产出的版本化数据文件，通过 Go Embed 随二进制发布；每个 Provider 只有经过官方证据确认的 `models[]`，不再存在 policy 或运行时 allowlist。
-2. 读取和缓存 Formula 模型不需要配置 API Key。API Key 只负责启用对应 Provider 的实际调用能力，不参与模型发现，也不会改变目录内容。
-3. 启动、保存凭据和 Admin 操作均不会请求 Provider `/models` 扩充目录。运行时代码只消费 Formula 数据，Provider 连接地址和鉴权逻辑仍留在 Go 代码中。
-4. `~/.free-router/models.json` 使用 Formula 模型目录的稳定内容指纹校验缓存。普通模型调用失败只在内存中隔离对应的模型能力，不会删除目录中的整个模型；别名自动路由会避开该失败能力，直接指定完整模型 ID 调用成功后会恢复它。
-5. Admin 主动探测失败才会从缓存持久清退整个模型，并记录模型关键路由元数据指纹。被清退模型只有自身元数据发生变化，或用户显式重新检测并验证成功后才会恢复；重启、Formula 仅更新描述或 `generated_at` 均不会清空该隔离。
+1. `internal/provider/free-models.json` 是维护者核实并提交的版本化数据文件，通过 Go Embed 随二进制发布；每个 Provider 只有经过官方来源确认的 `models[]`，不再存在 policy 或运行时 allowlist。
+2. 读取和缓存内置模型不需要配置 API Key。API Key 只负责启用对应 Provider 的实际调用能力，不参与模型发现，也不会改变目录内容。
+3. 启动、保存凭据和 Admin 操作均不会请求 Provider `/models` 扩充目录。运行时代码只消费内置清单数据，Provider 连接地址和鉴权逻辑仍留在 Go 代码中。
+4. `~/.free-router/models.json` 使用内置模型目录的稳定内容指纹校验缓存。普通模型调用失败只在内存中隔离对应的模型能力，不会删除目录中的整个模型；别名自动路由会避开该失败能力，直接指定完整模型 ID 调用成功后会恢复它。
+5. Admin 主动探测失败才会从缓存持久清退整个模型，并记录模型关键路由元数据指纹。被清退模型只有自身元数据发生变化，或用户显式重新检测并验证成功后才会恢复；重启或仅更新描述、`generated_at` 均不会清空该隔离。
 6. 可用 `--free-models FILE` 或 `FREE_ROUTER_FREE_MODELS` 临时加载外部清单，无需重新构建二进制。
 
-### 按 Provider 更新免费模型清单
+### 维护免费模型清单
 
-仓库提供 [.tt/formulas/discover-free-models.toml](./.tt/formulas/discover-free-models.toml)。模型发现按 Provider 明确分为三种模式：
-
-- `api`：官方 `/models` 是权威模型源；Formula 直接使用接口结果，并按官方零价字段或该 Provider 的免费套餐规则过滤。
-- `api-agent-filter`：官方 `/models` 提供权威 ID 候选集，专属 Agent 只负责根据官方价格页和免费额度说明筛选；Agent 不能创造接口未返回的 ID。
-- `agent`：Provider 没有可用的官方模型目录，由专属 Agent 从官方模型文档、价格页和 API 文档生成完整清单；Agent 无法得到可靠模型时，Formula 清空其候选模型并记录准确的失败状态与原因。
-
-模型发现不以本机是否配置 API Key 作为前置条件：公开接口会直接读取；需要鉴权的官方接口在有凭据时读取，没有凭据或遇到 401、403、429、超时等暂时失败时保留旧清单，避免一次网络或账户故障造成误删。`agent` 与 `api-agent-filter` 的调研只接受官方资料；其中 `api-agent-filter` 必须和本次官方接口结果取交集。
-
-写入前有确定性质量门禁：被选 Provider 只能按本次权威结果完整替换；未选择的 Provider 不得变化；官方接口失败的 Provider 必须保留原模型；Agent 权威结果为空时模型数组必须为空。每个 Provider 同时保存 `discovery_status` 与 `discovery_message`，区分发现失败、结果校验失败、免费属性待确认、确认无符合条件模型和等待质量门禁准入。即使模型变化被门禁拒绝，也只更新这些诊断字段，不改已准入模型。Formula 最后由 `reporter` Agent 根据审计数据生成 Markdown。
-
-Formula 不需要日期参数；发生有效数据变化时，会使用实际运行时刻更新 `generated_at`，并为新发现且缺少时间的模型补上 `verified_at`。
-
-`provider` 变量默认为 `all`。指定 Provider 后，官方目录读取、必要的专属 Agent 调研和清单替换只作用于该 Provider，其他 Provider 保持不变。对于必须鉴权的 `/models`，未配置 Key 时本次不会更新该 Provider；它不会回退为 Agent 猜测模型。
+维护者直接核实并更新 `internal/provider/free-models.json`。模型 ID、免费条件和来源必须来自 Provider 官方 API、模型目录、价格页或文档；一次网络失败不能作为删除旧模型的依据。修改后运行与程序启动时相同的严格校验：
 
 ```bash
-tt formula validate .tt/formulas/discover-free-models.toml
-tt formula run discover-free-models --dir .tt/formulas
-tt formula run discover-free-models --dir .tt/formulas --var provider=gemini
-make discover-free-models PROVIDER=gemini
-go run . validate-model-data internal/provider/free-models.json
-make test-formula
+make validate-free-models
+go test ./internal/provider ./internal/catalog ./cmd
 ```
 
-Formula 会在写入前运行与程序启动时相同的严格清单校验。单个 Provider 一次新增超过 50 个模型、删除超过 20 个模型，或全局新增超过 100、删除超过 50 时，质量门禁默认拒绝写入并在报告中列出变化。只有人工复核 diff 后才应显式放行：
-
-```bash
-make discover-free-models PROVIDER=nvidia ALLOW_LARGE_CHANGES=true
-```
-
-显式放行只绕过规模熔断，不会绕过 schema、官方来源、免费策略或权威目录一致性校验。无法映射到 free-router 固定能力的上游模型会被排除，不会以空 `functions` 写入清单。
-
-维护者定期运行 Formula、复核 diff 后提交数据文件即可；业务代码无需跟着模型名单变化。若只想在本机立即使用生成结果，可把清单复制到 `~/.free-router/free-models.json`，并设置 `FREE_ROUTER_FREE_MODELS` 后重启服务。
+业务代码无需跟随模型名单变化。若只想在本机立即使用另一份清单，可通过 `--free-models FILE` 或 `FREE_ROUTER_FREE_MODELS` 加载外部文件。
 
 ## 接入任意免费源
 
-任何 OpenAI 兼容服务都可以通过 `FREE_ROUTER_PROVIDERS` 配置连接，但模型仍必须由外部 Formula manifest 的同名 Provider `models[]` 明确提供；仅配置连接和 API Key 不会在运行时自动导入 `/models`。建议只引用密钥环境变量：
+任何 OpenAI 兼容服务都可以通过 `FREE_ROUTER_PROVIDERS` 配置连接，但模型仍必须由外部免费模型 manifest 的同名 Provider `models[]` 明确提供；仅配置连接和 API Key 不会在运行时自动导入 `/models`。建议只引用密钥环境变量：
 
 ```bash
 export MY_FREE_API_KEY=xxx
