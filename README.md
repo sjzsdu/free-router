@@ -309,8 +309,8 @@ free-router onboard --force            # 明确覆盖已有配置
 1. `internal/provider/free-models.json` 是 Formula 产出的版本化数据文件，通过 Go Embed 随二进制发布；每个 Provider 只有经过官方证据确认的 `models[]`，不再存在 policy 或运行时 allowlist。
 2. 读取和缓存 Formula 模型不需要配置 API Key。API Key 只负责启用对应 Provider 的实际调用能力，不参与模型发现，也不会改变目录内容。
 3. 启动、保存凭据和 Admin 操作均不会请求 Provider `/models` 扩充目录。运行时代码只消费 Formula 数据，Provider 连接地址和鉴权逻辑仍留在 Go 代码中。
-4. `~/.free-router/models.json` 使用 Formula 模型目录的稳定内容指纹校验缓存。模型调用或 Admin 探测失败后会立即从缓存删除，并记录模型关键路由元数据指纹；重启或 Formula 仅更新描述、时间等非路由字段时都不会复活。
-5. 被隔离模型只有自身元数据发生变化，或用户显式重新检测并验证成功后才会恢复。单纯发布新的 `generated_at` 不会清空故障隔离。
+4. `~/.free-router/models.json` 使用 Formula 模型目录的稳定内容指纹校验缓存。普通模型调用失败只在内存中隔离对应的模型能力，不会删除目录中的整个模型；别名自动路由会避开该失败能力，直接指定完整模型 ID 调用成功后会恢复它。
+5. Admin 主动探测失败才会从缓存持久清退整个模型，并记录模型关键路由元数据指纹。被清退模型只有自身元数据发生变化，或用户显式重新检测并验证成功后才会恢复；重启、Formula 仅更新描述或 `generated_at` 均不会清空该隔离。
 6. 可用 `--free-models FILE` 或 `FREE_ROUTER_FREE_MODELS` 临时加载外部清单，无需重新构建二进制。
 
 ### 按 Provider 更新免费模型清单

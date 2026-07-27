@@ -62,6 +62,7 @@ jq -cn \
       api_provider_ids: [$resolved.results[] | select(.accepted == true and .abandoned != true and .source == "api") | .provider],
       api_agent_provider_ids: [$resolved.results[] | select(.accepted == true and .abandoned != true and .source == "api+agent-filter") | .provider],
       agent_provider_ids: [$resolved.results[] | select(.accepted == true and .abandoned != true and .source == "agent") | .provider],
+      agent_fallback_provider_ids: [$resolved.results[] | select(.accepted == true and .abandoned != true and .source == "agent-fallback") | .provider],
       abandoned: [$resolved.results[] | select(.accepted == true and .abandoned == true) | {provider,source,message}],
       preserved: [$resolved.results[] | select(.accepted != true) | {provider,message}]
     },

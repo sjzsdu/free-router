@@ -1,6 +1,6 @@
 formula = "discover-free-models"
 description = "并发核验全部或指定 Provider 的免费模型，并生成 free-router 使用的版本化模型清单。"
-version = 16
+version = 18
 type = "workflow"
 
 [vars]
@@ -20,6 +20,12 @@ type = "command"
 name = "jq"
 command = "jq"
 message = "需要 jq 来保守合并并校验生成的模型清单。"
+
+[[preflight.checks]]
+type = "command"
+name = "codex"
+command = "codex"
+message = "需要 Codex CLI 来执行外部模型调研与报告步骤。"
 
 [[preflight.checks]]
 type = "git"
@@ -59,6 +65,7 @@ command = ["go", "run", ".", "providers"]
 format = "json"
 timeout = "5m"
 
+
 [steps.validate]
 format = "json"
 required = ["stdout"]
@@ -82,17 +89,23 @@ required = ["stdout"]
 [[steps]]
 id = "research-openrouter"
 title = "核验 OpenRouter 免费模型"
-depends_on = ["select-providers"]
-condition = "select-providers.research_openrouter == true"
+depends_on = ["plan-research"]
+condition = "plan-research.research_openrouter == true"
+execution = "external_agent"
 description = """
 只调研 OpenRouter。直接核对 https://openrouter.ai/api/v1/models 与 https://openrouter.ai/docs/guides/routing/routers/free-models-router 。仅收录 prompt、completion 均明确为 0 的模型，以及官方 free router；不要收录低价模型、活动折扣或价格未知模型。保留官方模型 ID（通常带 :free），从 architecture、supported_parameters、top_provider 提取能力和上下文。
 
-只使用 OpenRouter 官方来源；这是只读调研，不注册、不登录、不写文件。输出 ONLY compact JSON：
+只使用 OpenRouter 官方来源；这是只读调研，不注册、不登录、不写文件。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"openrouter","free_basis":"...","billing_warning":"","source_urls":["官方 URL"],"models":[{"id":"...","functions":["chat"],"context_length":0,"input_modalities":[],"output_modalities":[],"supported_parameters":[],"pricing":{"prompt":"0","completion":"0"},"source_urls":["官方 URL"]}],"notes":"..."}
 functions 只能使用项目支持的固定能力字符串；无法确认具体零价模型时返回 models=[]，禁止猜测。
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -100,17 +113,23 @@ required = ["provider", "models"]
 [[steps]]
 id = "research-groq"
 title = "核验 Groq Free Plan 模型"
-depends_on = ["select-providers"]
-condition = "select-providers.research_groq == true"
+depends_on = ["plan-research"]
+condition = "plan-research.research_groq == true"
+execution = "external_agent"
 description = """
 只调研 Groq。核对 https://console.groq.com/docs/models 、https://console.groq.com/docs/rate-limits 和 Groq 官方弃用公告。区分当前生产模型、preview 模型和已弃用 ID；Free Plan 有明确限额且官方模型目录当前可用的模型才可收录。不要把组织权限、项目权限或本机 API Key 状态当成免费证据。
 
-只使用 Groq 官方来源；只读调研。输出 ONLY compact JSON：
+只使用 Groq 官方来源；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"groq","free_basis":"...","billing_warning":"","source_urls":["官方 URL"],"models":[{"id":"官方 API ID","functions":["chat"],"context_length":0,"max_output_tokens":0,"supported_parameters":[],"source_urls":["官方模型页"]}],"notes":"..."}
 工具调用仅在官方文档明确支持时加入 chat-tools；无法确认具体模型时返回 models=[]。
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -118,16 +137,22 @@ required = ["provider", "models"]
 [[steps]]
 id = "research-cerebras"
 title = "核验 Cerebras 免费层模型"
-depends_on = ["select-providers"]
-condition = "select-providers.research_cerebras == true"
+depends_on = ["plan-research"]
+condition = "plan-research.research_cerebras == true"
+execution = "external_agent"
 description = """
 只调研 Cerebras Inference。核对 https://inference-docs.cerebras.ai/models/overview 、https://inference-docs.cerebras.ai/support/rate-limits 与官方 OpenAI 兼容文档。只收录明确适用于 Free Tier、当前未弃用、可通过 chat completions 调用的模型 ID；preview/限时模型必须写入 billing_warning 或 notes。
 
-只使用 Cerebras 官方来源；只读调研。输出 ONLY compact JSON：
+只使用 Cerebras 官方来源；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"cerebras","free_basis":"...","billing_warning":"","source_urls":["官方 URL"],"models":[{"id":"...","functions":["chat"],"context_length":0,"max_output_tokens":0,"source_urls":["官方 URL"]}],"notes":"..."}
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -135,18 +160,24 @@ required = ["provider", "models"]
 [[steps]]
 id = "research-gemini"
 title = "核验 Gemini API 免费层模型"
-depends_on = ["select-providers", "catalog-gemini"]
-condition = "discover-official-models.available.gemini == true"
+depends_on = ["plan-research", "catalog-gemini"]
+condition = "plan-research.research_gemini == true"
 input_context = ["catalog-gemini"]
+execution = "external_agent"
 description = """
-只调研 Google Gemini API / AI Studio，不要混入 Vertex AI。以 catalog-gemini 中官方 /models 返回的 ID 为候选全集，再核对 https://ai.google.dev/gemini-api/docs/models 、https://ai.google.dev/gemini-api/docs/pricing 和 https://ai.google.dev/gemini-api/docs/rate-limits 。仅收录价格页明确具有 Free Tier、并可通过 Gemini API 使用的具体 API model name；禁止输出官方接口候选全集之外的 ID。
+只调研 Google Gemini API / AI Studio，不要混入 Vertex AI。优先以 catalog-gemini 中官方 /models 返回的 ID 为候选全集，再核对 https://ai.google.dev/gemini-api/docs/models 、https://ai.google.dev/gemini-api/docs/pricing 和 https://ai.google.dev/gemini-api/docs/rate-limits 。仅收录价格页明确具有 Free Tier、并可通过 Gemini API 使用的具体 API model name。catalog-gemini 可用且非空时禁止输出候选全集之外的 ID；若官方 API 目录不可用或为空，可从上述官方文档补回精确 API ID，并在 notes 中说明回退依据。
 
-只使用 Google AI for Developers 官方来源；只读调研。输出 ONLY compact JSON：
+只使用 Google AI for Developers 官方来源；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"gemini","free_basis":"...","billing_warning":"","source_urls":["官方 URL"],"models":[{"id":"models/...","functions":["chat"],"context_length":0,"max_output_tokens":0,"input_modalities":[],"output_modalities":[],"source_urls":["官方 URL"]}],"notes":"..."}
 不要仅凭模型存在就判断免费。
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -154,16 +185,22 @@ required = ["provider", "models"]
 [[steps]]
 id = "research-github-models"
 title = "核验 GitHub Models 免费模型"
-depends_on = ["select-providers"]
-condition = "select-providers.research_github_models == true"
+depends_on = ["plan-research"]
+condition = "plan-research.research_github_models == true"
+execution = "external_agent"
 description = """
 只调研 GitHub Models。核对 https://docs.github.com/en/github-models/prototyping-with-ai-models 、https://docs.github.com/en/github-models/using-github-models/prototyping-with-ai-models#rate-limits 与 https://github.com/marketplace/models 。只收录 GitHub Models 推理 API 当前提供、可用于免费原型实验的具体 model ID；不要把 Copilot 模型或 Marketplace 页面上不可通过 inference API 调用的条目混入。
 
-只使用 GitHub 官方来源；只读调研。输出 ONLY compact JSON：
+只使用 GitHub 官方来源；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"github-models","free_basis":"...","billing_warning":"","source_urls":["官方 URL"],"models":[{"id":"publisher/model","functions":["chat"],"context_length":0,"source_urls":["官方模型页"]}],"notes":"..."}
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -171,17 +208,23 @@ required = ["provider", "models"]
 [[steps]]
 id = "research-pollinations"
 title = "核验 Pollinations 免费模型"
-depends_on = ["select-providers", "catalog-pollinations"]
-condition = "discover-official-models.available.pollinations == true"
+depends_on = ["plan-research", "catalog-pollinations"]
+condition = "plan-research.research_pollinations == true"
 input_context = ["catalog-pollinations"]
+execution = "external_agent"
 description = """
-只调研 Pollinations API。以 catalog-pollinations 中官方 /models 返回的 ID 为候选全集，再核对 https://enter.pollinations.ai/ 、https://github.com/pollinations/pollinations/blob/master/APIDOCS.md 及官方模型端点说明。明确区分无需 Key 的公共免费调用、Pollen 免费额度和付费模型；只收录官方明确允许免费调用的具体文本、图像、音频模型 ID，并按真实生成/理解能力标注。禁止输出官方接口候选全集之外的 ID。
+只调研 Pollinations API。优先以 catalog-pollinations 中官方 /models 返回的 ID 为候选全集，再核对 https://enter.pollinations.ai/ 、https://github.com/pollinations/pollinations/blob/master/APIDOCS.md 及官方模型端点说明。明确区分无需 Key 的公共免费调用、Pollen 免费额度和付费模型；只收录官方明确允许免费调用的具体文本、图像、音频模型 ID，并按真实生成/理解能力标注。catalog-pollinations 可用且非空时禁止输出候选全集之外的 ID；若官方 API 目录不可用或为空，可从官方 API 文档或官方 GitHub 模型表补回精确 ID，并在 notes 中说明回退依据。
 
-只使用 Pollinations 官方站点或官方 GitHub；只读调研。输出 ONLY compact JSON：
+只使用 Pollinations 官方站点或官方 GitHub；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"pollinations","free_basis":"...","billing_warning":"","source_urls":["官方 URL"],"models":[{"id":"...","functions":["chat"],"source_urls":["官方 URL"]}],"notes":"..."}
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -189,16 +232,22 @@ required = ["provider", "models"]
 [[steps]]
 id = "research-huggingface"
 title = "核验 Hugging Face 免费额度模型"
-depends_on = ["select-providers"]
-condition = "select-providers.research_huggingface == true"
+depends_on = ["plan-research"]
+condition = "plan-research.research_huggingface == true"
+execution = "external_agent"
 description = """
 只调研 Hugging Face Inference Providers。核对 https://huggingface.co/docs/inference-providers/pricing 、https://huggingface.co/docs/inference-providers/index 和 OpenAI 兼容 API 文档。免费依据是账户月度 credits，不是模型零价；仅收录官方 Router 当前支持、具有明确 task/provider 映射且可通过 OpenAI 兼容入口调用的具体模型 ID。不要收录仅能自行部署的 Hub 模型。
 
-只使用 Hugging Face 官方来源；只读调研。输出 ONLY compact JSON：
+只使用 Hugging Face 官方来源；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"huggingface","free_basis":"...","billing_warning":"免费 credits 耗尽后停止或计费的说明","source_urls":["官方 URL"],"models":[{"id":"...","functions":["chat"],"source_urls":["官方 URL"]}],"notes":"..."}
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -206,16 +255,22 @@ required = ["provider", "models"]
 [[steps]]
 id = "research-nvidia"
 title = "核验 NVIDIA NIM 免费额度模型"
-depends_on = ["select-providers"]
-condition = "select-providers.research_nvidia == true"
+depends_on = ["plan-research"]
+condition = "plan-research.research_nvidia == true"
+execution = "external_agent"
 description = """
 只调研 NVIDIA API Catalog / build.nvidia.com。核对 https://build.nvidia.com/explore/discover 、各模型官方 API 卡片及 NVIDIA 免费 credits/rate limit 说明。只收录可在 integrate.api.nvidia.com 调用且官方提供试用 credits 的具体 model ID；区分 chat、embedding、rerank、视觉理解等 NIM endpoint。不要根据模型名字猜能力，不要收录仅支持本地部署的 NIM。
 
-只使用 NVIDIA 官方来源；只读调研。输出 ONLY compact JSON：
+只使用 NVIDIA 官方来源；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"nvidia","free_basis":"...","billing_warning":"免费 credits 说明","source_urls":["官方 URL"],"models":[{"id":"publisher/model","functions":["chat"],"context_length":0,"source_urls":["官方模型卡"]}],"notes":"..."}
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -223,16 +278,22 @@ required = ["provider", "models"]
 [[steps]]
 id = "research-mistral"
 title = "核验 Mistral Experiment Plan 模型"
-depends_on = ["select-providers"]
-condition = "select-providers.research_mistral == true"
+depends_on = ["plan-research"]
+condition = "plan-research.research_mistral == true"
+execution = "external_agent"
 description = """
 只调研 Mistral AI La Plateforme。核对 https://docs.mistral.ai/deployment/ai-studio/tier/ 、https://docs.mistral.ai/getting-started/models/models_overview/ 与官方价格页。只收录 Experiment Plan 明确允许调用的当前模型 ID；区分 chat、embedding、moderation、OCR、audio，不要把需要购买 credits 的模型推定为免费。
 
-只使用 Mistral 官方来源；只读调研。输出 ONLY compact JSON：
+只使用 Mistral 官方来源；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"mistral","free_basis":"...","billing_warning":"Experiment Plan 限制","source_urls":["官方 URL"],"models":[{"id":"...","functions":["chat"],"source_urls":["官方 URL"]}],"notes":"..."}
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -240,16 +301,22 @@ required = ["provider", "models"]
 [[steps]]
 id = "research-sambanova"
 title = "核验 SambaNova Free Tier 模型"
-depends_on = ["select-providers"]
-condition = "select-providers.research_sambanova == true"
+depends_on = ["plan-research"]
+condition = "plan-research.research_sambanova == true"
+execution = "external_agent"
 description = """
 只调研 SambaNova Cloud。核对 https://docs.sambanova.ai/cloud/docs/get-started/overview 、官方模型列表与 rate limits。仅收录 Free Tier 当前可通过 OpenAI 兼容 API 调用的具体模型 ID；区分公开模型、preview 和已下线模型。
 
-只使用 SambaNova 官方来源；只读调研。输出 ONLY compact JSON：
+只使用 SambaNova 官方来源；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"sambanova","free_basis":"...","billing_warning":"","source_urls":["官方 URL"],"models":[{"id":"...","functions":["chat"],"context_length":0,"source_urls":["官方 URL"]}],"notes":"..."}
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -257,16 +324,22 @@ required = ["provider", "models"]
 [[steps]]
 id = "research-ollama-cloud"
 title = "核验 Ollama Cloud 免费层模型"
-depends_on = ["select-providers"]
-condition = "select-providers.research_ollama_cloud == true"
+depends_on = ["plan-research"]
+condition = "plan-research.research_ollama_cloud == true"
+execution = "external_agent"
 description = """
 只调研 Ollama Cloud，不要混入本地 Ollama。核对 https://ollama.com/cloud 、https://docs.ollama.com/cloud 与官方 models 页面。只有官方免费层当前可远程调用的具体 cloud model ID 才能收录；说明免费层限额。模型仅本地可拉取不等于 Cloud 免费模型。
 
-只使用 Ollama 官方来源；只读调研。输出 ONLY compact JSON：
+只使用 Ollama 官方来源；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"ollama-cloud","free_basis":"...","billing_warning":"","source_urls":["官方 URL"],"models":[{"id":"...","functions":["chat"],"source_urls":["官方 URL"]}],"notes":"..."}
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -274,16 +347,22 @@ required = ["provider", "models"]
 [[steps]]
 id = "research-modelscope"
 title = "核验 ModelScope 免费推理模型"
-depends_on = ["select-providers"]
-condition = "select-providers.research_modelscope == true"
+depends_on = ["plan-research"]
+condition = "plan-research.research_modelscope == true"
+execution = "external_agent"
 description = """
 只调研魔搭 ModelScope API-Inference。核对 https://modelscope.cn/docs/model-service/API-Inference/intro 、官方免费额度说明和模型 API 页面。仅收录当前支持 OpenAI 兼容或项目已实现 endpoint、且免费额度明确适用的具体模型 ID；不要收录仅能下载或本地部署的模型。
 
-只使用 ModelScope 官方来源；只读调研。输出 ONLY compact JSON：
+只使用 ModelScope 官方来源；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"modelscope","free_basis":"...","billing_warning":"免费额度说明","source_urls":["官方 URL"],"models":[{"id":"...","functions":["chat"],"source_urls":["官方 URL"]}],"notes":"..."}
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -291,16 +370,22 @@ required = ["provider", "models"]
 [[steps]]
 id = "research-xiaomi-mimo"
 title = "核验 Xiaomi MiMo 赠送额度模型"
-depends_on = ["select-providers"]
-condition = "select-providers.research_xiaomi_mimo == true"
+depends_on = ["plan-research"]
+condition = "plan-research.research_xiaomi_mimo == true"
+execution = "external_agent"
 description = """
 只调研 Xiaomi MiMo 开放平台。核对 https://platform.xiaomimimo.com/ 的官方模型、API 和赠送额度说明。明确这是赠送 credits、免费试用还是长期免费；仅收录当前可通过官方 API 调用且赠送额度适用的具体模型 ID。官网无法公开确认具体 ID 时返回空数组。
 
-只使用小米官方来源；只读调研。输出 ONLY compact JSON：
+只使用小米官方来源；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"xiaomi-mimo","free_basis":"...","billing_warning":"赠送额度有效期和耗尽行为","source_urls":["官方 URL"],"models":[{"id":"...","functions":["chat"],"source_urls":["官方 URL"]}],"notes":"..."}
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -308,18 +393,24 @@ required = ["provider", "models"]
 [[steps]]
 id = "research-dashscope"
 title = "核验阿里云百炼免费额度模型"
-depends_on = ["select-providers", "catalog-dashscope"]
-condition = "discover-official-models.available.dashscope == true"
+depends_on = ["plan-research", "catalog-dashscope"]
+condition = "plan-research.research_dashscope == true"
 input_context = ["catalog-dashscope"]
+execution = "external_agent"
 description = """
-只调研阿里云百炼 DashScope。以 catalog-dashscope 中官方 /models 返回的 ID 为候选全集，再核对 https://help.aliyun.com/zh/model-studio/getting-started/models 、模型价格页和免费额度页。逐模型确认免费额度、有效期和地域；禁止输出官方接口候选全集之外的 ID，不要把“新用户免费额度”写成永久零价。
+只调研阿里云百炼 DashScope。优先以 catalog-dashscope 中官方 /models 返回的 ID 为候选全集，再核对 https://help.aliyun.com/zh/model-studio/getting-started/models 、模型价格页和免费额度页。逐模型确认免费额度、有效期和地域；catalog-dashscope 可用且非空时禁止输出候选全集之外的 ID，目录不可用或为空时允许从阿里云官方模型与免费额度文档补回精确 API ID，并在 notes 中记录回退依据。不要把“新用户免费额度”写成永久零价。
 
-只使用阿里云官方来源；只读调研。输出 ONLY compact JSON：
+只使用阿里云官方来源；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"dashscope","free_basis":"...","billing_warning":"额度和有效期","source_urls":["官方 URL"],"models":[{"id":"...","functions":["chat"],"source_urls":["官方模型页"]}],"notes":"..."}
 输出必须是一个可直接解析的 JSON object，且必须始终包含 provider、free_basis、billing_warning、source_urls、models、notes 六个字段。models 必须是 JSON array；没有可靠官方证据、官方目录不可用或没有符合条件的模型时，也不得省略该字段，必须返回：{"provider":"dashscope","free_basis":"","billing_warning":"","source_urls":[],"models":[],"notes":"未获得可靠的官方免费模型证据"}
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "free_basis", "billing_warning", "source_urls", "models", "notes"]
@@ -327,16 +418,22 @@ required = ["provider", "free_basis", "billing_warning", "source_urls", "models"
 [[steps]]
 id = "research-volcengine-ark"
 title = "核验火山方舟免费额度模型"
-depends_on = ["select-providers"]
-condition = "select-providers.research_volcengine_ark == true"
+depends_on = ["plan-research"]
+condition = "plan-research.research_volcengine_ark == true"
+execution = "external_agent"
 description = """
 只调研火山引擎方舟。核对 https://www.volcengine.com/docs/82379/1099320 、官方模型列表、定价与免费额度说明。方舟常以 endpoint ID 调用，只有存在稳定公共 model ID 且项目 Provider 能直接路由时才收录；明确试用额度、地域与有效期。不要把控制台专属 endpoint 猜成通用模型 ID。
 
-只使用火山引擎官方来源；只读调研。输出 ONLY compact JSON：
+只使用火山引擎官方来源；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"volcengine-ark","free_basis":"...","billing_warning":"额度和有效期","source_urls":["官方 URL"],"models":[{"id":"...","functions":["chat"],"source_urls":["官方 URL"]}],"notes":"..."}
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -344,16 +441,22 @@ required = ["provider", "models"]
 [[steps]]
 id = "research-baichuan"
 title = "核验百川智能赠送额度模型"
-depends_on = ["select-providers"]
-condition = "select-providers.research_baichuan == true"
+depends_on = ["plan-research"]
+condition = "plan-research.research_baichuan == true"
+execution = "external_agent"
 description = """
 只调研百川智能开放平台。核对 https://platform.baichuan-ai.com/ 官方模型文档、定价和新用户赠送金规则。仅收录当前 API 可调用且赠送额度适用的具体 model ID；明确赠送金有效期和耗尽后的计费行为。无法公开访问官方模型详情时返回空数组，不引用第三方榜单。
 
-只使用百川官方来源；只读调研。输出 ONLY compact JSON：
+只使用百川官方来源；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"baichuan","free_basis":"...","billing_warning":"赠送金规则","source_urls":["官方 URL"],"models":[{"id":"...","functions":["chat"],"source_urls":["官方 URL"]}],"notes":"..."}
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -361,16 +464,22 @@ required = ["provider", "models"]
 [[steps]]
 id = "research-bigmodel"
 title = "核验智谱 BigModel 免费模型"
-depends_on = ["select-providers"]
-condition = "select-providers.research_bigmodel == true"
+depends_on = ["plan-research"]
+condition = "plan-research.research_bigmodel == true"
+execution = "external_agent"
 description = """
 只调研智谱 BigModel 开放平台。核对 https://open.bigmodel.cn/dev/api 、官方模型概览和价格页。重点逐个确认名称含 Flash 的模型是否仍为官方免费模型，以及具体 API ID、上下文、工具调用和多模态能力；不要仅按名称包含 flash 自动判定免费。
 
-只使用智谱官方来源；只读调研。输出 ONLY compact JSON：
+只使用智谱官方来源；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"bigmodel","free_basis":"...","billing_warning":"","source_urls":["官方 URL"],"models":[{"id":"...","functions":["chat"],"context_length":0,"source_urls":["官方模型页或价格页"]}],"notes":"..."}
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -378,16 +487,22 @@ required = ["provider", "models"]
 [[steps]]
 id = "research-qianfan"
 title = "核验百度千帆长期免费模型"
-depends_on = ["select-providers"]
-condition = "select-providers.research_qianfan == true"
+depends_on = ["plan-research"]
+condition = "plan-research.research_qianfan == true"
+execution = "external_agent"
 description = """
 只调研百度智能云千帆。核对 https://cloud.baidu.com/doc/WENXINWORKSHOP/s/Fm2vrveyu 、官方模型列表和计费文档。逐个确认文档标为长期免费的 ERNIE 模型当前 API ID，不要从 /models 返回的全部模型推定免费；区分旧 v1 endpoint 名称与当前 v2 OpenAI 兼容 model ID。
 
-只使用百度官方来源；只读调研。输出 ONLY compact JSON：
+只使用百度官方来源；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"qianfan","free_basis":"...","billing_warning":"","source_urls":["官方 URL"],"models":[{"id":"...","functions":["chat"],"context_length":0,"source_urls":["官方免费模型文档"]}],"notes":"..."}
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -395,17 +510,23 @@ required = ["provider", "models"]
 [[steps]]
 id = "research-siliconflow"
 title = "核验 SiliconFlow 免费模型"
-depends_on = ["select-providers", "catalog-siliconflow"]
-condition = "discover-official-models.available.siliconflow == true"
+depends_on = ["plan-research", "catalog-siliconflow"]
+condition = "plan-research.research_siliconflow == true"
 input_context = ["catalog-siliconflow"]
+execution = "external_agent"
 description = """
-只调研 SiliconFlow。以 catalog-siliconflow 中官方 /models 返回的 ID 为候选全集，再核对 https://cloud.siliconflow.cn/models 中明确的免费标记。仅收录当前标为免费的具体模型 ID；禁止输出接口候选全集之外的 ID，不要收录仅有赠送余额但模型本身计费的条目。
+只调研 SiliconFlow。优先以 catalog-siliconflow 中官方 /models 返回的 ID 为候选全集，再核对 https://cloud.siliconflow.cn/models 中明确的免费标记。仅收录当前标为免费的具体模型 ID；catalog-siliconflow 可用且非空时禁止输出候选全集之外的 ID，目录不可用或为空时允许从 SiliconFlow 官方模型页补回精确 ID，并在 notes 中记录回退依据。不要收录仅有赠送余额但模型本身计费的条目。
 
-只使用 SiliconFlow 官方来源；只读调研。输出 ONLY compact JSON：
+只使用 SiliconFlow 官方来源；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"siliconflow","free_basis":"...","billing_warning":"","source_urls":["官方 URL"],"models":[{"id":"...","functions":["chat"],"source_urls":["官方模型页"]}],"notes":"..."}
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -413,17 +534,23 @@ required = ["provider", "models"]
 [[steps]]
 id = "research-zai"
 title = "核验 Z.AI 免费模型"
-depends_on = ["select-providers", "catalog-zai"]
-condition = "discover-official-models.available.zai == true"
+depends_on = ["plan-research", "catalog-zai"]
+condition = "plan-research.research_zai == true"
 input_context = ["catalog-zai"]
+execution = "external_agent"
 description = """
-只调研 Z.AI Model API。以 catalog-zai 中官方 /models 返回的 ID 为候选全集，再核对 https://z.ai/model-api 、https://docs.z.ai/ 官方价格/套餐说明。禁止输出接口候选全集之外的 ID；不要把网页聊天免费使用权当成 API 免费额度。若 API 必须充值或购买 resource package，models 必须为空。
+只调研 Z.AI Model API。优先以 catalog-zai 中官方 /models 返回的 ID 为候选全集，再核对 https://z.ai/model-api 、https://docs.z.ai/ 官方价格/套餐说明。catalog-zai 可用且非空时禁止输出候选全集之外的 ID；目录不可用或为空时允许从 Z.AI 官方模型文档补回精确 API ID，并在 notes 中记录回退依据。不要把网页聊天免费使用权当成 API 免费额度。若 API 必须充值或购买 resource package，models 必须为空。
 
-只使用 Z.AI 官方来源；只读调研。输出 ONLY compact JSON：
+只使用 Z.AI 官方来源；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"zai","free_basis":"...","billing_warning":"","source_urls":["官方 URL"],"models":[{"id":"...","functions":["chat"],"source_urls":["官方 URL"]}],"notes":"..."}
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -431,16 +558,22 @@ required = ["provider", "models"]
 [[steps]]
 id = "research-cloudflare"
 title = "核验 Cloudflare Workers AI 免费额度模型"
-depends_on = ["select-providers"]
-condition = "select-providers.research_cloudflare == true"
+depends_on = ["plan-research"]
+condition = "plan-research.research_cloudflare == true"
+execution = "external_agent"
 description = """
 只调研 Cloudflare Workers AI。核对 https://developers.cloudflare.com/workers-ai/platform/pricing/ 、https://developers.cloudflare.com/workers-ai/models/ 和各模型官方页面。免费依据是每日 Neurons allocation；仅收录 Workers AI 当前可调用的具体 @cf/... 模型 ID，并根据官方 task 区分 chat/text-generation、embedding、image、speech recognition、translation 等能力。不要收录仅在 AI Gateway 中代理的第三方模型。
 
-只使用 Cloudflare 官方来源；只读调研。输出 ONLY compact JSON：
+只使用 Cloudflare 官方来源；只读调研。优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
+输出 ONLY compact JSON：
 {"provider":"cloudflare","free_basis":"...","billing_warning":"每日免费 Neurons 与超额行为","source_urls":["官方 URL"],"models":[{"id":"@cf/...","functions":["chat"],"source_urls":["官方模型页"]}],"notes":"..."}
 """
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 [steps.validate]
 format = "json"
 required = ["provider", "models"]
@@ -491,6 +624,22 @@ timeout = "10m"
 [steps.validate]
 format = "json"
 required = ["providers", "checked_providers", "available", "fetch_failures", "probe_failures"]
+
+[[steps]]
+id = "plan-research"
+title = "规划 Provider 官方证据调研"
+depends_on = ["select-providers", "discover-official-models"]
+execution = "script"
+idempotent = true
+
+[steps.script]
+command = ["sh", "scripts/plan-free-model-research.sh", "{{select-providers.stdout}}", "{{discover-official-models}}"]
+format = "text"
+timeout = "30s"
+
+[steps.validate]
+format = "json"
+required = ["providers"]
 
 [[steps]]
 id = "catalog-gemini"
@@ -573,6 +722,7 @@ title = "发现新的免费 Provider"
 depends_on = ["normalize-research"]
 condition = "select-providers.all == true"
 input_context = ["list-providers.stdout"]
+execution = "external_agent"
 description = """
 以 Formula 实际运行时刻为准，从官方来源寻找 list-providers.stdout 尚未包含、但提供 OpenAI 兼容 API 且存在长期免费模型或明确免费额度的 Provider。排除已经内置的 Provider、必须自托管的服务、来路不明的中转站和没有官方免费证据的平台。
 
@@ -580,12 +730,17 @@ description = """
 
 每个候选必须至少有一个直接证明免费政策的官方价格页或官方文档 URL；只有注册页、首页或通用 API 文档不算免费证据。无法确认免费额度的数值、有效期或适用模型时不得猜测，直接排除该候选。试用额度必须明确标记为 trial，不能描述成长期免费。
 
+优先直接打开指定官方 URL；若页面依赖 JavaScript、地区受限或首次抓取失败，继续尝试同一官方域名下的静态文档、模型卡、价格页、站内搜索、官方 sitemap、官方 GitHub 或官方搜索结果摘要。必须实际读取证据内容，不能因为一次访问失败就返回空数组；仍然只能使用官方来源。
+
 输出 ONLY compact JSON：
 {"candidates":[{"id":"...","base_url":"...","register_url":"...","api_key_env":"...","free_basis":"...","source_urls":["官方 URL"],"models":[]}],"notes":"..."}
 """
 
-[steps.agent]
-name = "assistant"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]
 
 [steps.validate]
 format = "json"
@@ -652,7 +807,7 @@ timeout = "5m"
 
 [steps.validate]
 format = "json"
-required = ["valid", "error", "provider_count", "model_count"]
+required = ["valid", "provider_count", "model_count"]
 
 [[steps]]
 id = "resolve-inventory"
@@ -735,6 +890,7 @@ id = "report"
 title = "生成模型发现报告"
 depends_on = ["report-data"]
 input_context = ["report-data"]
+execution = "external_agent"
 description = """
 根据 report-data 生成简洁、可执行的中文 Markdown 报告。
 
@@ -743,5 +899,8 @@ description = """
 只输出 Markdown，不输出 JSON，不复述原始日志或完整错误正文；错误按 provider/model 聚合，保留足够定位的信息即可。不得臆测模型被删除的具体原因：审计数据未给出原因时，只能表述为“不在本次权威结果中”。
 """
 
-[steps.agent]
-name = "reporter"
+[steps.external_agent]
+driver = "codex"
+mode = "exec"
+timeout = "10m"
+extra_args = ["--sandbox", "read-only"]

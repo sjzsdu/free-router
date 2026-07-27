@@ -55,11 +55,29 @@ jq -cn --arg current "$1" --arg selection "$2" --arg research "$3" --arg catalog
           source_urls:($proposal.source_urls // $provider.source_urls // []),
           message:(if $proposal.accepted == true then "agent inventory accepted" else ($proposal.validation_error // "agent inventory unavailable; provider abandoned") end)
         }
+      elif (api_checked($official; $id) | not) and $proposal.accepted == true then
+        {
+          provider:$id, source:"agent-fallback", authoritative:true,
+          accepted:true, abandoned:false, models:($proposal.models // []),
+          free_basis:($proposal.free_basis // $provider.free_basis // ""),
+          billing_warning:($proposal.billing_warning // $provider.billing_warning // ""),
+          source_urls:($proposal.source_urls // $provider.source_urls // []),
+          message:"official API unavailable; inventory recovered from official documentation"
+        }
       elif (api_checked($official; $id) | not) then
         {
           provider:$id, source:"api", authoritative:false, accepted:false, abandoned:false, models:[],
           free_basis:($provider.free_basis // ""), billing_warning:($provider.billing_warning // ""), source_urls:($provider.source_urls // []),
           message:failure_for($official; $id)
+        }
+      elif ($api | length) == 0 and $proposal.accepted == true then
+        {
+          provider:$id, source:"agent-fallback", authoritative:true,
+          accepted:true, abandoned:false, models:($proposal.models // []),
+          free_basis:($proposal.free_basis // $provider.free_basis // ""),
+          billing_warning:($proposal.billing_warning // $provider.billing_warning // ""),
+          source_urls:($proposal.source_urls // $provider.source_urls // []),
+          message:"empty official API catalog; inventory recovered from official documentation"
         }
       elif $mode == "api-agent-filter" then
         {

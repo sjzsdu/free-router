@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -23,34 +24,34 @@ import (
 func TestAutoRetriesNextFreeModel(t *testing.T) {
 	clearBuiltinKeys(t)
 	var chatCalls atomic.Int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch r.URL.Path {
 		case "/models":
-			_, _ = w.Write([]byte(`{"data":[
+			return testResponse(http.StatusOK, `{"data":[
 				{"id":"free/a","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]}},
 				{"id":"free/b","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]}}
-			]}`))
+			]}`), nil
 		case "/chat/completions":
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			if chatCalls.Add(1) == 1 {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusBadRequest)
-				_, _ = w.Write([]byte(`{"code":20012,"message":"Model does not exist. Please check it carefully.","data":null}`))
-				return
+				return testResponse(http.StatusBadRequest, `{"code":20012,"message":"Model does not exist. Please check it carefully.","data":null}`), nil
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"model": body["model"]})
+			response, _ := json.Marshal(map[string]any{"model": body["model"]})
+			return testResponse(http.StatusOK, string(response)), nil
+		default:
+			return testResponse(http.StatusNotFound, "not found"), nil
 		}
-	}))
-	defer upstream.Close()
+	})}
 
-	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","api_key":"test"}]`)
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"https://test.invalid","api_key":"test"}]`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), client)
 	discoverModelsForTest(t, store)
-	handler := New(store, registry, Config{MaxAttempts: 2}, upstream.Client())
+	tracker := health.New()
+	handler := New(store, registry, Config{MaxAttempts: 2, Health: tracker}, client)
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"auto","messages":[]}`))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
@@ -61,8 +62,14 @@ func TestAutoRetriesNextFreeModel(t *testing.T) {
 	if chatCalls.Load() != 2 {
 		t.Fatalf("expected 2 calls, got %d", chatCalls.Load())
 	}
-	if models := store.Models(); len(models) != 1 || models[0].UpstreamID != "free/b" {
-		t.Fatalf("failed model was not removed from cache: %#v", models)
+	if models := store.Models(); len(models) != 2 {
+		t.Fatalf("runtime failure removed a model from the catalog: %#v", models)
+	}
+	if tracker.Available("test/free/a", catalog.FunctionChat) {
+		t.Fatal("failed chat capability remained available")
+	}
+	if !tracker.Available("test/free/a", catalog.FunctionEmbedding) {
+		t.Fatal("chat failure incorrectly isolated another capability")
 	}
 
 	modelsRequest := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
@@ -76,6 +83,45 @@ func TestAutoRetriesNextFreeModel(t *testing.T) {
 	}
 	if len(list.Data) != 1 || list.Data[0]["id"] != catalog.FunctionChat || list.Data[0]["owned_by"] != "free-router" {
 		t.Fatalf("stable capability models are missing: %#v", list.Data)
+	}
+}
+
+func TestNetworkFailureKeepsModelAndIsolatesCapability(t *testing.T) {
+	clearBuiltinKeys(t)
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/models":
+			return testResponse(http.StatusOK, `{"data":[{"id":"free/a","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]}}]}`), nil
+		case "/chat/completions":
+			return nil, errors.New("upstream connection reset")
+		default:
+			return testResponse(http.StatusNotFound, "not found"), nil
+		}
+	})}
+
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"https://test.invalid","api_key":"test"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), client)
+	discoverModelsForTest(t, store)
+	tracker := health.New()
+	handler := New(store, registry, Config{Health: tracker}, client)
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat","messages":[]}`)))
+
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if _, ok := store.Find("test/free/a"); !ok {
+		t.Fatal("network failure removed the model from the catalog")
+	}
+	if tracker.Available("test/free/a", catalog.FunctionChat) {
+		t.Fatal("network failure did not isolate the failed chat capability")
+	}
+	if !tracker.Available("test/free/a", catalog.FunctionEmbedding) {
+		t.Fatal("network failure incorrectly isolated another capability")
 	}
 }
 
@@ -193,38 +239,94 @@ func TestModelsEndpointOmitsCapabilityWithoutHealthyCandidates(t *testing.T) {
 	}
 }
 
-func TestCapabilityFailureDoesNotDisableAnotherFunctionOnSameModel(t *testing.T) {
+func TestRuntimeCapabilityFailureDoesNotDisableAnotherFunctionOnSameModel(t *testing.T) {
 	clearBuiltinKeys(t)
 	var calls atomic.Int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch r.URL.Path {
 		case "/models":
-			_, _ = w.Write([]byte(`{"data":[{"id":"multimodal","architecture":{"input_modalities":["text","image"],"output_modalities":["text"]}}]}`))
+			return testResponse(http.StatusOK, `{"data":[{"id":"multimodal","architecture":{"input_modalities":["text","image"],"output_modalities":["text"]}}]}`), nil
 		case "/chat/completions":
-			calls.Add(1)
-			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+			if calls.Add(1) == 1 {
+				return testResponse(http.StatusBadRequest, "image input rejected"), nil
+			}
+			return testResponse(http.StatusOK, `{"choices":[{"message":{"content":"ok"}}]}`), nil
 		default:
-			http.NotFound(w, r)
+			return testResponse(http.StatusNotFound, "not found"), nil
 		}
-	}))
-	defer upstream.Close()
-	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","no_auth":true}]`)
-	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	})}
+	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"https://test.invalid","no_auth":true}]`)
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), client)
 	discoverModelsForTest(t, store)
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
 	tracker := health.New()
-	tracker.Failure("test/multimodal", catalog.FunctionImageUnderstanding, 0, http.StatusBadRequest, "image failed", 0)
-	handler := New(store, registry, Config{Routes: routes, Health: tracker, MaxAttempts: 2}, upstream.Client())
+	handler := New(store, registry, Config{Routes: routes, Health: tracker, MaxAttempts: 2}, client)
+
+	vision := httptest.NewRecorder()
+	handler.ServeHTTP(vision, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"image-understanding","messages":[]}`)))
+	if vision.Code != http.StatusBadRequest || calls.Load() != 1 {
+		t.Fatalf("image failure was not returned: status=%d calls=%d body=%s", vision.Code, calls.Load(), vision.Body.String())
+	}
+	if _, ok := store.Find("test/multimodal"); !ok {
+		t.Fatal("runtime image failure removed the model from the catalog")
+	}
 
 	chat := httptest.NewRecorder()
 	handler.ServeHTTP(chat, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat","messages":[]}`)))
-	if chat.Code != http.StatusOK || calls.Load() != 1 {
+	if chat.Code != http.StatusOK || calls.Load() != 2 {
 		t.Fatalf("chat capability was incorrectly isolated: status=%d body=%s", chat.Code, chat.Body.String())
 	}
-	vision := httptest.NewRecorder()
+
+	vision = httptest.NewRecorder()
 	handler.ServeHTTP(vision, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"image-understanding","messages":[]}`)))
-	if vision.Code != http.StatusServiceUnavailable || calls.Load() != 1 {
-		t.Fatalf("failed image capability was routed: status=%d calls=%d body=%s", vision.Code, calls.Load(), vision.Body.String())
+	if vision.Code != http.StatusServiceUnavailable || calls.Load() != 2 {
+		t.Fatalf("failed image capability was routed again: status=%d calls=%d body=%s", vision.Code, calls.Load(), vision.Body.String())
+	}
+}
+
+func TestMultipartFailureKeepsModelAndExplicitSuccessRecoversCapability(t *testing.T) {
+	clearBuiltinKeys(t)
+	var transcriptionCalls atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/models":
+			return testResponse(http.StatusOK, `{"data":[{"id":"whisper-large-v3","type":"audio","supported_endpoints":["/audio/transcriptions"]}]}`), nil
+		case "/audio/transcriptions":
+			if transcriptionCalls.Add(1) == 1 {
+				return testResponse(http.StatusBadRequest, "temporary transcription failure"), nil
+			}
+			return testResponse(http.StatusOK, `{"text":"ok"}`), nil
+		default:
+			return testResponse(http.StatusNotFound, "not found"), nil
+		}
+	})}
+
+	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"https://test.invalid","no_auth":true}]`)
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), client)
+	discoverModelsForTest(t, store)
+	tracker := health.New()
+	handler := New(store, registry, Config{Health: tracker}, client)
+	modelID := "test/whisper-large-v3"
+
+	failed := httptest.NewRecorder()
+	handler.ServeHTTP(failed, newMultipartRequest(t, "/v1/audio/transcriptions", modelID))
+	if failed.Code != http.StatusBadRequest {
+		t.Fatalf("failed status=%d body=%s", failed.Code, failed.Body.String())
+	}
+	if _, ok := store.Find(modelID); !ok {
+		t.Fatal("multipart failure removed the model from the catalog")
+	}
+	if tracker.Available(modelID, catalog.FunctionSpeechToText) {
+		t.Fatal("failed speech-to-text capability remained available")
+	}
+
+	recovered := httptest.NewRecorder()
+	handler.ServeHTTP(recovered, newMultipartRequest(t, "/v1/audio/transcriptions", modelID))
+	if recovered.Code != http.StatusOK || transcriptionCalls.Load() != 2 {
+		t.Fatalf("explicit retry did not recover: status=%d calls=%d body=%s", recovered.Code, transcriptionCalls.Load(), recovered.Body.String())
+	}
+	if !tracker.Available(modelID, catalog.FunctionSpeechToText) {
+		t.Fatal("successful explicit retry did not recover speech-to-text capability")
 	}
 }
 
@@ -430,6 +532,43 @@ func TestRewriteMultipartModelPreservesFile(t *testing.T) {
 	}
 	if values["model"] != "whisper-large-v3" || values["file"] != "audio-data" {
 		t.Fatalf("multipart values = %#v", values)
+	}
+}
+
+func newMultipartRequest(t *testing.T, path, model string) *http.Request {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	file, err := writer.CreateFormFile("file", "voice.wav")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(file, "audio-data"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteField("model", model); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body.Bytes()))
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	return request
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
+
+func testResponse(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Status:     http.StatusText(status),
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
 	}
 }
 

@@ -2,11 +2,13 @@
 set -eu
 
 root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+formula="$root/.tt/formulas/discover-free-models.toml"
 normalize="$root/scripts/normalize-free-model-research.sh"
 build="$root/scripts/build-free-model-manifest.sh"
 normalize_candidates="$root/scripts/normalize-provider-candidates.sh"
 collect_research="$root/scripts/collect-free-model-research.sh"
 filter_providers="$root/scripts/filter-free-model-providers.sh"
+plan_research="$root/scripts/plan-free-model-research.sh"
 resolve_inventory="$root/scripts/resolve-free-model-inventory.sh"
 quality_gate="$root/scripts/check-free-model-manifest-quality.sh"
 summarize="$root/scripts/summarize-free-model-run.sh"
@@ -14,6 +16,16 @@ write_manifest="$root/scripts/write-free-model-manifest.sh"
 valid_candidate='{"valid":true,"error":"","provider_count":2,"model_count":2}'
 candidate_dir="$(mktemp -d)"
 trap 'rm -rf "$candidate_dir"' EXIT HUP INT TERM
+
+external_step_count="$(grep -c '^execution = "external_agent"$' "$formula")"
+codex_driver_count="$(grep -c '^driver = "codex"$' "$formula")"
+test "$external_step_count" -gt 0
+test "$external_step_count" -eq "$codex_driver_count"
+if grep -q '^\[steps\.agent\]$' "$formula"; then
+  echo "discover-free-models must use external Codex agents" >&2
+  exit 1
+fi
+grep -q '^required = \["valid", "provider_count", "model_count"\]$' "$formula"
 
 providers='[
   {"id":"groq","model_discovery":"api","register_url":"https://console.groq.com/keys"},
@@ -47,9 +59,9 @@ test "$(printf '%s' "$collected" | jq 'length')" -eq 1
 test "$(printf '%s' "$collected" | jq -r '.[0].provider')" = "groq"
 
 normalized="$(sh "$normalize" "$providers" "$research")"
-test "$(printf '%s' "$normalized" | jq 'length')" -eq 2
-test "$(printf '%s' "$normalized" | jq '[.[] | select(.accepted == true)] | length')" -eq 1
-test "$(printf '%s' "$normalized" | jq -r '.[] | select(.accepted == true) | .provider')" = "gemini"
+test "$(printf '%s' "$normalized" | jq 'length')" -eq 3
+test "$(printf '%s' "$normalized" | jq '[.[] | select(.accepted == true)] | length')" -eq 2
+test "$(printf '%s' "$normalized" | jq -r '[.[] | select(.accepted == true) | .provider] | sort | join(",")')" = "gemini,groq"
 test "$(printf '%s' "$normalized" | jq -r '.[] | select(.provider == "pollinations") | .accepted')" = "false"
 
 third_party='[{"provider":"gemini","free_basis":"Untrusted summary.","source_urls":["https://example.com/free"],"models":[{"id":"models/gemini-test","functions":["chat"],"source_urls":["https://example.com/model"]}]}]'
@@ -70,6 +82,12 @@ current='{
   }
 }'
 official='{"providers":[{"provider":"groq","models":[{"id":"groq-new","functions":["chat","chat-tools"]}]},{"provider":"gemini","models":[{"id":"models/gemini-test","functions":["chat"]},{"id":"models/gemini-paid","functions":["chat"]}]}],"checked_providers":["groq","gemini"],"fetch_failures":[],"probe_failures":[]}'
+research_plan="$(sh "$plan_research" "$all_selected" "$official")"
+test "$(printf '%s' "$research_plan" | jq -r '.research_groq')" = "false"
+test "$(printf '%s' "$research_plan" | jq -r '.research_gemini')" = "true"
+test "$(printf '%s' "$research_plan" | jq -r '.research_pollinations')" = "true"
+test "$(printf '%s' "$research_plan" | jq -r '.providers[] | select(.provider == "groq") | .reason')" = "api-catalog-sufficient"
+
 resolved="$(sh "$resolve_inventory" "$current" "$all_selected" "$normalized" "$official")"
 test "$(printf '%s' "$resolved" | jq -r '.results[] | select(.provider == "groq") | .source')" = "api"
 test "$(printf '%s' "$resolved" | jq -r '.results[] | select(.provider == "groq") | .models[0].id')" = "groq-new"
@@ -81,6 +99,12 @@ groq_selected="$(sh "$filter_providers" "$providers" groq)"
 unavailable="$(sh "$resolve_inventory" "$current" "$groq_selected" '[]' '{"providers":[],"checked_providers":[],"fetch_failures":[{"provider":"groq","error":"401 Unauthorized"}],"probe_failures":[]}')"
 test "$(printf '%s' "$unavailable" | jq -r '.results[0].accepted')" = "false"
 test "$(printf '%s' "$unavailable" | jq -r '.preserved_provider_ids[0]')" = "groq"
+
+fallback_research="$(printf '%s' "$normalized" | jq '[.[] | select(.provider == "groq")]')"
+fallback_inventory="$(sh "$resolve_inventory" "$current" "$groq_selected" "$fallback_research" '{"providers":[],"checked_providers":[],"fetch_failures":[{"provider":"groq","error":"401 Unauthorized"}],"probe_failures":[]}')"
+test "$(printf '%s' "$fallback_inventory" | jq -r '.results[0].source')" = "agent-fallback"
+test "$(printf '%s' "$fallback_inventory" | jq -r '.results[0].accepted')" = "true"
+test "$(printf '%s' "$fallback_inventory" | jq -r '.results[0].models[0].id')" = "groq-free"
 
 unchanged="$(sh "$build" "$current" "$unavailable" "2026-07-21T00:00:00Z" "$candidate_dir/unchanged.json")"
 test "$(printf '%s' "$unchanged" | jq -r '.generated_at')" = "2026-07-21T00:00:00Z"

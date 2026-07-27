@@ -7,8 +7,8 @@
       "source_urls": [
         "https://platform.baichuan-ai.com/"
       ],
-      "discovery_status": "validation-failed",
-      "discovery_message": "provider result did not match the required schema or evidence rules"
+      "discovery_status": "awaiting-approval",
+      "discovery_message": "Formula 已发现 11 个模型，但本次模型变化尚未通过质量门禁"
     },
     "bigmodel": {
       "free_basis": "The provider documents Flash variants as free models.",
@@ -32,7 +32,7 @@
         "https://developers.cloudflare.com/workers-ai/platform/pricing/"
       ],
       "discovery_status": "discovery-failed",
-      "discovery_message": "models endpoint returned 404 Not Found: {\"result\":null,\"success\":false,\"errors\":[{\"code\":7003,\"message\":\"Could not route to /client/v4/accounts/ai/models/search, perhaps your object identifier is invalid?\"}],\"messages\":[]}"
+      "discovery_message": "fetch models: Get \"https://api.cloudflare.com/client/v4/accounts//ai/models/search\": unexpected EOF"
     },
     "dashscope": {
       "billing_warning": "新人额度通常仅 30～90 天；请在百炼控制台开启免费额度用完即停。",
@@ -40,8 +40,8 @@
       "source_urls": [
         "https://help.aliyun.com/zh/model-studio/getting-started/models"
       ],
-      "discovery_status": "discovery-failed",
-      "discovery_message": "models endpoint returned 401 Unauthorized: You didn't provide an API key. You need to provide your API key in an Authorization header using Bearer auth (i.e. Authorization: Bearer YOUR_KEY)."
+      "discovery_status": "awaiting-approval",
+      "discovery_message": "Formula 已发现 28 个模型，但本次模型变化尚未通过质量门禁"
     },
     "gemini": {
       "free_basis": "Access via Google AI Studio free-tier key subject to free-tier limits; not a permanent free model.",
@@ -181,8 +181,8 @@
         "https://ai.google.dev/gemini-api/docs/rate-limits",
         "https://aistudio.google.com/apikey"
       ],
-      "discovery_status": "verification-failed",
-      "discovery_message": "agent could not identify free models from official catalog; provider abandoned"
+      "discovery_status": "awaiting-approval",
+      "discovery_message": "Formula 已发现 17 个模型，但本次模型变化尚未通过质量门禁"
     },
     "github-models": {
       "free_basis": "GitHub Models provides rate-limited model experimentation at no cost.",
@@ -197,16 +197,16 @@
       "source_urls": [
         "https://console.groq.com/docs/rate-limits"
       ],
-      "discovery_status": "discovery-failed",
-      "discovery_message": "models endpoint returned 403 Forbidden: Forbidden"
+      "discovery_status": "awaiting-approval",
+      "discovery_message": "Formula 已发现 14 个模型，但本次模型变化尚未通过质量门禁"
     },
     "huggingface": {
       "free_basis": "Inference Providers requests consume the account's monthly free credits.",
       "source_urls": [
         "https://huggingface.co/docs/inference-providers/pricing"
       ],
-      "discovery_status": "discovery-failed",
-      "discovery_message": "fetch models: Get \"https://router.huggingface.co/v1/models\": EOF"
+      "discovery_status": "awaiting-approval",
+      "discovery_message": "Formula 已发现 5 个模型，但本次模型变化尚未通过质量门禁"
     },
     "mistral": {
       "free_basis": "Models exposed to an Experiment Plan account are subject to experiment-plan limits.",
@@ -542,15 +542,15 @@
         "https://build.nvidia.com/"
       ],
       "discovery_status": "awaiting-approval",
-      "discovery_message": "Formula 已发现 118 个模型，但本次模型变化尚未通过质量门禁"
+      "discovery_message": "Formula 已发现 102 个模型，但本次模型变化尚未通过质量门禁"
     },
     "ollama-cloud": {
       "free_basis": "Models exposed to a configured free-tier account are subject to its usage limits.",
       "source_urls": [
         "https://ollama.com/cloud"
       ],
-      "discovery_status": "awaiting-approval",
-      "discovery_message": "Formula 已发现 18 个模型，但本次模型变化尚未通过质量门禁"
+      "discovery_status": "discovery-failed",
+      "discovery_message": "fetch models: Get \"https://api.ollama.com/v1/models\": unexpected EOF"
     },
     "openrouter": {
       "free_basis": "Both prompt and completion prices reported by the provider are zero.",
@@ -1104,8 +1104,8 @@
       "source_urls": [
         "https://openrouter.ai/api/v1/models"
       ],
-      "discovery_status": "ready",
-      "discovery_message": "official catalog accepted"
+      "discovery_status": "awaiting-approval",
+      "discovery_message": "Formula 已发现 16 个模型，但本次模型变化尚未通过质量门禁"
     },
     "pollinations": {
       "free_basis": "Models exposed to the account consume the provider's free Pollen allocation.",
@@ -1128,8 +1128,8 @@
       "source_urls": [
         "https://cloud.sambanova.ai/"
       ],
-      "discovery_status": "awaiting-approval",
-      "discovery_message": "Formula 已发现 6 个模型，但本次模型变化尚未通过质量门禁"
+      "discovery_status": "discovery-failed",
+      "discovery_message": "fetch models: Get \"https://api.sambanova.ai/v1/models\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)"
     },
     "siliconflow": {
       "free_basis": "Models marked free by the provider catalog.",
@@ -1210,8 +1210,8 @@
       "source_urls": [
         "https://www.volcengine.com/docs/82379/1099320"
       ],
-      "discovery_status": "validation-failed",
-      "discovery_message": "provider result did not match the required schema or evidence rules"
+      "discovery_status": "awaiting-approval",
+      "discovery_message": "Formula 已发现 1 个模型，但本次模型变化尚未通过质量门禁"
     },
     "xiaomi-mimo": {
       "billing_warning": "赠送额度用完后停止使用或按账户计费设置执行，请先确认余额。",

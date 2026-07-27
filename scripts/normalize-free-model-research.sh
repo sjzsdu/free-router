@@ -90,7 +90,14 @@ jq -cn --arg providers "$1" --arg research "$2" '
   elif ($research_list | type) != "array" then
     error("research-json must decode to an array")
   else
-    [$provider_list[] | select(.model_discovery == "agent" or .model_discovery == "api-agent-filter")] as $research_providers |
+    [$provider_list[] |
+      . as $provider |
+      ($provider.id // "") as $provider_id |
+      select(
+        .model_discovery == "agent" or
+        .model_discovery == "api-agent-filter" or
+        ([$research_list[] | decode | select(type == "object" and .provider == $provider_id)] | length) > 0
+      )] as $research_providers |
     [$research_providers[] as $provider |
       ($provider.id // "") as $id |
       ([$research_list[] | decode | select(type == "object" and .provider == $id)]) as $matches |

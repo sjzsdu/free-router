@@ -1,0 +1,7 @@
+{
+  "database": "beads.db",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "free_router",
+  "project_id": "8b6620ee-e968-46b7-a509-989265a5867e"
+}
