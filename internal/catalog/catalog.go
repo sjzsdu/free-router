@@ -196,14 +196,14 @@ func cacheEligible(spec provider.Spec, model Model) bool {
 	return false
 }
 
-// RefreshProvider reapplies one Provider's Formula inventory without network discovery.
+// RefreshProvider reapplies one Provider's maintained inventory without network discovery.
 func (s *Store) RefreshProvider(ctx context.Context, providerID string) error {
 	_ = ctx
 	s.refreshMu.Lock()
 	defer s.refreshMu.Unlock()
 	spec, ok := s.registry.CatalogGet(providerID)
 	if !ok {
-		return fmt.Errorf("provider %q is not in the Formula catalog", providerID)
+		return fmt.Errorf("provider %q is not in the maintained model catalog", providerID)
 	}
 	models := modelsFromDiscovery(spec)
 	models = s.applyQuarantine(models)
@@ -809,7 +809,7 @@ func (s *Store) RestoreModel(modelID string) error {
 		}
 	}
 	if !found {
-		return fmt.Errorf("model %q is no longer in the Formula catalog", modelID)
+		return fmt.Errorf("model %q is no longer in the maintained model catalog", modelID)
 	}
 	models := s.Models()
 	for _, model := range models {

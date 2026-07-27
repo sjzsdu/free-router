@@ -199,8 +199,8 @@ func runServer(ctx context.Context, opts options) error {
 	tracker := health.New()
 	httpClient := transport.NewClient(transport.NewConfig())
 	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts, Routes: routes, Health: tracker, APIToken: opts.apiToken}, httpClient)
-	reloadProviders := func() error {
-		return registry.ReloadWithManifest(opts.providers, provider.EnvMap(routes.Config().ProviderEnv), opts.freeModels, vault.Get)
+	reloadProviders := func(providerEnv map[string][]string) error {
+		return registry.ReloadWithManifest(opts.providers, provider.EnvMap(providerEnv), opts.freeModels, vault.Get)
 	}
 	handler.Handle("GET /admin", http.RedirectHandler("/admin/", http.StatusTemporaryRedirect))
 	handler.Handle("/admin/", admin.New(routes, store, vault, tracker, admin.Config{AllowRemote: opts.adminAllowRemote, Token: opts.adminToken, Version: version, FreeModels: opts.freeModels}, reloadProviders))
@@ -216,7 +216,7 @@ func runServer(ctx context.Context, opts options) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		slog.Info("free-router started", "addr", opts.addr, "providers", len(registry.All()), "formula_providers", len(registry.CatalogAll()), "models", len(store.Models()))
+		slog.Info("free-router started", "addr", opts.addr, "providers", len(registry.All()), "catalog_providers", len(registry.CatalogAll()), "models", len(store.Models()))
 		errCh <- server.ListenAndServe()
 	}()
 

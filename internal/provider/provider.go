@@ -525,10 +525,10 @@ func BuiltinStatusWithManifest(envMap EnvMap, manifestPath string, resolvers ...
 		} else if discoveryStatus == "" {
 			if len(spec.DiscoveredModels) > 0 {
 				discoveryStatus = "ready"
-				discoveryMessage = "Formula 清单已收录可路由模型"
+				discoveryMessage = "内置清单已收录可路由模型"
 			} else {
 				discoveryStatus = "awaiting-discovery"
-				discoveryMessage = "当前清单尚未记录最近一次 Formula 发现结论"
+				discoveryMessage = "当前清单尚未收录经过核实的免费模型"
 			}
 		}
 		result = append(result, map[string]any{
