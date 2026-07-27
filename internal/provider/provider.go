@@ -41,6 +41,9 @@ type Spec struct {
 	UseNameAsID         bool              `json:"use_name_as_id,omitempty"`
 	ModelDiscovery      string            `json:"model_discovery,omitempty"`
 	FreeModelPolicy     string            `json:"free_model_policy,omitempty"`
+	MaxConcurrent       int               `json:"max_concurrent,omitempty"`
+	RateLimitPerSecond  float64           `json:"rate_limit_per_second,omitempty"`
+	QueueSize           int               `json:"queue_size,omitempty"`
 	DiscoveredModels    []DiscoveredModel `json:"-"`
 	FreeBasis           string            `json:"-"`
 	SourceURLs          []string          `json:"-"`

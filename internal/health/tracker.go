@@ -1,9 +1,23 @@
 package health
 
 import (
+	"math/rand"
 	"sort"
 	"sync"
 	"time"
+)
+
+const (
+	StatusUnknown  = "unknown"
+	StatusHealthy  = "healthy"
+	StatusDegraded = "degraded"
+	StatusOpen     = "open"
+	StatusHalfOpen = "half-open"
+	StatusCooling  = "cooling"
+
+	DefaultFailureThreshold = 5
+	DefaultCoolDownBase     = time.Second
+	DefaultCoolDownMax      = 30 * time.Second
 )
 
 type State struct {
@@ -21,6 +35,9 @@ type State struct {
 	Checks              uint64    `json:"checks"`
 	LastCheckedAt       time.Time `json:"last_checked_at,omitempty"`
 	LastCheckLatencyMS  float64   `json:"last_check_latency_ms,omitempty"`
+	FailureThreshold    int       `json:"failure_threshold"`
+	CooldownUntil       time.Time `json:"cooldown_until,omitempty"`
+	LastFailureAt       time.Time `json:"last_failure_at,omitempty"`
 }
 
 type Summary struct {
@@ -31,25 +48,58 @@ type Summary struct {
 }
 
 type Tracker struct {
-	mu     sync.RWMutex
-	states map[string]*State
-	now    func() time.Time
+	mu               sync.RWMutex
+	states           map[string]*State
+	providerStates   map[string]*State
+	now              func() time.Time
+	failureThreshold int
+	cooldownBase     time.Duration
+	cooldownMax      time.Duration
 }
 
 func New() *Tracker {
-	return &Tracker{states: make(map[string]*State), now: time.Now}
+	return &Tracker{
+		states:           make(map[string]*State),
+		providerStates:   make(map[string]*State),
+		now:              time.Now,
+		failureThreshold: DefaultFailureThreshold,
+		cooldownBase:     DefaultCoolDownBase,
+		cooldownMax:      DefaultCoolDownMax,
+	}
 }
 
 func (t *Tracker) Available(model, capability string) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
+
+	provider := providerFromModel(model)
+	if provider != "" {
+		if pState := t.providerStates[provider]; pState != nil {
+			if !t.isStateAvailable(pState.Status, pState.CooldownUntil) {
+				return false
+			}
+		}
+	}
+
 	state := t.states[stateKey(model, capability)]
-	return state == nil || state.Status == "unknown" || state.Status == "healthy"
+	return state == nil || t.isStateAvailable(state.Status, state.CooldownUntil)
+}
+
+func (t *Tracker) isStateAvailable(status string, cooldownUntil time.Time) bool {
+	switch status {
+	case StatusUnknown, StatusHealthy, StatusDegraded, StatusHalfOpen:
+		return t.now().After(cooldownUntil)
+	case StatusOpen, StatusCooling:
+		return t.now().After(cooldownUntil)
+	default:
+		return false
+	}
 }
 
 func (t *Tracker) Success(model, capability string, latency time.Duration, status int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	state := t.state(model, capability)
 	state.Requests++
 	state.Successes++
@@ -57,13 +107,53 @@ func (t *Tracker) Success(model, capability string, latency time.Duration, statu
 	state.LastStatus = status
 	state.LastError = ""
 	state.LastUsedAt = t.now()
-	state.Status = "healthy"
+	state.Status = StatusHealthy
+	state.CooldownUntil = time.Time{}
 	state.AverageLatencyMS = rollingAverage(state.AverageLatencyMS, state.Requests, float64(latency.Microseconds())/1000)
+
+	provider := providerFromModel(model)
+	if provider != "" {
+		pState := t.providerState(provider)
+		pState.ConsecutiveFailures = 0
+		pState.Status = StatusHealthy
+		pState.CooldownUntil = time.Time{}
+	}
 }
 
-func (t *Tracker) Failure(model, capability string, latency time.Duration, status int, message string, _ time.Duration) {
+func (t *Tracker) Failure(model, capability string, latency time.Duration, status int, message string, retryAfter time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	errType := classifyError(status)
+	if errType == ErrorClient {
+		state := t.state(model, capability)
+		state.Requests++
+		state.LastStatus = status
+		state.LastError = message
+		state.LastUsedAt = t.now()
+		state.AverageLatencyMS = rollingAverage(state.AverageLatencyMS, state.Requests, float64(latency.Microseconds())/1000)
+		if state.Status == StatusUnknown {
+			state.Status = StatusHealthy
+		}
+		return
+	}
+
+	if errType == ErrorAuth {
+		provider := providerFromModel(model)
+		if provider != "" {
+			pState := t.providerState(provider)
+			pState.Requests++
+			pState.Failures++
+			pState.ConsecutiveFailures++
+			pState.LastStatus = status
+			pState.LastError = message
+			pState.LastUsedAt = t.now()
+			pState.Status = StatusOpen
+			pState.CooldownUntil = t.now().Add(t.cooldownFor(pState.ConsecutiveFailures))
+		}
+		return
+	}
+
 	state := t.state(model, capability)
 	state.Requests++
 	state.Failures++
@@ -71,14 +161,27 @@ func (t *Tracker) Failure(model, capability string, latency time.Duration, statu
 	state.LastStatus = status
 	state.LastError = message
 	state.LastUsedAt = t.now()
+	state.LastFailureAt = t.now()
 	state.AverageLatencyMS = rollingAverage(state.AverageLatencyMS, state.Requests, float64(latency.Microseconds())/1000)
 
-	state.Status = "failed"
+	if errType == ErrorRateLimit && retryAfter > 0 {
+		state.Status = StatusCooling
+		state.CooldownUntil = t.now().Add(retryAfter)
+		return
+	}
+
+	if state.ConsecutiveFailures >= state.FailureThreshold {
+		state.Status = StatusOpen
+		state.CooldownUntil = t.now().Add(t.cooldownFor(state.ConsecutiveFailures))
+	} else {
+		state.Status = StatusDegraded
+	}
 }
 
 func (t *Tracker) ProbeSuccess(model, capability string, latency time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	state := t.state(model, capability)
 	state.Checks++
 	state.LastCheckedAt = t.now()
@@ -86,12 +189,22 @@ func (t *Tracker) ProbeSuccess(model, capability string, latency time.Duration) 
 	state.LastStatus = 200
 	state.LastError = ""
 	state.ConsecutiveFailures = 0
-	state.Status = "healthy"
+	state.Status = StatusHealthy
+	state.CooldownUntil = time.Time{}
+
+	provider := providerFromModel(model)
+	if provider != "" {
+		pState := t.providerState(provider)
+		pState.ConsecutiveFailures = 0
+		pState.Status = StatusHealthy
+		pState.CooldownUntil = time.Time{}
+	}
 }
 
 func (t *Tracker) ProbeFailure(model, capability string, latency time.Duration, status int, message string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	state := t.state(model, capability)
 	state.Checks++
 	state.LastCheckedAt = t.now()
@@ -99,12 +212,32 @@ func (t *Tracker) ProbeFailure(model, capability string, latency time.Duration, 
 	state.LastStatus = status
 	state.LastError = message
 	state.ConsecutiveFailures++
-	state.Status = "failed"
+	state.LastFailureAt = t.now()
+
+	errType := classifyError(status)
+	if errType == ErrorClient {
+		state.Status = StatusHealthy
+		return
+	}
+
+	if errType == ErrorAuth {
+		state.Status = StatusOpen
+		state.CooldownUntil = t.now().Add(t.cooldownFor(state.ConsecutiveFailures))
+		return
+	}
+
+	if state.ConsecutiveFailures >= state.FailureThreshold {
+		state.Status = StatusOpen
+		state.CooldownUntil = t.now().Add(t.cooldownFor(state.ConsecutiveFailures))
+	} else {
+		state.Status = StatusDegraded
+	}
 }
 
 func (t *Tracker) ProbeDue(model, capability string, ttl time.Duration) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
+
 	state := t.states[stateKey(model, capability)]
 	return state == nil || state.LastCheckedAt.IsZero() || t.now().Sub(state.LastCheckedAt) >= ttl
 }
@@ -112,10 +245,17 @@ func (t *Tracker) ProbeDue(model, capability string, ttl time.Duration) bool {
 func (t *Tracker) Snapshot() []State {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
+
 	result := make([]State, 0, len(t.states))
 	for _, state := range t.states {
-		copy := *state
-		result = append(result, copy)
+		state := *state
+		if t.now().After(state.CooldownUntil) && state.Status == StatusCooling {
+			state.Status = StatusHalfOpen
+		}
+		if t.now().After(state.CooldownUntil) && state.Status == StatusOpen {
+			state.Status = StatusHalfOpen
+		}
+		result = append(result, state)
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].Model == result[j].Model {
@@ -133,7 +273,7 @@ func (t *Tracker) Summary() Summary {
 		summary.Requests += state.Requests
 		summary.Successes += state.Successes
 		summary.Failures += state.Failures
-		if state.Status == "failed" {
+		if state.Status == StatusOpen || state.Status == StatusCooling {
 			summary.Failed++
 		}
 	}
@@ -143,6 +283,7 @@ func (t *Tracker) Summary() Summary {
 func (t *Tracker) Reset(model, capability string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	if capability != "" {
 		delete(t.states, stateKey(model, capability))
 		return
@@ -152,19 +293,94 @@ func (t *Tracker) Reset(model, capability string) {
 			delete(t.states, key)
 		}
 	}
+	provider := providerFromModel(model)
+	if provider != "" {
+		delete(t.providerStates, provider)
+	}
 }
 
 func (t *Tracker) state(model, capability string) *State {
 	key := stateKey(model, capability)
 	state := t.states[key]
 	if state == nil {
-		state = &State{Model: model, Capability: capability, Status: "unknown"}
+		state = &State{
+			Model:            model,
+			Capability:       capability,
+			Status:           StatusUnknown,
+			FailureThreshold: t.failureThreshold,
+		}
 		t.states[key] = state
 	}
 	return state
 }
 
+func (t *Tracker) providerState(provider string) *State {
+	state := t.providerStates[provider]
+	if state == nil {
+		state = &State{
+			Model:            provider,
+			Capability:       "provider",
+			Status:           StatusUnknown,
+			FailureThreshold: t.failureThreshold,
+		}
+		t.providerStates[provider] = state
+	}
+	return state
+}
+
+func (t *Tracker) cooldownFor(failures int) time.Duration {
+	backoff := t.cooldownBase * time.Duration(1<<uint(failures-1))
+	if backoff > t.cooldownMax {
+		backoff = t.cooldownMax
+	}
+	jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
+	return backoff + jitter
+}
+
 func stateKey(model, capability string) string { return model + "\x00" + capability }
+
+func providerFromModel(model string) string {
+	if idx := findSeparator(model); idx >= 0 {
+		return model[:idx]
+	}
+	return ""
+}
+
+func findSeparator(s string) int {
+	for i, c := range s {
+		if c == '/' || c == ':' {
+			return i
+		}
+	}
+	return -1
+}
+
+type ErrorType int
+
+const (
+	ErrorClient ErrorType = iota
+	ErrorAuth
+	ErrorRateLimit
+	ErrorServer
+	ErrorNetwork
+)
+
+func classifyError(status int) ErrorType {
+	switch {
+	case status == 0:
+		return ErrorNetwork
+	case status >= 400 && status < 401:
+		return ErrorClient
+	case status == 401 || status == 403:
+		return ErrorAuth
+	case status == 429:
+		return ErrorRateLimit
+	case status >= 500:
+		return ErrorServer
+	default:
+		return ErrorServer
+	}
+}
 
 func rollingAverage(current float64, count uint64, value float64) float64 {
 	if count <= 1 {

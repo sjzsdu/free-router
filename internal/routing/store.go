@@ -179,6 +179,28 @@ func (s *Store) Update(config Config) error {
 	return nil
 }
 
+func (s *Store) UpdateTransactional(config Config, validateFunc func(Config) error) error {
+	config = mergeDefaults(config)
+	if err := validate(&config); err != nil {
+		return err
+	}
+
+	if validateFunc != nil {
+		if err := validateFunc(config); err != nil {
+			return err
+		}
+	}
+
+	if err := s.save(config); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	s.config = cloneConfig(config)
+	s.mu.Unlock()
+	return nil
+}
+
 func (s *Store) load() error {
 	content, err := os.ReadFile(s.path)
 	if err != nil {

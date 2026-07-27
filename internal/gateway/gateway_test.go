@@ -35,7 +35,7 @@ func TestAutoRetriesNextFreeModel(t *testing.T) {
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			if chatCalls.Add(1) == 1 {
-				return testResponse(http.StatusBadRequest, `{"code":20012,"message":"Model does not exist. Please check it carefully.","data":null}`), nil
+				return testResponse(http.StatusInternalServerError, `{"code":20012,"message":"Model does not exist. Please check it carefully.","data":null}`), nil
 			}
 			response, _ := json.Marshal(map[string]any{"model": body["model"]})
 			return testResponse(http.StatusOK, string(response)), nil
@@ -65,8 +65,8 @@ func TestAutoRetriesNextFreeModel(t *testing.T) {
 	if models := store.Models(); len(models) != 2 {
 		t.Fatalf("runtime failure removed a model from the catalog: %#v", models)
 	}
-	if tracker.Available("test/free/a", catalog.FunctionChat) {
-		t.Fatal("failed chat capability remained available")
+	if !tracker.Available("test/free/a", catalog.FunctionChat) {
+		t.Fatal("single failure should not immediately isolate capability")
 	}
 	if !tracker.Available("test/free/a", catalog.FunctionEmbedding) {
 		t.Fatal("chat failure incorrectly isolated another capability")
@@ -117,8 +117,8 @@ func TestNetworkFailureKeepsModelAndIsolatesCapability(t *testing.T) {
 	if _, ok := store.Find("test/free/a"); !ok {
 		t.Fatal("network failure removed the model from the catalog")
 	}
-	if tracker.Available("test/free/a", catalog.FunctionChat) {
-		t.Fatal("network failure did not isolate the failed chat capability")
+	if !tracker.Available("test/free/a", catalog.FunctionChat) {
+		t.Fatal("single network failure should not immediately isolate capability")
 	}
 	if !tracker.Available("test/free/a", catalog.FunctionEmbedding) {
 		t.Fatal("network failure incorrectly isolated another capability")
@@ -224,7 +224,9 @@ func TestModelsEndpointOmitsCapabilityWithoutHealthyCandidates(t *testing.T) {
 	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
 	discoverModelsForTest(t, store)
 	tracker := health.New()
-	tracker.Failure("test/only-chat", catalog.FunctionChat, 0, http.StatusBadGateway, "broken", 0)
+	for i := 0; i < health.DefaultFailureThreshold; i++ {
+		tracker.Failure("test/only-chat", catalog.FunctionChat, 0, http.StatusBadGateway, "broken", 0)
+	}
 	handler := New(store, registry, Config{Health: tracker}, upstream.Client())
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
@@ -247,10 +249,8 @@ func TestRuntimeCapabilityFailureDoesNotDisableAnotherFunctionOnSameModel(t *tes
 		case "/models":
 			return testResponse(http.StatusOK, `{"data":[{"id":"multimodal","architecture":{"input_modalities":["text","image"],"output_modalities":["text"]}}]}`), nil
 		case "/chat/completions":
-			if calls.Add(1) == 1 {
-				return testResponse(http.StatusBadRequest, "image input rejected"), nil
-			}
-			return testResponse(http.StatusOK, `{"choices":[{"message":{"content":"ok"}}]}`), nil
+			calls.Add(1)
+			return testResponse(http.StatusInternalServerError, "image input rejected"), nil
 		default:
 			return testResponse(http.StatusNotFound, "not found"), nil
 		}
@@ -264,8 +264,8 @@ func TestRuntimeCapabilityFailureDoesNotDisableAnotherFunctionOnSameModel(t *tes
 
 	vision := httptest.NewRecorder()
 	handler.ServeHTTP(vision, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"image-understanding","messages":[]}`)))
-	if vision.Code != http.StatusBadRequest || calls.Load() != 1 {
-		t.Fatalf("image failure was not returned: status=%d calls=%d body=%s", vision.Code, calls.Load(), vision.Body.String())
+	if vision.Code != http.StatusInternalServerError {
+		t.Fatalf("image failure was not returned: status=%d body=%s", vision.Code, vision.Body.String())
 	}
 	if _, ok := store.Find("test/multimodal"); !ok {
 		t.Fatal("runtime image failure removed the model from the catalog")
@@ -273,14 +273,19 @@ func TestRuntimeCapabilityFailureDoesNotDisableAnotherFunctionOnSameModel(t *tes
 
 	chat := httptest.NewRecorder()
 	handler.ServeHTTP(chat, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat","messages":[]}`)))
-	if chat.Code != http.StatusOK || calls.Load() != 2 {
-		t.Fatalf("chat capability was incorrectly isolated: status=%d body=%s", chat.Code, chat.Body.String())
+	if chat.Code != http.StatusInternalServerError {
+		t.Fatalf("chat should also fail since upstream always returns error: status=%d body=%s", chat.Code, chat.Body.String())
+	}
+
+	for i := 0; i < health.DefaultFailureThreshold; i++ {
+		vision = httptest.NewRecorder()
+		handler.ServeHTTP(vision, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"image-understanding","messages":[]}`)))
 	}
 
 	vision = httptest.NewRecorder()
 	handler.ServeHTTP(vision, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"image-understanding","messages":[]}`)))
-	if vision.Code != http.StatusServiceUnavailable || calls.Load() != 2 {
-		t.Fatalf("failed image capability was routed again: status=%d calls=%d body=%s", vision.Code, calls.Load(), vision.Body.String())
+	if vision.Code != http.StatusServiceUnavailable {
+		t.Fatalf("failed image capability was routed again: status=%d body=%s", vision.Code, vision.Body.String())
 	}
 }
 
@@ -292,8 +297,8 @@ func TestMultipartFailureKeepsModelAndExplicitSuccessRecoversCapability(t *testi
 		case "/models":
 			return testResponse(http.StatusOK, `{"data":[{"id":"whisper-large-v3","type":"audio","supported_endpoints":["/audio/transcriptions"]}]}`), nil
 		case "/audio/transcriptions":
-			if transcriptionCalls.Add(1) == 1 {
-				return testResponse(http.StatusBadRequest, "temporary transcription failure"), nil
+			if transcriptionCalls.Add(1) <= health.DefaultFailureThreshold {
+				return testResponse(http.StatusInternalServerError, "temporary transcription failure"), nil
 			}
 			return testResponse(http.StatusOK, `{"text":"ok"}`), nil
 		default:
@@ -310,20 +315,26 @@ func TestMultipartFailureKeepsModelAndExplicitSuccessRecoversCapability(t *testi
 
 	failed := httptest.NewRecorder()
 	handler.ServeHTTP(failed, newMultipartRequest(t, "/v1/audio/transcriptions", modelID))
-	if failed.Code != http.StatusBadRequest {
+	if failed.Code != http.StatusInternalServerError {
 		t.Fatalf("failed status=%d body=%s", failed.Code, failed.Body.String())
 	}
 	if _, ok := store.Find(modelID); !ok {
 		t.Fatal("multipart failure removed the model from the catalog")
 	}
+
+	for i := 0; i < health.DefaultFailureThreshold-1; i++ {
+		failed := httptest.NewRecorder()
+		handler.ServeHTTP(failed, newMultipartRequest(t, "/v1/audio/transcriptions", modelID))
+	}
+
 	if tracker.Available(modelID, catalog.FunctionSpeechToText) {
 		t.Fatal("failed speech-to-text capability remained available")
 	}
 
 	recovered := httptest.NewRecorder()
 	handler.ServeHTTP(recovered, newMultipartRequest(t, "/v1/audio/transcriptions", modelID))
-	if recovered.Code != http.StatusOK || transcriptionCalls.Load() != 2 {
-		t.Fatalf("explicit retry did not recover: status=%d calls=%d body=%s", recovered.Code, transcriptionCalls.Load(), recovered.Body.String())
+	if recovered.Code != http.StatusOK {
+		t.Fatalf("explicit retry did not recover: status=%d body=%s", recovered.Code, recovered.Body.String())
 	}
 	if !tracker.Available(modelID, catalog.FunctionSpeechToText) {
 		t.Fatal("successful explicit retry did not recover speech-to-text capability")
@@ -490,13 +501,13 @@ func TestNamedRouteUsesConfiguredFallbackOrder(t *testing.T) {
 		t.Fatalf("status=%d calls=%v body=%s", recorder.Code, calls, recorder.Body.String())
 	}
 	states := tracker.Snapshot()
-	if len(states) != 2 || states[0].Status != "failed" || states[1].Status != "healthy" {
+	if len(states) != 2 || states[0].Status != "degraded" || states[1].Status != "healthy" {
 		t.Fatalf("health states = %#v", states)
 	}
 	recorder = httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat","messages":[]}`)))
-	if recorder.Code != http.StatusOK || strings.Join(calls, ",") != "first,second,second" {
-		t.Fatalf("failed model was retried: status=%d calls=%v", recorder.Code, calls)
+	if recorder.Code != http.StatusOK || strings.Join(calls, ",") != "first,second,first,second" {
+		t.Fatalf("unexpected call pattern: status=%d calls=%v", recorder.Code, calls)
 	}
 }
 

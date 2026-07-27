@@ -157,21 +157,29 @@ func (h *Handler) runtimeState() map[string]any {
 }
 
 func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
-	previousProviderEnv := h.routes.Config().ProviderEnv
 	var config routing.Config
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&config); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid configuration")
 		return
 	}
-	if err := h.routes.Update(config); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+
+	previousConfig := h.routes.Config()
+
+	validateFunc := func(newConfig routing.Config) error {
+		if !reflect.DeepEqual(previousConfig.ProviderEnv, newConfig.ProviderEnv) {
+			if err := h.reloadProviders(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if err := h.routes.UpdateTransactional(config, validateFunc); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	if !reflect.DeepEqual(previousProviderEnv, h.routes.Config().ProviderEnv) {
-		if err := h.reloadProviders(); err != nil {
-			writeError(w, http.StatusBadGateway, err.Error())
-			return
-		}
+
+	if !reflect.DeepEqual(previousConfig.ProviderEnv, h.routes.Config().ProviderEnv) {
 		h.refreshAllAsync()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"saved": true, "config": h.routes.Config()})

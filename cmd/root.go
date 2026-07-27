@@ -24,6 +24,7 @@ import (
 	"github.com/sjzsdu/free-router/internal/health"
 	"github.com/sjzsdu/free-router/internal/provider"
 	"github.com/sjzsdu/free-router/internal/routing"
+	"github.com/sjzsdu/free-router/internal/transport"
 	"github.com/spf13/cobra"
 )
 
@@ -196,7 +197,8 @@ func runServer(ctx context.Context, opts options) error {
 	}
 
 	tracker := health.New()
-	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts, Routes: routes, Health: tracker, APIToken: opts.apiToken}, http.DefaultClient)
+	httpClient := transport.NewClient(transport.NewConfig())
+	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts, Routes: routes, Health: tracker, APIToken: opts.apiToken}, httpClient)
 	reloadProviders := func() error {
 		return registry.ReloadWithManifest(opts.providers, provider.EnvMap(routes.Config().ProviderEnv), opts.freeModels, vault.Get)
 	}
@@ -206,7 +208,10 @@ func runServer(ctx context.Context, opts options) error {
 		Addr:              opts.addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       90 * time.Second,
+		MaxHeaderBytes:    10 * 1024 * 1024,
 	}
 
 	errCh := make(chan error, 1)

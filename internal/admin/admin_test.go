@@ -402,7 +402,7 @@ func TestExpensiveModelProbeRequiresConfirmation(t *testing.T) {
 	}
 }
 
-func TestAutomaticHealthProbeIncludesImageAndVideo(t *testing.T) {
+func TestAutomaticHealthProbeSkipsExpensiveCapabilities(t *testing.T) {
 	for _, key := range provider.SupportedKeyEnvs() {
 		t.Setenv(key, "")
 	}
@@ -432,20 +432,15 @@ func TestAutomaticHealthProbeIncludesImageAndVideo(t *testing.T) {
 	handler := New(routes, models, vault, tracker, Config{}, nil)
 
 	status, started := handler.probes.Start(handler, false)
-	if !started || status.Total != 2 {
-		t.Fatalf("started=%t status=%#v", started, status)
+	if started {
+		t.Fatalf("automatic probe should not start when only expensive capabilities exist: started=%t status=%#v", started, status)
 	}
-	deadline := time.Now().Add(time.Second)
-	for handler.probes.Snapshot().Status == "running" && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	status = handler.probes.Snapshot()
-	if status.Status != "completed" || status.Healthy != 2 || imageCalls.Load() != 1 || videoCalls.Load() != 1 {
-		t.Fatalf("status=%#v image_calls=%d video_calls=%d health=%#v", status, imageCalls.Load(), videoCalls.Load(), tracker.Snapshot())
+	if imageCalls.Load() != 0 || videoCalls.Load() != 0 {
+		t.Fatalf("expensive probes should not be triggered automatically: image_calls=%d video_calls=%d", imageCalls.Load(), videoCalls.Load())
 	}
 }
 
-func TestFailedHealthProbeRemovesModelFromCache(t *testing.T) {
+func TestFailedHealthProbeDoesNotRemoveModelFromCatalog(t *testing.T) {
 	for _, key := range provider.SupportedKeyEnvs() {
 		t.Setenv(key, "")
 	}
@@ -473,8 +468,11 @@ func TestFailedHealthProbeRemovesModelFromCache(t *testing.T) {
 	for handler.probes.Snapshot().Status == "running" && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if len(models.Models()) != 0 || handler.probes.Snapshot().Failed != 1 {
-		t.Fatalf("failed model remained: models=%#v probe=%#v", models.Models(), handler.probes.Snapshot())
+	if len(models.Models()) != 1 {
+		t.Fatalf("failed model should remain in catalog: models=%#v", models.Models())
+	}
+	if handler.probes.Snapshot().Failed != 1 {
+		t.Fatalf("probe should report failure: probe=%#v", handler.probes.Snapshot())
 	}
 }
 

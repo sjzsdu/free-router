@@ -17,10 +17,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sjzsdu/free-router/internal/adapter"
 	"github.com/sjzsdu/free-router/internal/catalog"
 	"github.com/sjzsdu/free-router/internal/health"
 	"github.com/sjzsdu/free-router/internal/provider"
 	"github.com/sjzsdu/free-router/internal/routing"
+	"github.com/sjzsdu/free-router/internal/transport"
 )
 
 type Config struct {
@@ -31,15 +33,18 @@ type Config struct {
 }
 
 type Gateway struct {
-	catalog   *catalog.Store
-	registry  *provider.Registry
-	config    Config
-	client    *http.Client
-	next      atomic.Uint64
-	routeNext sync.Map
-	tracker   *health.Tracker
-	mux       *http.ServeMux
-	apiToken  string
+	catalog    *catalog.Store
+	registry   *provider.Registry
+	adapterReg *adapter.Registry
+	config     Config
+	client     *http.Client
+	next       atomic.Uint64
+	routeNext  sync.Map
+	tracker    *health.Tracker
+	mux        *http.ServeMux
+	apiToken   string
+	limiters   sync.Map
+	metrics    *Metrics
 }
 
 func New(store *catalog.Store, registry *provider.Registry, config Config, client *http.Client) *Gateway {
@@ -49,8 +54,11 @@ func New(store *catalog.Store, registry *provider.Registry, config Config, clien
 	if config.Health == nil {
 		config.Health = health.New()
 	}
-	gateway := &Gateway{catalog: store, registry: registry, config: config, client: client, tracker: config.Health, mux: http.NewServeMux(), apiToken: config.APIToken}
+	gateway := &Gateway{catalog: store, registry: registry, adapterReg: adapter.NewRegistry(), config: config, client: client, tracker: config.Health, mux: http.NewServeMux(), apiToken: config.APIToken, metrics: NewMetrics()}
 	gateway.mux.HandleFunc("GET /healthz", gateway.health)
+	gateway.mux.HandleFunc("GET /livez", gateway.livez)
+	gateway.mux.HandleFunc("GET /readyz", gateway.readyz)
+	gateway.mux.HandleFunc("GET /metrics", gateway.metrics.Handler())
 	gateway.mux.HandleFunc("GET /v1/models", gateway.models)
 	gateway.mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
 		gateway.proxyJSON(w, r, "/chat/completions", "chat")
@@ -117,6 +125,41 @@ func (g *Gateway) health(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+func (g *Gateway) livez(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
+func (g *Gateway) readyz(w http.ResponseWriter, _ *http.Request) {
+	providers := len(g.registry.All())
+	if providers == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"unready","reason":"no providers configured"}`))
+		return
+	}
+
+	hasHealthyModel := false
+	for _, model := range g.catalog.Models() {
+		if g.tracker.Available(model.ID, "chat") {
+			hasHealthyModel = true
+			break
+		}
+	}
+
+	if !hasHealthyModel {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"unready","reason":"no healthy models available"}`))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ready","providers":` + strconv.Itoa(providers) + `}`))
+}
+
 func (g *Gateway) models(w http.ResponseWriter, _ *http.Request) {
 	data := make([]map[string]any, 0, len(catalog.AllFunctions()))
 	if g.config.Routes != nil {
@@ -172,14 +215,17 @@ func (g *Gateway) routeAvailable(route routing.Route) bool {
 }
 
 func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, defaultAlias string) {
+	g.metrics.RecordRequest()
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 32<<20))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "request body is too large or unreadable")
+		g.metrics.RecordFailure(0, http.StatusBadRequest)
 		return
 	}
 	var request map[string]any
 	if err := json.Unmarshal(body, &request); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		g.metrics.RecordFailure(0, http.StatusBadRequest)
 		return
 	}
 	requested, _ := request["model"].(string)
@@ -195,6 +241,7 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 	capability := g.requestCapability(requested, defaultAlias)
 	if !endpointSupports(defaultAlias, capability) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("model capability %q is not compatible with this OpenAI endpoint", capability))
+		g.metrics.RecordFailure(0, http.StatusBadRequest)
 		return
 	}
 	candidates, fallback := g.candidates(requested, needsTools)
@@ -204,6 +251,7 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 		} else {
 			writeError(w, http.StatusNotFound, fmt.Sprintf("free model %q was not found", requested))
 		}
+		g.metrics.RecordFailure(0, http.StatusServiceUnavailable)
 		return
 	}
 
@@ -212,6 +260,7 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 		payload, err := json.Marshal(request)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "could not encode request")
+			g.metrics.RecordFailure(0, http.StatusBadRequest)
 			return
 		}
 		started := time.Now()
@@ -220,39 +269,59 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 			g.tracker.Failure(model.ID, capability, time.Since(started), 0, err.Error(), 0)
 			slog.Warn("provider request failed", "provider", model.Provider, "model", model.UpstreamID, "error", err)
 			if index+1 < len(candidates) {
+				g.metrics.RecordFallback()
 				continue
 			}
 			writeError(w, http.StatusBadGateway, "all configured free providers failed")
+			g.metrics.RecordFailure(time.Since(started), 0)
 			return
 		}
-		if retryable(resp.StatusCode, fallback) && index+1 < len(candidates) {
+		decision := g.shouldRetry(model, capability, resp.StatusCode, resp.ContentLength > 0, index)
+		if decision.ShouldRetry && index+1 < len(candidates) {
 			g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, resp.Status, parseRetryAfter(resp.Header.Get("Retry-After")))
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
-			slog.Info("free provider unavailable; trying next", "provider", model.Provider, "model", model.UpstreamID, "status", resp.StatusCode)
+			slog.Info("free provider unavailable; trying next", "provider", model.Provider, "model", model.UpstreamID, "status", resp.StatusCode, "reason", decision.Reason)
+			if decision.Delay > 0 {
+				time.Sleep(decision.Delay)
+			}
+			g.metrics.RecordFallback()
+			if resp.StatusCode == http.StatusTooManyRequests {
+				g.metrics.RecordRateLimit()
+			}
 			continue
 		}
 		g.recordResponse(model.ID, capability, time.Since(started), resp)
-		copyResponse(w, resp, model)
+		result := copyResponse(w, resp, model)
+		if result.Complete {
+			g.metrics.RecordSuccess(time.Since(started))
+		} else {
+			g.metrics.RecordFailure(time.Since(started), resp.StatusCode)
+		}
 		return
 	}
 	writeError(w, http.StatusBadGateway, "all configured free providers failed")
+	g.metrics.RecordFailure(0, http.StatusBadGateway)
 }
 
 func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoint, defaultAlias string) {
+	g.metrics.RecordRequest()
 	mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "multipart/form-data" || params["boundary"] == "" {
 		writeError(w, http.StatusBadRequest, "multipart/form-data with a boundary is required")
+		g.metrics.RecordFailure(0, http.StatusBadRequest)
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<20))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "request body is too large or unreadable")
+		g.metrics.RecordFailure(0, http.StatusBadRequest)
 		return
 	}
 	requested, err := multipartModel(body, params["boundary"])
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid multipart body")
+		g.metrics.RecordFailure(0, http.StatusBadRequest)
 		return
 	}
 	if requested == "" || requested == "auto" || requested == "free" {
@@ -261,6 +330,7 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 	capability := g.requestCapability(requested, defaultAlias)
 	if !endpointSupports(defaultAlias, capability) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("model capability %q is not compatible with this OpenAI endpoint", capability))
+		g.metrics.RecordFailure(0, http.StatusBadRequest)
 		return
 	}
 	candidates, fallback := g.candidates(requested, false)
@@ -270,12 +340,14 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 		} else {
 			writeError(w, http.StatusNotFound, fmt.Sprintf("free model %q was not found", requested))
 		}
+		g.metrics.RecordFailure(0, http.StatusServiceUnavailable)
 		return
 	}
 	for index, model := range candidates {
 		payload, contentType, err := rewriteMultipartModel(body, params["boundary"], model.UpstreamID)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "could not encode multipart request")
+			g.metrics.RecordFailure(0, http.StatusBadRequest)
 			return
 		}
 		started := time.Now()
@@ -283,19 +355,34 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 		if err != nil {
 			g.tracker.Failure(model.ID, capability, time.Since(started), 0, err.Error(), 0)
 			if index+1 < len(candidates) {
+				g.metrics.RecordFallback()
 				continue
 			}
 			writeError(w, http.StatusBadGateway, "all configured free providers failed")
+			g.metrics.RecordFailure(time.Since(started), 0)
 			return
 		}
-		if retryable(resp.StatusCode, fallback) && index+1 < len(candidates) {
+		decision := g.shouldRetry(model, capability, resp.StatusCode, resp.ContentLength > 0, index)
+		if decision.ShouldRetry && index+1 < len(candidates) {
 			g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, resp.Status, parseRetryAfter(resp.Header.Get("Retry-After")))
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
+			if decision.Delay > 0 {
+				time.Sleep(decision.Delay)
+			}
+			g.metrics.RecordFallback()
+			if resp.StatusCode == http.StatusTooManyRequests {
+				g.metrics.RecordRateLimit()
+			}
 			continue
 		}
 		g.recordResponse(model.ID, capability, time.Since(started), resp)
-		copyResponse(w, resp, model)
+		result := copyResponse(w, resp, model)
+		if result.Complete {
+			g.metrics.RecordSuccess(time.Since(started))
+		} else {
+			g.metrics.RecordFailure(time.Since(started), resp.StatusCode)
+		}
 		return
 	}
 }
@@ -590,6 +677,17 @@ func (g *Gateway) forward(original *http.Request, model catalog.Model, body []by
 	if !ok {
 		return nil, fmt.Errorf("provider %s is not configured", model.Provider)
 	}
+
+	limiter, ok := g.limiters.LoadOrStore(model.Provider, g.newLimiter(spec))
+	if !ok {
+		limiter, _ = g.limiters.Load(model.Provider)
+	}
+
+	if err := limiter.(*transport.Limiter).Acquire(original.Context()); err != nil {
+		return nil, err
+	}
+	defer limiter.(*transport.Limiter).Release()
+
 	req, err := http.NewRequestWithContext(original.Context(), http.MethodPost, spec.APIEndpoint(endpoint), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -610,7 +708,27 @@ func (g *Gateway) forward(original *http.Request, model catalog.Model, body []by
 	return g.client.Do(req)
 }
 
-func copyResponse(w http.ResponseWriter, resp *http.Response, model catalog.Model) {
+func (g *Gateway) newLimiter(spec provider.Spec) *transport.Limiter {
+	config := transport.NewRateLimitConfig()
+	if spec.MaxConcurrent > 0 {
+		config.MaxConcurrentRequests = spec.MaxConcurrent
+	}
+	if spec.RateLimitPerSecond > 0 {
+		config.RateLimitPerSecond = spec.RateLimitPerSecond
+	}
+	if spec.QueueSize > 0 {
+		config.QueueSize = spec.QueueSize
+	}
+	return transport.NewLimiter(config)
+}
+
+type StreamResult struct {
+	Complete     bool
+	BytesWritten int64
+	Error        error
+}
+
+func copyResponse(w http.ResponseWriter, resp *http.Response, model catalog.Model) StreamResult {
 	defer resp.Body.Close()
 	for key, values := range resp.Header {
 		if isHopByHop(key) {
@@ -624,31 +742,44 @@ func copyResponse(w http.ResponseWriter, resp *http.Response, model catalog.Mode
 	w.Header().Set("X-Free-Router-Model", model.UpstreamID)
 	w.WriteHeader(resp.StatusCode)
 	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		copyStream(w, resp.Body)
-		return
+		return copyStream(w, resp.Body)
 	}
-	_, _ = io.Copy(w, resp.Body)
+	n, err := io.Copy(w, resp.Body)
+	return StreamResult{
+		Complete:     err == nil,
+		BytesWritten: n,
+		Error:        err,
+	}
 }
 
-func copyStream(w http.ResponseWriter, body io.Reader) {
+func copyStream(w http.ResponseWriter, body io.Reader) StreamResult {
 	buffer := make([]byte, 32*1024)
 	flusher, canFlush := w.(http.Flusher)
+	var totalWritten int64
 	for {
 		read, err := body.Read(buffer)
 		if read > 0 {
-			_, _ = w.Write(buffer[:read])
+			n, writeErr := w.Write(buffer[:read])
+			totalWritten += int64(n)
+			if writeErr != nil {
+				return StreamResult{
+					Complete:     false,
+					BytesWritten: totalWritten,
+					Error:        writeErr,
+				}
+			}
 			if canFlush {
 				flusher.Flush()
 			}
 		}
 		if err != nil {
-			return
+			return StreamResult{
+				Complete:     err == io.EOF,
+				BytesWritten: totalWritten,
+				Error:        err,
+			}
 		}
 	}
-}
-
-func retryable(status int, auto bool) bool {
-	return (auto && (status == http.StatusBadRequest || status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusPaymentRequired || status == http.StatusNotFound || status == http.StatusUnprocessableEntity)) || status == http.StatusRequestTimeout || status == http.StatusConflict || status == http.StatusTooManyRequests || status >= 500
 }
 
 func isHopByHop(header string) bool {
