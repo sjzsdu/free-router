@@ -62,3 +62,35 @@ func TestDefaultOptionsUseUnifiedDataDirectory(t *testing.T) {
 		t.Fatalf("credentials path = %s, want %s", got, want)
 	}
 }
+
+func TestDefaultAddressIsLoopback(t *testing.T) {
+	t.Setenv("FREE_ROUTER_ADDR", "")
+	opts := defaultOptions()
+	if opts.addr != "127.0.0.1:1314" {
+		t.Fatalf("default addr = %q, want %q", opts.addr, "127.0.0.1:1314")
+	}
+}
+
+func TestIsRemoteAddr(t *testing.T) {
+	tests := []struct {
+		name     string
+		addr     string
+		expected bool
+	}{
+		{"loopback ipv4", "127.0.0.1:1314", false},
+		{"loopback ipv6", "[::1]:1314", false},
+		{"localhost", "localhost:1314", false},
+		{"wildcard ipv4", "0.0.0.0:1314", true},
+		{"wildcard ipv6", ":::1314", true},
+		{"empty host", ":1314", true},
+		{"external ip", "192.168.1.100:1314", true},
+		{"hostname", "myhost.local:1314", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isRemoteAddr(tt.addr); got != tt.expected {
+				t.Fatalf("isRemoteAddr(%q) = %v, want %v", tt.addr, got, tt.expected)
+			}
+		})
+	}
+}

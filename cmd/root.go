@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -43,6 +44,7 @@ type options struct {
 	freeModels       string
 	adminAllowRemote bool
 	adminToken       string
+	apiToken         string
 	maxAttempts      int
 }
 
@@ -144,7 +146,7 @@ func validateModelData(path string, output io.Writer) error {
 func defaultOptions() options {
 	dataDir := appdirs.Default()
 	return options{
-		addr:             envOr("FREE_ROUTER_ADDR", ":1314"),
+		addr:             envOr("FREE_ROUTER_ADDR", "127.0.0.1:1314"),
 		providers:        os.Getenv("FREE_ROUTER_PROVIDERS"),
 		cache:            envOr("FREE_ROUTER_CACHE", filepath.Join(dataDir, "models.json")),
 		config:           envOr("FREE_ROUTER_CONFIG", filepath.Join(dataDir, "config.json")),
@@ -152,6 +154,7 @@ func defaultOptions() options {
 		freeModels:       os.Getenv("FREE_ROUTER_FREE_MODELS"),
 		adminAllowRemote: envBool("FREE_ROUTER_ADMIN_ALLOW_REMOTE"),
 		adminToken:       os.Getenv("FREE_ROUTER_ADMIN_TOKEN"),
+		apiToken:         os.Getenv("FREE_ROUTER_API_TOKEN"),
 		maxAttempts:      6,
 	}
 }
@@ -164,6 +167,7 @@ func bindFlags(command *cobra.Command, opts *options) {
 	command.PersistentFlags().StringVar(&opts.credentials, "credentials", opts.credentials, "saved provider credentials file")
 	command.PersistentFlags().StringVar(&opts.freeModels, "free-models", opts.freeModels, "external free model manifest (embedded data is used by default)")
 	command.PersistentFlags().BoolVar(&opts.adminAllowRemote, "admin-allow-remote", opts.adminAllowRemote, "allow the admin UI outside localhost")
+	command.PersistentFlags().StringVar(&opts.apiToken, "api-token", opts.apiToken, "API token for inference endpoints (required for remote access)")
 	command.PersistentFlags().IntVar(&opts.maxAttempts, "max-attempts", opts.maxAttempts, "maximum upstream attempts for model=auto")
 }
 
@@ -173,6 +177,9 @@ func runServer(ctx context.Context, opts options) error {
 	}
 	if opts.adminAllowRemote && strings.TrimSpace(opts.adminToken) == "" {
 		return errors.New("FREE_ROUTER_ADMIN_TOKEN is required when admin-allow-remote is enabled")
+	}
+	if isRemoteAddr(opts.addr) && strings.TrimSpace(opts.apiToken) == "" {
+		return errors.New("FREE_ROUTER_API_TOKEN is required when listening on a remote address (not localhost)")
 	}
 	vault := credentials.New(opts.credentials)
 	routes, err := routing.New(opts.config)
@@ -189,7 +196,7 @@ func runServer(ctx context.Context, opts options) error {
 	}
 
 	tracker := health.New()
-	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts, Routes: routes, Health: tracker}, http.DefaultClient)
+	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts, Routes: routes, Health: tracker, APIToken: opts.apiToken}, http.DefaultClient)
 	reloadProviders := func() error {
 		return registry.ReloadWithManifest(opts.providers, provider.EnvMap(routes.Config().ProviderEnv), opts.freeModels, vault.Get)
 	}
@@ -252,6 +259,21 @@ func envBool(key string) bool {
 
 func catalogHTTPClient() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second}
+}
+
+func isRemoteAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip != nil && ip.IsLoopback() {
+		return false
+	}
+	return host != "localhost" && host != "127.0.0.1" && host != "::1"
 }
 
 func loadDaemonEnvironment() error {

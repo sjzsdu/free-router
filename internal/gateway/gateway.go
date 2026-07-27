@@ -27,6 +27,7 @@ type Config struct {
 	MaxAttempts int
 	Routes      *routing.Store
 	Health      *health.Tracker
+	APIToken    string
 }
 
 type Gateway struct {
@@ -38,6 +39,7 @@ type Gateway struct {
 	routeNext sync.Map
 	tracker   *health.Tracker
 	mux       *http.ServeMux
+	apiToken  string
 }
 
 func New(store *catalog.Store, registry *provider.Registry, config Config, client *http.Client) *Gateway {
@@ -47,7 +49,7 @@ func New(store *catalog.Store, registry *provider.Registry, config Config, clien
 	if config.Health == nil {
 		config.Health = health.New()
 	}
-	gateway := &Gateway{catalog: store, registry: registry, config: config, client: client, tracker: config.Health, mux: http.NewServeMux()}
+	gateway := &Gateway{catalog: store, registry: registry, config: config, client: client, tracker: config.Health, mux: http.NewServeMux(), apiToken: config.APIToken}
 	gateway.mux.HandleFunc("GET /healthz", gateway.health)
 	gateway.mux.HandleFunc("GET /v1/models", gateway.models)
 	gateway.mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
@@ -86,14 +88,32 @@ func New(store *catalog.Store, registry *provider.Registry, config Config, clien
 	return gateway
 }
 
+func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if g.apiToken != "" && !g.authorized(r) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="free-router api"`)
+		http.Error(w, "api authentication required", http.StatusUnauthorized)
+		return
+	}
+	g.mux.ServeHTTP(w, r)
+}
+
+func (g *Gateway) authorized(r *http.Request) bool {
+	if g.apiToken == "" {
+		return true
+	}
+	if token := r.Header.Get("Authorization"); strings.HasPrefix(token, "Bearer ") {
+		return strings.TrimPrefix(token, "Bearer ") == g.apiToken
+	}
+	return false
+}
+
 func (g *Gateway) Handle(pattern string, handler http.Handler) { g.mux.Handle(pattern, handler) }
 
-func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) { g.mux.ServeHTTP(w, r) }
-
 func (g *Gateway) health(w http.ResponseWriter, _ *http.Request) {
+	status := g.catalog.Status()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "ok", "free_models": len(g.catalog.Models()), "providers": len(g.registry.All()),
-		"catalog": g.catalog.Status(), "requests": g.tracker.Summary(),
+		"catalog_count": status.Count, "requests": g.tracker.Summary(),
 	})
 }
 

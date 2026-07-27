@@ -343,6 +343,69 @@ func TestCapabilityAliasMustMatchOpenAIEndpoint(t *testing.T) {
 	}
 }
 
+func TestAPITokenRequiredForInferenceEndpoints(t *testing.T) {
+	clearBuiltinKeys(t)
+	registry, _ := provider.NewRegistry("")
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
+	handler := New(store, registry, Config{APIToken: "secret-token"}, http.DefaultClient)
+
+	// No token should be rejected
+	noToken := httptest.NewRecorder()
+	handler.ServeHTTP(noToken, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	if noToken.Code != http.StatusUnauthorized {
+		t.Fatalf("no token status=%d, want 401", noToken.Code)
+	}
+
+	// Invalid token should be rejected
+	invalidToken := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	handler.ServeHTTP(invalidToken, req)
+	if invalidToken.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid token status=%d, want 401", invalidToken.Code)
+	}
+
+	// Valid token should be accepted
+	validToken := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	handler.ServeHTTP(validToken, req)
+	if validToken.Code != http.StatusOK {
+		t.Fatalf("valid token status=%d, want 200", validToken.Code)
+	}
+}
+
+func TestAPITokenNotRequiredWhenEmpty(t *testing.T) {
+	clearBuiltinKeys(t)
+	registry, _ := provider.NewRegistry("")
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
+	handler := New(store, registry, Config{}, http.DefaultClient)
+
+	// No token should be accepted when APIToken is empty
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("no token with empty config status=%d, want 200", recorder.Code)
+	}
+}
+
+func TestHealthzDoesNotExposeCachePath(t *testing.T) {
+	clearBuiltinKeys(t)
+	registry, _ := provider.NewRegistry("")
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
+	handler := New(store, registry, Config{}, http.DefaultClient)
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("healthz status=%d, want 200", recorder.Code)
+	}
+	body := recorder.Body.String()
+	if strings.Contains(body, "cache_path") {
+		t.Fatalf("healthz response contains cache_path: %s", body)
+	}
+}
+
 func TestNamedRouteFallsBackToRemainingModelAfterPriorityArray(t *testing.T) {
 	clearBuiltinKeys(t)
 	var calls []string
