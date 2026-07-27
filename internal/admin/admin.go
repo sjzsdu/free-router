@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"net"
@@ -33,6 +34,7 @@ type Handler struct {
 	reload             func(map[string][]string) (func(), error)
 	health             *health.Tracker
 	probes             *probeManager
+	providerProbes     *providerProbeStore
 	static             http.Handler
 	started            time.Time
 	oauthFlows         *oauthFlows
@@ -65,7 +67,7 @@ func New(routes *routing.Store, models *catalog.Store, vault *credentials.Vault,
 	if tokenURL == "" {
 		tokenURL = "https://openrouter.ai/api/v1/auth/keys"
 	}
-	return &Handler{routes: routes, catalog: models, vault: vault, health: tracker, probes: newProbeManager(), config: config, reload: reload, static: http.FileServer(http.FS(staticFS)), started: time.Now(), oauthFlows: newOAuthFlows(), oauthHTTPClient: client, openRouterAuthURL: authURL, openRouterTokenURL: tokenURL}
+	return &Handler{routes: routes, catalog: models, vault: vault, health: tracker, probes: newProbeManager(), providerProbes: newProviderProbeStore(), config: config, reload: reload, static: http.FileServer(http.FS(staticFS)), started: time.Now(), oauthFlows: newOAuthFlows(), oauthHTTPClient: client, openRouterAuthURL: authURL, openRouterTokenURL: tokenURL}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -132,9 +134,11 @@ func (h *Handler) authorized(r *http.Request) bool {
 
 func (h *Handler) state(w http.ResponseWriter) {
 	entries, _ := h.vault.List()
+	providers := provider.BuiltinStatusWithManifest(provider.EnvMap(h.routes.Config().ProviderEnv), h.config.FreeModels, h.vault.Get)
+	h.providerProbes.decorate(providers)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"config": h.routes.Config(), "config_path": h.routes.Path(), "models": h.catalog.Models(),
-		"catalog": h.catalog.Status(), "providers": provider.BuiltinStatusWithManifest(provider.EnvMap(h.routes.Config().ProviderEnv), h.config.FreeModels, h.vault.Get), "credentials": entries,
+		"catalog": h.catalog.Status(), "providers": providers, "credentials": entries,
 		"health": h.health.Snapshot(), "summary": h.health.Summary(), "health_probe": h.probes.Snapshot(), "runtime": h.runtimeState(),
 	})
 }
@@ -224,15 +228,17 @@ func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request, escapedID
 	}
 	started := time.Now()
 	count, err := h.catalog.Probe(r.Context(), providerID)
+	latency := time.Since(started)
 	if err != nil {
-		message := err.Error()
-		if providerID == "groq" && strings.Contains(message, "403") {
-			message += "; Groq 403 表示账户、组织或项目权限受限（无效 Key 通常返回 401），并非模型目录地址错误；请确认 Key 所属项目可用，并检查 Organization / Project 的 Model Permissions，必要时重新创建 Key 或联系 Groq"
-		}
+		status, message := providerProbeFailure(providerID, err)
+		h.providerProbes.failure(providerID, status, message, latency)
+		h.markProviderModelsFailed(providerID, status, message, latency)
 		writeError(w, http.StatusBadGateway, message)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "provider": providerID, "formula_models": count, "latency_ms": time.Since(started).Milliseconds()})
+	h.providerProbes.success(providerID, count, latency)
+	h.startProviderModelProbe(providerID)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "provider": providerID, "formula_models": count, "latency_ms": latency.Milliseconds()})
 }
 
 func (h *Handler) saveCredential(w http.ResponseWriter, r *http.Request) {
@@ -263,7 +269,26 @@ func (h *Handler) saveCredential(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"saved": true, "backend": backend, "models": len(h.catalog.Models())})
+	started := time.Now()
+	count, probeErr := h.catalog.Probe(r.Context(), input.Provider)
+	latency := time.Since(started)
+	if probeErr != nil {
+		status, message := providerProbeFailure(input.Provider, probeErr)
+		h.providerProbes.failure(input.Provider, status, message, latency)
+		h.markProviderModelsFailed(input.Provider, status, message, latency)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"saved": true, "backend": backend, "models": len(h.catalog.Models()),
+			"validation": map[string]any{"ok": false, "provider": input.Provider, "error": message, "latency_ms": latency.Milliseconds()},
+		})
+		return
+	}
+	h.providerProbes.success(input.Provider, count, latency)
+	probeStarted := h.startProviderModelProbe(input.Provider)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"saved": true, "backend": backend, "models": len(h.catalog.Models()),
+		"validation":          map[string]any{"ok": true, "provider": input.Provider, "formula_models": count, "latency_ms": latency.Milliseconds()},
+		"model_probe_started": probeStarted,
+	})
 }
 
 func (h *Handler) deleteCredential(w http.ResponseWriter, r *http.Request, providerID string) {
@@ -287,7 +312,22 @@ func (h *Handler) deleteCredential(w http.ResponseWriter, r *http.Request, provi
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	h.providerProbes.remove(providerID)
+	h.resetProviderModelHealth(providerID)
 	writeJSON(w, http.StatusOK, map[string]any{"removed": true, "models": len(h.catalog.Models())})
+}
+
+func providerProbeFailure(providerID string, err error) (int, string) {
+	status := 0
+	var probeError *catalog.ProviderProbeError
+	if errors.As(err, &probeError) {
+		status = probeError.Status
+	}
+	message := err.Error()
+	if providerID == "groq" && strings.Contains(message, "403") {
+		message += "; Groq 403 表示账户、组织或项目权限受限（无效 Key 通常返回 401），并非模型目录地址错误；请确认 Key 所属项目可用，并检查 Organization / Project 的 Model Permissions，必要时重新创建 Key 或联系 Groq"
+	}
+	return status, message
 }
 
 func (h *Handler) reloadProviders(providerEnv map[string][]string) (func(), error) {

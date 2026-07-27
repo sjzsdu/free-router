@@ -178,6 +178,71 @@ func probeCandidates(h *Handler, force bool) ([]probeJob, int) {
 	return interleaveProviders(jobs), skipped
 }
 
+func providerProbeCandidates(h *Handler, providerID string) ([]probeJob, int) {
+	jobs := make([]probeJob, 0)
+	skipped := 0
+	for _, model := range h.catalog.Models() {
+		if model.Provider != providerID {
+			continue
+		}
+		var enabled bool
+		model, enabled = h.routes.Apply(model)
+		if !enabled || len(model.Functions) == 0 {
+			skipped++
+			continue
+		}
+		for _, capability := range model.Functions {
+			if expensiveCapability(capability) {
+				skipped++
+				continue
+			}
+			jobs = append(jobs, probeJob{Model: model, Capability: capability})
+		}
+	}
+	return jobs, skipped
+}
+
+func (h *Handler) startProviderModelProbe(providerID string) bool {
+	jobs, skipped := providerProbeCandidates(h, providerID)
+	return h.probes.StartJobs(h, jobs, skipped)
+}
+
+func (manager *probeManager) StartJobs(h *Handler, jobs []probeJob, skipped int) bool {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.status.Status == "running" {
+		return false
+	}
+	now := time.Now()
+	manager.status = ProbeStatus{Status: "running", Total: len(jobs), Skipped: skipped, StartedAt: now}
+	if len(jobs) == 0 {
+		manager.status.Status = "completed"
+		manager.status.FinishedAt = now
+		return false
+	}
+	go manager.run(h, jobs)
+	return true
+}
+
+func (h *Handler) markProviderModelsFailed(providerID string, status int, message string, latency time.Duration) {
+	for _, model := range h.catalog.Models() {
+		if model.Provider != providerID {
+			continue
+		}
+		for _, capability := range model.Functions {
+			h.health.ProbeFailure(model.ID, capability, latency, status, message)
+		}
+	}
+}
+
+func (h *Handler) resetProviderModelHealth(providerID string) {
+	for _, model := range h.catalog.Models() {
+		if model.Provider == providerID {
+			h.health.Reset(model.ID, "")
+		}
+	}
+}
+
 func interleaveProviders(jobs []probeJob) []probeJob {
 	groups := make(map[string][]probeJob)
 	providers := make([]string, 0)

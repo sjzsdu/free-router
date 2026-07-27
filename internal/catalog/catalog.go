@@ -96,12 +96,18 @@ type ModelProbeError struct {
 	Message string
 }
 
+type ProviderProbeError struct {
+	Status  int
+	Message string
+}
+
 type DiscoveryFailure struct {
 	Provider string `json:"provider"`
 	Error    string `json:"error"`
 }
 
-func (e *ModelProbeError) Error() string { return e.Message }
+func (e *ModelProbeError) Error() string    { return e.Message }
+func (e *ProviderProbeError) Error() string { return e.Message }
 
 type upstreamModel struct {
 	ID                  string       `json:"id"`
@@ -241,10 +247,11 @@ func (s *Store) fetchUpstream(ctx context.Context, spec provider.Spec) ([]Model,
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		detail := upstreamErrorDetail(resp.Body)
+		message := "models endpoint returned " + resp.Status
 		if detail != "" {
-			return nil, fmt.Errorf("models endpoint returned %s: %s", resp.Status, detail)
+			message += ": " + detail
 		}
-		return nil, fmt.Errorf("models endpoint returned %s", resp.Status)
+		return nil, &ProviderProbeError{Status: resp.StatusCode, Message: message}
 	}
 	var payload modelsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {

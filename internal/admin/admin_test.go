@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -129,41 +130,128 @@ func TestCredentialSaveEnablesProviderWithoutDiscoveringModels(t *testing.T) {
 	}
 }
 
-func TestCredentialSaveDoesNotContactProviderCatalog(t *testing.T) {
+func TestCredentialSaveValidatesProviderAndUpdatesModelHealth(t *testing.T) {
 	for _, key := range provider.SupportedKeyEnvs() {
 		t.Setenv(key, "")
 	}
-	started := make(chan struct{})
-	release := make(chan struct{})
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		close(started)
-		<-release
-		_, _ = w.Write([]byte(`{"data":[{"id":"chat-a"}]}`))
+	var modelCalls atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer secret" {
+			http.Error(w, "missing saved credential", http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"chat-a"}]}`))
+		case "/chat/completions":
+			modelCalls.Add(1)
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
 	}))
 	defer upstream.Close()
-	custom := `[{"id":"test","base_url":"` + upstream.URL + `"}]`
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "free-models.json")
+	manifest := `{"schema_version":2,"generated_at":"test","providers":{"groq":{"source_urls":["https://example.com/models"],"models":[{"id":"chat-a","functions":["chat"]}]}}}`
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	custom := `[{"id":"groq","base_url":"` + upstream.URL + `"}]`
 	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
-	registry, _ := provider.NewRegistry(custom, vault.Get)
+	registry, err := provider.NewRegistryWithManifest(custom, provider.DefaultEnvMap(), manifestPath, vault.Get)
+	if err != nil {
+		t.Fatal(err)
+	}
 	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	if err := models.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
-	handler := New(routes, models, vault, health.New(), Config{}, func(map[string][]string) (func(), error) { return nil, registry.Reload(custom, vault.Get) })
-	request := httptest.NewRequest(http.MethodPost, "/admin/api/credentials", bytes.NewBufferString(`{"provider":"test","api_key":"secret"}`))
+	tracker := health.New()
+	handler := New(routes, models, vault, tracker, Config{FreeModels: manifestPath}, func(map[string][]string) (func(), error) {
+		return nil, registry.ReloadWithManifest(custom, provider.DefaultEnvMap(), manifestPath, vault.Get)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/admin/api/credentials", bytes.NewBufferString(`{"provider":"groq","api_key":"secret"}`))
 	request.RemoteAddr = "127.0.0.1:1234"
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
-		close(release)
-		t.Fatalf("save waited for or failed with provider network: status=%d body=%s", recorder.Code, recorder.Body.String())
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	select {
-	case <-started:
-		close(release)
-		t.Fatal("credential save contacted the Provider model catalog")
-	case <-time.After(100 * time.Millisecond):
+	var result struct {
+		Validation struct {
+			OK            bool `json:"ok"`
+			FormulaModels int  `json:"formula_models"`
+		} `json:"validation"`
+		ModelProbeStarted bool `json:"model_probe_started"`
 	}
-	close(release)
-	if len(models.Models()) != 0 {
-		t.Fatal("models were discovered outside the Formula")
+	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.Validation.OK || result.Validation.FormulaModels != 1 || !result.ModelProbeStarted {
+		t.Fatalf("save result=%#v body=%s", result, recorder.Body.String())
+	}
+	deadline := time.Now().Add(time.Second)
+	for handler.probes.Snapshot().Status == "running" && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	states := tracker.Snapshot()
+	if modelCalls.Load() != 1 || len(states) != 1 || states[0].Status != health.StatusHealthy {
+		t.Fatalf("model_calls=%d health=%#v", modelCalls.Load(), states)
+	}
+
+	stateRequest := httptest.NewRequest(http.MethodGet, "/admin/api/state", nil)
+	stateRequest.RemoteAddr = "127.0.0.1:1234"
+	stateRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(stateRecorder, stateRequest)
+	if stateRecorder.Code != http.StatusOK || !strings.Contains(stateRecorder.Body.String(), `"connection_status":"healthy"`) {
+		t.Fatalf("provider state was not updated: status=%d body=%s", stateRecorder.Code, stateRecorder.Body.String())
+	}
+}
+
+func TestCredentialSaveKeepsInvalidKeyAndMarksProviderModelsFailed(t *testing.T) {
+	for _, key := range provider.SupportedKeyEnvs() {
+		t.Setenv(key, "")
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":{"message":"invalid key"}}`, http.StatusUnauthorized)
+	}))
+	defer upstream.Close()
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "free-models.json")
+	manifest := `{"schema_version":2,"generated_at":"test","providers":{"groq":{"source_urls":["https://example.com/models"],"models":[{"id":"chat-a","functions":["chat"]}]}}}`
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	custom := `[{"id":"groq","base_url":"` + upstream.URL + `"}]`
+	vault := credentials.NewFileOnly(filepath.Join(dir, "credentials.json"))
+	registry, err := provider.NewRegistryWithManifest(custom, provider.DefaultEnvMap(), manifestPath, vault.Get)
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := catalog.New(registry, filepath.Join(dir, "models.json"), upstream.Client())
+	if err := models.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	routes, _ := routing.New(filepath.Join(dir, "config.json"))
+	tracker := health.New()
+	handler := New(routes, models, vault, tracker, Config{FreeModels: manifestPath}, func(map[string][]string) (func(), error) {
+		return nil, registry.ReloadWithManifest(custom, provider.DefaultEnvMap(), manifestPath, vault.Get)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/admin/api/credentials", bytes.NewBufferString(`{"provider":"groq","api_key":"bad-key"}`))
+	request.RemoteAddr = "127.0.0.1:1234"
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"ok":false`) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if saved, _ := vault.Get("groq"); saved != "bad-key" {
+		t.Fatalf("saved key=%q", saved)
+	}
+	states := tracker.Snapshot()
+	if len(states) != 1 || states[0].Status != health.StatusOpen || states[0].LastStatus != http.StatusUnauthorized {
+		t.Fatalf("health=%#v", states)
 	}
 }
 

@@ -437,6 +437,31 @@ function ProviderCard({ provider, modelCount, saved, refresh, toast }: { provide
     } finally { setBusy('') }
   }
   const login = async () => { setBusy('oauth'); try { const result = await api.startOpenRouterOAuth(); window.location.assign(result.authorization_url) } catch (error) { toast({ message: (error as Error).message, error: true }); setBusy('') } }
+  const saveCredential = async () => {
+    setBusy('save')
+    setCredentialResult(null)
+    try {
+      const result = await api.saveCredential(provider.id, key)
+      const validation = result.validation
+      if (validation.ok) {
+        const message = `${provider.id} 凭据已保存，连接校验通过${result.model_probe_started ? '，正在更新模型状态' : ''}`
+        setProbe({ status: 'healthy', models: validation.formula_models, latency: validation.latency_ms })
+        setCredentialResult({ ok: true, message })
+        toast({ message })
+        setKey('')
+      } else {
+        const message = `凭据已保存，但连接校验失败：${validation.error || '未知错误'}`
+        setProbe({ status: 'error', message: validation.error })
+        setCredentialResult({ ok: false, message })
+        toast({ message, error: true })
+      }
+      refresh()
+    } catch (error) {
+      const message = (error as Error).message
+      setCredentialResult({ ok: false, message })
+      toast({ message, error: true })
+    } finally { setBusy('') }
+  }
   const testConnection = async () => {
     setBusy('test')
     try {
@@ -453,16 +478,17 @@ function ProviderCard({ provider, modelCount, saved, refresh, toast }: { provide
   const missingRequired = provider.missing_required || []
   const source = provider.matched_env || (provider.source === 'saved' ? '安全存储' : '—')
   const placeholder = provider.envs?.length ? provider.envs.join(' / ') : 'API Key'
-  const state = !provider.configured ? 'inactive' : probe?.status === 'error' ? 'error' : probe?.status === 'healthy' ? (Number(probe.models) > 0 ? 'available' : 'pending') : modelCount > 0 ? 'available' : 'pending'
+  const connection = probe || (provider.connection_status ? { status: provider.connection_status, models: provider.connection_formula_models, latency: provider.connection_latency_ms, message: provider.connection_error } : null)
+  const state = !provider.configured ? 'inactive' : connection?.status === 'error' ? 'error' : connection?.status === 'healthy' ? (Number(connection.models) > 0 ? 'available' : 'pending') : modelCount > 0 ? 'available' : 'pending'
   const formulaModelCount = provider.formula_model_count || 0
   const discoveryLabels: Record<string, string> = { ready: '已收录可用免费模型', 'confirmed-empty': '确认暂无符合条件的免费模型', 'discovery-failed': '最近一次模型核实失败', 'validation-failed': '维护结果未通过校验', 'verification-failed': '免费属性尚未确认', 'awaiting-approval': '候选模型等待维护者确认', 'awaiting-discovery': '清单尚未收录免费模型', 'manifest-error': '模型清单读取失败' }
   const discoveryTitle = discoveryLabels[provider.discovery_status || ''] || '发现状态未知'
   const discoveryDetail = provider.discovery_message || '清单尚未记录详细维护说明'
   const stateTitle = state === 'available' ? '服务可用' : state === 'pending' ? (formulaModelCount > 0 ? '当前模型已隔离' : discoveryTitle) : state === 'error' ? '连接异常' : '尚未接入'
-  const stateDetail = probe?.status === 'healthy' ? `${probe.models} 个清单模型仍在上游目录 · ${probe.latency}ms` : probe?.status === 'error' ? '最近一次连接测试失败' : state === 'available' ? '清单模型已缓存，可参与路由' : state === 'pending' ? (formulaModelCount > 0 ? '清单有模型，但本机调用失败后已从缓存隔离' : discoveryDetail) : formulaModelCount > 0 ? `清单已维护 ${formulaModelCount} 个模型，配置凭据后可调用` : discoveryDetail
+  const stateDetail = connection?.status === 'healthy' ? `${connection.models} 个清单模型仍在上游目录 · ${connection.latency}ms` : connection?.status === 'error' ? '最近一次连接测试失败' : state === 'available' ? '清单模型已缓存，可参与路由' : state === 'pending' ? (formulaModelCount > 0 ? '清单有模型，但本机调用失败后已从缓存隔离' : discoveryDetail) : formulaModelCount > 0 ? `清单已维护 ${formulaModelCount} 个模型，配置凭据后可调用` : discoveryDetail
   return <article className={cx('provider-card', state)}>
     <div className="provider-card-head"><div className="provider-logo">{provider.id.slice(0, 2).toUpperCase()}</div><div><h3>{provider.id}</h3><p>{provider.tier}</p></div><StatusBadge status={provider.configured ? 'configured' : 'missing'} /></div>
-    <div className={cx('provider-runtime', state)}><div className="provider-runtime-icon">{state === 'available' ? <Check size={17} /> : state === 'error' ? <AlertTriangle size={17} /> : state === 'pending' ? <RefreshCw size={17} /> : <Unplug size={17} />}</div><div><span>运行状态</span><strong>{stateTitle}</strong><small title={probe?.message}>{stateDetail}</small></div><div className="provider-model-count"><strong>{modelCount}</strong><span>缓存模型</span></div></div>
+    <div className={cx('provider-runtime', state)}><div className="provider-runtime-icon">{state === 'available' ? <Check size={17} /> : state === 'error' ? <AlertTriangle size={17} /> : state === 'pending' ? <RefreshCw size={17} /> : <Unplug size={17} />}</div><div><span>运行状态</span><strong>{stateTitle}</strong><small title={connection?.message}>{stateDetail}</small></div><div className="provider-model-count"><strong>{modelCount}</strong><span>缓存模型</span></div></div>
     <div className="provider-discovery"><div><span>免费模型清单</span><strong>{formulaModelCount > 0 ? `${formulaModelCount} 个模型 · ${discoveryTitle}` : discoveryTitle}</strong><small title={discoveryDetail}>{discoveryDetail}</small></div><small title={provider.free_basis}>{provider.manifest_generated_at ? `清单 ${formatDate(provider.manifest_generated_at)}` : '未加载模型清单'}</small></div>
     <div className="provider-credential-head"><div><span>凭据配置</span><strong>{provider.configured ? '已设置' : '未设置'}</strong></div><small title={source}>来源：{source}</small></div>
     {provider.manifest_error && <div className="provider-warning"><AlertTriangle size={14} />模型清单错误：{provider.manifest_error}</div>}
@@ -470,7 +496,7 @@ function ProviderCard({ provider, modelCount, saved, refresh, toast }: { provide
     {provider.billing_warning && <div className="provider-warning"><AlertTriangle size={14} />{provider.billing_warning}</div>}
     <div className="credential-input"><input type={visible ? 'text' : 'password'} value={key} onChange={event => setKey(event.target.value)} placeholder={provider.configured ? '输入新 Key 可替换当前凭据' : `粘贴 ${placeholder}`} autoComplete="new-password" /><button onClick={() => setVisible(value => !value)} aria-label={visible ? '隐藏密钥' : '显示密钥'}>{visible ? <EyeOff size={16} /> : <Eye size={16} />}</button></div>
     {credentialResult && <div className={cx('credential-result', credentialResult.ok ? 'success' : 'error')} role="status">{credentialResult.ok ? <Check size={13} /> : <AlertTriangle size={13} />}<span>{credentialResult.message}</span></div>}
-    <div className="provider-actions">{provider.oauth && <button className="button small" disabled={Boolean(busy)} onClick={login}><LogIn size={14} />{busy === 'oauth' ? '跳转中…' : provider.configured ? '重新登录' : 'OAuth 登录'}</button>}<button className={cx('button small', provider.oauth && 'secondary')} disabled={!key || Boolean(busy)} onClick={() => run('save', () => api.saveCredential(provider.id, key), `${provider.id} 凭据已保存并热加载`)}>{busy === 'save' ? '保存中…' : provider.configured ? '更新 Key' : '保存凭据'}</button>{provider.configured && <button className="button secondary small" disabled={Boolean(busy)} onClick={testConnection}>{busy === 'test' ? '测试中…' : '测试连接'}</button>}{provider.register_url && <a className="button secondary small provider-register" href={provider.register_url} target="_blank" rel="noreferrer">{provider.register_label || '获取 Key'}<ExternalLink size={14} /></a>}{saved && <IconButton label="删除保存的凭据" disabled={Boolean(busy)} onClick={() => run('delete', () => api.deleteCredential(provider.id), `${provider.id} 凭据已删除`)}><Trash2 size={15} /></IconButton>}</div>
+    <div className="provider-actions">{provider.oauth && <button className="button small" disabled={Boolean(busy)} onClick={login}><LogIn size={14} />{busy === 'oauth' ? '跳转中…' : provider.configured ? '重新登录' : 'OAuth 登录'}</button>}<button className={cx('button small', provider.oauth && 'secondary')} disabled={!key || Boolean(busy)} onClick={saveCredential}>{busy === 'save' ? '保存并校验中…' : provider.configured ? '更新 Key' : '保存凭据'}</button>{provider.configured && <button className="button secondary small" disabled={Boolean(busy)} onClick={testConnection}>{busy === 'test' ? '测试中…' : '测试连接'}</button>}{provider.register_url && <a className="button secondary small provider-register" href={provider.register_url} target="_blank" rel="noreferrer">{provider.register_label || '获取 Key'}<ExternalLink size={14} /></a>}{saved && <IconButton label="删除保存的凭据" disabled={Boolean(busy)} onClick={() => run('delete', () => api.deleteCredential(provider.id), `${provider.id} 凭据已删除`)}><Trash2 size={15} /></IconButton>}</div>
   </article>
 }
 

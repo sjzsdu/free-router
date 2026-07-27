@@ -32,6 +32,6 @@ export const api = {
   probeModelHealth: (model: string, allowExpensive = false) => request<HealthProbeStatus>('health/probe/model', { method: 'POST', body: JSON.stringify({ model, allow_expensive: allowExpensive }) }),
   testProvider: (provider: string) => request<{ ok: boolean; provider: string; formula_models: number; latency_ms: number }>(`providers/${encodeURIComponent(provider)}/test`, { method: 'POST' }),
   startOpenRouterOAuth: () => request<{ provider: string; authorization_url: string }>('oauth/openrouter/start', { method: 'POST' }),
-  saveCredential: (provider: string, apiKey: string) => request<{ saved: boolean; backend: string }>('credentials', { method: 'POST', body: JSON.stringify({ provider, api_key: apiKey }) }, 20_000),
+  saveCredential: (provider: string, apiKey: string) => request<{ saved: boolean; backend: string; model_probe_started: boolean; validation: { ok: boolean; provider: string; formula_models?: number; latency_ms: number; error?: string } }>('credentials', { method: 'POST', body: JSON.stringify({ provider, api_key: apiKey }) }, 20_000),
   deleteCredential: (provider: string) => request<{ removed: boolean }>(`credentials/${encodeURIComponent(provider)}`, { method: 'DELETE' }),
 }

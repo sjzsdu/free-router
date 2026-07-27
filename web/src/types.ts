@@ -77,6 +77,11 @@ export interface ProviderStatus {
   register_url?: string
   register_label?: string
   oauth?: boolean
+  connection_status?: 'healthy' | 'error'
+  connection_formula_models?: number
+  connection_latency_ms?: number
+  connection_error?: string
+  connection_checked_at?: string
 }
 
 export interface Credential { provider: string; backend?: string }
