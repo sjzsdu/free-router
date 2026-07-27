@@ -14,7 +14,7 @@ import (
 
 const (
 	healthProbeTTL         = 24 * time.Hour
-	healthProbeConcurrency = 3
+	healthProbeConcurrency = 8
 	healthProbeTimeout     = 10 * time.Second
 	expensiveProbeTimeout  = 2 * time.Minute
 )

@@ -40,7 +40,7 @@ const pageInfo: Record<Page, { title: string; subtitle: string }> = {
   overview: { title: '运行概览', subtitle: '服务、模型目录和路由健康状态' },
   routes: { title: '路由策略', subtitle: '配置固定能力名称的 fallback 优先级' },
   models: { title: '模型目录', subtitle: '浏览缓存模型、能力元数据和健康状态' },
-  providers: { title: '免费源', subtitle: '分别查看 Formula 可信目录、凭据和连接状态' },
+  providers: { title: '免费源', subtitle: '分别查看免费模型清单、凭据和连接状态' },
   system: { title: '系统状态', subtitle: '查看守护进程、缓存和本地配置位置' },
 }
 
@@ -83,7 +83,22 @@ function effectiveModel(model: Model, config: RouterConfig): EffectiveModel {
 const healthKey = (model: string, capability: string) => `${model}\u0000${capability}`
 const modelHealth = (model: EffectiveModel, healthMap: Map<string, HealthState>): HealthState | undefined => {
   const states = model.route_types.map(capability => healthMap.get(healthKey(model.id, capability))).filter(Boolean) as HealthState[]
-  return states.find(item => item.status === 'failed') || (states.length && states.every(item => item.status === 'healthy') ? states[0] : undefined)
+  const priority: HealthState['status'][] = ['open', 'cooling', 'degraded', 'half-open', 'unknown']
+  for (const status of priority) {
+    const matched = states.find(item => item.status === status)
+    if (matched) return matched
+  }
+  return states.length === model.route_types.length && states.every(item => item.status === 'healthy') ? states[0] : undefined
+}
+
+type ModelDisplayStatus = HealthState['status'] | 'configured' | 'missing' | 'manual'
+
+function modelDisplayStatus(model: EffectiveModel, healthMap: Map<string, HealthState>, configuredProviders: Set<string>): ModelDisplayStatus {
+  const health = modelHealth(model, healthMap)
+  if (health) return health.status
+  if (!configuredProviders.has(model.provider)) return 'missing'
+  if (model.route_types.some(item => item === 'image-generation' || item === 'video-generation')) return 'manual'
+  return 'unknown'
 }
 
 function formatNumber(value?: number) { return Number(value || 0).toLocaleString() }
@@ -102,8 +117,19 @@ function IconButton({ label, children, onClick, disabled }: { label: string; chi
   return <Tooltip.Root><Tooltip.Trigger asChild><button className="icon-button" aria-label={label} onClick={onClick} disabled={disabled}>{children}</button></Tooltip.Trigger><Tooltip.Portal><Tooltip.Content className="tooltip" sideOffset={7}>{label}<Tooltip.Arrow className="tooltip-arrow" /></Tooltip.Content></Tooltip.Portal></Tooltip.Root>
 }
 
-function StatusBadge({ status }: { status: HealthState['status'] | 'configured' | 'missing' }) {
-  const labels: Record<string, string> = { healthy: '健康', failed: '故障 · 已隔离', unknown: '未测试', configured: '已配置', missing: '未配置' }
+function StatusBadge({ status }: { status: ModelDisplayStatus | 'failed' }) {
+  const labels: Record<ModelDisplayStatus | 'failed', string> = {
+    healthy: '健康',
+    degraded: '降级',
+    open: '故障 · 熔断',
+    'half-open': '恢复检测中',
+    cooling: '限流冷却中',
+    unknown: '尚未测试',
+    configured: '已配置',
+    missing: 'Provider 未配置',
+    manual: '需手动检测',
+    failed: '故障',
+  }
   return <span className={`status-badge ${status}`}><span />{labels[status] || status}</span>
 }
 
@@ -214,7 +240,7 @@ function App() {
       <div className="page-content">
         {page === 'overview' && <Overview state={state} runtime={runtime} models={models} healthMap={healthMap} navigate={setPage} />}
         {page === 'routes' && <RoutesPage config={draft} setConfig={setDraft} models={models} healthMap={healthMap} />}
-        {page === 'models' && <ModelsPage config={draft} setConfig={setDraft} models={models} healthMap={healthMap} probe={state.health_probe} />}
+        {page === 'models' && <ModelsPage config={draft} setConfig={setDraft} models={models} healthMap={healthMap} probe={state.health_probe} providers={state.providers} />}
         {page === 'providers' && <ProvidersPage state={state} onToast={setToast} />}
         {page === 'system' && <SystemPage state={state} runtime={runtime} offline={runtimeQuery.isError} />}
       </div>
@@ -249,7 +275,7 @@ function Overview({ state, runtime, models, healthMap, navigate }: { state: AppS
   const healthy = models.filter(model => modelHealth(model, healthMap)?.status === 'healthy').length
   const requests = state.summary.requests || 0
   const successRate = requests ? Math.round((state.summary.successes / requests) * 100) : null
-  const incidents = state.health.filter(item => item.status === 'failed').sort((a, b) => (b.last_used_at || '').localeCompare(a.last_used_at || '')).slice(0, 5)
+  const incidents = state.health.filter(item => item.status !== 'healthy' && item.status !== 'unknown').sort((a, b) => (b.last_used_at || '').localeCompare(a.last_used_at || '')).slice(0, 5)
   return <div className="stack-xl">
     <section className="metrics-grid">
       <MetricCard icon={<Bot size={19} />} label="缓存模型" value={models.length} note={`${healthy} 个已验证健康`} tone="green" />
@@ -292,7 +318,10 @@ function RoutesPage({ config, setConfig, models, healthMap }: { config: RouterCo
   const route = config.routes[selected]
   const modelMap = new Map(models.map(model => [model.id, model]))
   const eligible = models.filter(model => !model.disabled && model.route_types.includes(route.capability))
-  const routable = eligible.filter(model => healthMap.get(healthKey(model.id, route.capability))?.status !== 'failed')
+  const routable = eligible.filter(model => {
+    const status = healthMap.get(healthKey(model.id, route.capability))?.status
+    return status !== 'open' && status !== 'cooling'
+  })
   const providers = [...new Set(routable.map(model => model.provider))].sort()
   const candidates = routable.filter(model => !route.models.includes(model.id) && (!provider || model.provider === provider) && (!search || `${model.id} ${model.name || ''}`.toLowerCase().includes(search.toLowerCase())))
 
@@ -335,7 +364,7 @@ function SortableModel({ id, index, model, health, remove }: { id: string; index
   </div>
 }
 
-function ModelsPage({ config, setConfig, models, healthMap, probe }: { config: RouterConfig; setConfig: (config: RouterConfig) => void; models: EffectiveModel[]; healthMap: Map<string, HealthState>; probe: HealthProbeStatus }) {
+function ModelsPage({ config, setConfig, models, healthMap, probe, providers: providerStatuses }: { config: RouterConfig; setConfig: (config: RouterConfig) => void; models: EffectiveModel[]; healthMap: Map<string, HealthState>; probe: HealthProbeStatus; providers: ProviderStatus[] }) {
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [type, setType] = useState('')
@@ -347,16 +376,17 @@ function ModelsPage({ config, setConfig, models, healthMap, probe }: { config: R
   const modelProbeMutation = useMutation({ mutationFn: ({ model, allowExpensive }: { model: string; allowExpensive: boolean }) => api.probeModelHealth(model, allowExpensive), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['state'] }) })
   useEffect(() => { probeMutation.mutate(false) }, [])
   const providers = [...new Set(models.map(model => model.provider))].sort()
-  const filtered = models.filter(model => (!search || `${model.id} ${model.name || ''}`.toLowerCase().includes(search.toLowerCase())) && (!type || model.route_types.includes(type as RouteType)) && (!provider || model.provider === provider) && (!health || (modelHealth(model, healthMap)?.status || 'unknown') === health))
+  const configuredProviders = new Set(providerStatuses.filter(item => item.configured).map(item => item.id))
+  const filtered = models.filter(model => (!search || `${model.id} ${model.name || ''}`.toLowerCase().includes(search.toLowerCase())) && (!type || model.route_types.includes(type as RouteType)) && (!provider || model.provider === provider) && (!health || modelDisplayStatus(model, healthMap, configuredProviders) === health))
   const updateOverride = (id: string, patch: Partial<ModelOverride>) => {
     const next = cloneConfig(config); next.models[id] = { ...(next.models[id] || {}), ...patch }; setConfig(next)
     setSelected(previous => previous?.id === id ? effectiveModel(models.find(model => model.id === id)!, next) : previous)
   }
   const progress = probe.total ? Math.round((probe.completed / probe.total) * 100) : 100
   return <div className="stack-lg">
-    <section className={cx('probe-panel panel', probe.status === 'running' && 'running')}><div className="probe-icon"><Activity size={19} /></div><div className="probe-copy"><div><strong>{probe.status === 'running' ? '正在检测模型可用性' : '模型可用性检测'}</strong><span>{probe.status === 'running' ? `${probe.completed} / ${probe.total}` : '失败模型立即从缓存淘汰'}</span></div><p>{probe.status === 'running' ? `健康 ${probe.healthy} · 淘汰 ${probe.failed} · 每个 Provider 串行检测` : probe.finished_at ? `上次完成：${formatDate(probe.finished_at)} · 健康 ${probe.healthy} · 淘汰 ${probe.failed} · 跳过 ${probe.skipped}` : '进入页面时检测 Formula 准入模型；任一能力失败会删除整个模型，Image、Video 可能消耗少量免费额度。'}</p>{probe.status === 'running' && <div className="probe-progress"><span style={{ width: `${progress}%` }} /></div>}</div><button className="button secondary compact" disabled={probe.status === 'running' || probeMutation.isPending} onClick={() => { if (!window.confirm('将检测全部 Formula 准入模型；任一能力失败会从缓存删除整个模型，Image、Video 可能消耗少量免费额度。确认继续？')) return; probeMutation.mutate(true) }}><RefreshCw size={16} className={probe.status === 'running' ? 'spin' : ''} />{probe.status === 'running' ? '检测中' : '重新检测全部'}</button></section>
-    <section className="model-toolbar panel"><label className="search-field large"><Search size={17} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索模型 ID、名称或组织" /></label><div className="filter-row"><select value={type} onChange={event => setType(event.target.value)}><option value="">全部类型</option>{Object.keys(routeLabels).map(item => <option key={item}>{item}</option>)}</select><select value={provider} onChange={event => setProvider(event.target.value)}><option value="">全部 Provider</option>{providers.map(item => <option key={item}>{item}</option>)}</select><select value={health} onChange={event => setHealth(event.target.value)}><option value="">全部健康状态</option><option value="failed">故障（已隔离）</option><option value="healthy">健康</option><option value="unknown">未测试</option></select></div><div className="result-count"><strong>{filtered.length}</strong><span>个模型</span></div></section>
-    <section className="model-table panel"><div className="model-table-head"><span>模型</span><span>功能路由</span><span>能力</span><span>健康</span><span>Context</span><span /></div><div className="model-table-body">{filtered.map(model => { const health = modelHealth(model, healthMap); const expensive = model.route_types.some(item => item === 'image-generation' || item === 'video-generation'); return <button className={cx('model-table-row', model.disabled && 'disabled')} key={model.id} onClick={() => setSelected(model)}><div className="model-identity"><div className="provider-avatar">{model.provider.slice(0, 2).toUpperCase()}</div><div><strong>{model.id}</strong><small>{model.name || model.upstream_id}</small></div></div><div className="pill-row">{model.route_types.map(item => <span key={item} className="route-pill">{item}</span>)}</div><CapabilityPills model={model} /><div className="model-health"><StatusBadge status={health?.status || 'unknown'} />{!health && expensive && <small>待最小任务检测</small>}</div><span className="context-cell">{model.context_length ? formatNumber(model.context_length) : '—'}</span><ChevronRight size={16} /></button> })}</div></section>
+    <section className={cx('probe-panel panel', probe.status === 'running' && 'running')}><div className="probe-icon"><Activity size={19} /></div><div className="probe-copy"><div><strong>{probe.status === 'running' ? '正在检测模型可用性' : '模型可用性检测'}</strong><span>{probe.status === 'running' ? `${probe.completed} / ${probe.total}` : '检测结果会更新模型健康状态'}</span></div><p>{probe.status === 'running' ? `健康 ${probe.healthy} · 失败 ${probe.failed} · 8 路并发、同 Provider 串行` : probe.finished_at ? `上次完成：${formatDate(probe.finished_at)} · 健康 ${probe.healthy} · 失败 ${probe.failed} · 跳过 ${probe.skipped}` : '进入页面时检测已配置 Provider 的清单模型；图片和视频生成需手动确认。'}</p>{probe.status === 'running' && <div className="probe-progress"><span style={{ width: `${progress}%` }} /></div>}</div><button className="button secondary compact" disabled={probe.status === 'running' || probeMutation.isPending} onClick={() => { if (!window.confirm('将检测所有已配置 Provider 的清单模型；图片和视频生成仍需逐个确认。确认继续？')) return; probeMutation.mutate(true) }}><RefreshCw size={16} className={probe.status === 'running' ? 'spin' : ''} />{probe.status === 'running' ? '检测中' : '重新检测全部'}</button></section>
+    <section className="model-toolbar panel"><label className="search-field large"><Search size={17} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索模型 ID、名称或组织" /></label><div className="filter-row"><select value={type} onChange={event => setType(event.target.value)}><option value="">全部类型</option>{Object.keys(routeLabels).map(item => <option key={item}>{item}</option>)}</select><select value={provider} onChange={event => setProvider(event.target.value)}><option value="">全部 Provider</option>{providers.map(item => <option key={item}>{item}</option>)}</select><select value={health} onChange={event => setHealth(event.target.value)}><option value="">全部检测状态</option><option value="healthy">健康</option><option value="degraded">降级</option><option value="half-open">恢复检测中</option><option value="open">故障 · 熔断</option><option value="cooling">限流冷却中</option><option value="missing">Provider 未配置</option><option value="manual">需手动检测</option><option value="unknown">尚未测试</option></select></div><div className="result-count"><strong>{filtered.length}</strong><span>个模型</span></div></section>
+    <section className="model-table panel"><div className="model-table-head"><span>模型</span><span>功能路由</span><span>能力</span><span>健康</span><span>Context</span><span /></div><div className="model-table-body">{filtered.map(model => { const health = modelHealth(model, healthMap); const displayStatus = modelDisplayStatus(model, healthMap, configuredProviders); return <button className={cx('model-table-row', model.disabled && 'disabled')} key={model.id} onClick={() => setSelected(model)}><div className="model-identity"><div className="provider-avatar">{model.provider.slice(0, 2).toUpperCase()}</div><div><strong>{model.id}</strong><small>{model.name || model.upstream_id}</small></div></div><div className="pill-row">{model.route_types.map(item => <span key={item} className="route-pill">{item}</span>)}</div><CapabilityPills model={model} /><div className="model-health"><StatusBadge status={displayStatus} />{displayStatus === 'missing' && <small>配置凭据后检测</small>}{displayStatus === 'manual' && <small>打开详情手动检测</small>}{health?.last_check_latency_ms ? <small>{Math.round(health.last_check_latency_ms)}ms</small> : null}</div><span className="context-cell">{model.context_length ? formatNumber(model.context_length) : '—'}</span><ChevronRight size={16} /></button> })}</div></section>
     <ModelDrawer model={selected} health={selected ? modelHealth(selected, healthMap) : undefined} healthStates={selected ? selected.route_types.map(item => healthMap.get(healthKey(selected.id, item))).filter(Boolean) as HealthState[] : []} override={selected ? config.models[selected.id] || {} : {}} close={() => setSelected(null)} update={updateOverride} reset={() => selected && resetMutation.mutate(selected.id)} resetting={resetMutation.isPending} probe={() => { if (!selected) return; const expensive = selected.route_types.some(item => item === 'image-generation' || item === 'video-generation'); if (expensive && !window.confirm('该检测会创建真实的图像或视频任务，可能消耗免费额度。确认继续？')) return; modelProbeMutation.mutate({ model: selected.id, allowExpensive: expensive }) }} probing={probe.status === 'running' || modelProbeMutation.isPending} />
   </div>
 }
@@ -368,7 +398,7 @@ function ModelDrawer({ model, health, healthStates, override, close, update, res
     {health?.last_error && <div className="drawer-alert"><AlertTriangle size={17} /><div><strong>最近一次错误</strong><p>{friendlyError(health.last_status, health.last_error)}</p></div></div>}
     <div className="detail-section"><h3>能力与上下文</h3><div className="detail-grid"><div><span>功能数量</span><strong>{model.route_types.length}</strong></div><div><span>Context</span><strong>{model.context_length ? formatNumber(model.context_length) : '未知'}</strong></div><div><span>最大输出</span><strong>{model.max_output_tokens ? formatNumber(model.max_output_tokens) : '未知'}</strong></div><div><span>平均延迟</span><strong>{health?.average_latency_ms ? `${Math.round(health.average_latency_ms)}ms` : '尚无数据'}</strong></div></div><div className="function-health-list">{model.route_types.map(item => { const state = healthStates.find(healthState => healthState.capability === item); return <div key={item}><div><strong>{routeLabels[item].title}</strong><small>{item}</small></div><StatusBadge status={state?.status || 'unknown'} /></div> })}</div><CapabilityPills model={model} /></div>
     <div className="detail-section"><h3>人工覆盖</h3><p className="section-help">上游元数据不准确时，可让一个模型参与多个固定功能路由；如需全部移除请直接禁用模型。</p><div className="function-override-head"><span>功能集合</span><button className="text-button" onClick={() => update(model.id, { functions: undefined })}>恢复自动识别</button></div><div className="function-override-grid">{routeOrder.map(item => { const selected = (override.functions || model.route_types).includes(item); return <button key={item} className={selected ? 'active' : ''} onClick={() => { const current = [...(override.functions || model.route_types)]; update(model.id, { functions: selected && current.length > 1 ? current.filter(value => value !== item) : selected ? current : [...current, item] }) }}><Check size={13} />{routeLabels[item].title}</button> })}</div><div className="toggle-list"><OverrideToggle label="Tool call" value={override.tool_call} onChange={value => update(model.id, { tool_call: value })} /><OverrideToggle label="Vision" value={override.vision} onChange={value => update(model.id, { vision: value })} /><OverrideToggle label="Reasoning" value={override.reasoning} onChange={value => update(model.id, { reasoning: value })} /></div></div>
-    <div className="drawer-footer"><button className="button secondary full" onClick={probe} disabled={probing || model.disabled}><Activity size={16} />{probing ? '检测任务运行中…' : model.route_types.some(item => item === 'image-generation' || item === 'video-generation') ? '检测全部功能（可能消耗额度）' : '检测此模型的全部功能'}</button>{health?.status === 'failed' && <button className="button secondary full" onClick={reset} disabled={resetting}><RefreshCw size={16} />{resetting ? '恢复中…' : '重置全部功能健康状态'}</button>}<button className={cx('button full', model.disabled ? '' : 'danger-button')} onClick={() => update(model.id, { disabled: !model.disabled })}>{model.disabled ? <><Eye size={16} />重新启用模型</> : <><EyeOff size={16} />禁用这个模型</>}</button></div>
+    <div className="drawer-footer"><button className="button secondary full" onClick={probe} disabled={probing || model.disabled}><Activity size={16} />{probing ? '检测任务运行中…' : model.route_types.some(item => item === 'image-generation' || item === 'video-generation') ? '检测全部功能（可能消耗额度）' : '检测此模型的全部功能'}</button>{health && health.status !== 'healthy' && health.status !== 'unknown' && <button className="button secondary full" onClick={reset} disabled={resetting}><RefreshCw size={16} />{resetting ? '恢复中…' : '重置全部功能健康状态'}</button>}<button className={cx('button full', model.disabled ? '' : 'danger-button')} onClick={() => update(model.id, { disabled: !model.disabled })}>{model.disabled ? <><Eye size={16} />重新启用模型</> : <><EyeOff size={16} />禁用这个模型</>}</button></div>
   </>}</Dialog.Content></Dialog.Portal></Dialog.Root>
 }
 

@@ -353,6 +353,80 @@ func TestModelHealthProbeUses24HourCacheAndSupportsForce(t *testing.T) {
 	}
 }
 
+func TestHealthProbeRunsEightProvidersConcurrently(t *testing.T) {
+	for _, key := range provider.SupportedKeyEnvs() {
+		t.Setenv(key, "")
+	}
+	var active atomic.Int64
+	var maximum atomic.Int64
+	allStarted := make(chan struct{})
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/models") {
+			_, _ = w.Write([]byte(`{"data":[{"id":"chat-model"}]}`))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			current := active.Add(1)
+			for {
+				previous := maximum.Load()
+				if current <= previous || maximum.CompareAndSwap(previous, current) {
+					break
+				}
+			}
+			if current == healthProbeConcurrency {
+				close(allStarted)
+			}
+			<-release
+			active.Add(-1)
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer upstream.Close()
+
+	customProviders := make([]map[string]any, 0, healthProbeConcurrency)
+	for index := range healthProbeConcurrency {
+		customProviders = append(customProviders, map[string]any{
+			"id":       fmt.Sprintf("provider-%d", index),
+			"base_url": fmt.Sprintf("%s/provider-%d", upstream.URL, index),
+			"no_auth":  true,
+		})
+	}
+	customJSON, err := json.Marshal(customProviders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := provider.NewRegistry(string(customJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	discoverModelsForTest(t, models)
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	handler := New(routes, models, credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json")), health.New(), Config{}, nil)
+
+	status, started := handler.probes.Start(handler, true)
+	if !started || status.Total != healthProbeConcurrency {
+		t.Fatalf("started=%t status=%#v", started, status)
+	}
+	select {
+	case <-allStarted:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatalf("only %d probes ran concurrently, want %d", maximum.Load(), healthProbeConcurrency)
+	}
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for handler.probes.Snapshot().Status == "running" && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := maximum.Load(); got != healthProbeConcurrency {
+		t.Fatalf("maximum concurrent probes=%d, want %d", got, healthProbeConcurrency)
+	}
+}
+
 func TestExpensiveModelProbeRequiresConfirmation(t *testing.T) {
 	for _, key := range provider.SupportedKeyEnvs() {
 		t.Setenv(key, "")

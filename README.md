@@ -110,7 +110,7 @@ free-router daemon uninstall
 http://localhost:1314/admin/
 ```
 
-可以在网页中直接打开每个免费源的官方注册 / Key 页面，录入 API Key、测试 Provider 连接、查看 Formula 准入模型的健康状态和请求成功率，并拖动配置每条路由的 fallback 顺序。还可以禁用单个模型，或手工覆盖模型的多功能集合、tools、vision、reasoning 能力。配置保存后立即生效；新增或删除凭据也会热加载，但不会绕过 Formula 自动导入 Provider 的 `/models`。
+可以在网页中直接打开每个免费源的官方注册 / Key 页面，录入 API Key、测试 Provider 连接、查看清单模型的健康状态和请求成功率，并拖动配置每条路由的 fallback 顺序。还可以禁用单个模型，或手工覆盖模型的多功能集合、tools、vision、reasoning 能力。配置保存后立即生效；新增或删除凭据也会热加载，运行时不会自动导入 Provider 的 `/models`。
 
 管理界面使用 React、TypeScript、Vite、Tailwind CSS、React Query、Radix UI 和 dnd-kit 构建，生产静态资源会通过 Go Embed 打入同一个二进制。普通用户不需要安装 Node；只有修改管理界面源码时才需要运行：
 
@@ -195,7 +195,7 @@ OPENAI_API_KEY=任意非空字符串
 - 排查完成后可点击“重新加入自动路由”；直接指定完整模型 ID 调用成功也会恢复其健康状态；
 - 健康统计保存在内存中，服务重启后重新统计。
 
-进入 Admin 的模型页时，系统会后台检测状态未知或检测缓存已超过 24 小时的全部“模型 + 能力”组合。文本能力使用 1 token 的最短请求；图片、音频、视频理解分别使用内嵌的 8×8 PNG、0.1 秒 WAV 和极小 MP4；生成能力使用最小真实任务。同一 Provider 串行、全局最多并发 3 个，普通能力单次超时 10 秒，图片/视频生成最长等待 2 分钟。测试素材通过 Go Embed 打入同一个二进制，用户不需要额外维护资源文件。
+进入 Admin 的模型页时，系统会后台检测状态未知或检测缓存已超过 24 小时的全部“模型 + 能力”组合。文本能力使用 1 token 的最短请求；图片、音频、视频理解分别使用内嵌的 8×8 PNG、0.1 秒 WAV 和极小 MP4；生成能力使用最小真实任务。同一 Provider 串行、不同 Provider 全局最多并发 8 个，普通能力单次超时 10 秒，图片/视频生成最长等待 2 分钟。测试素材通过 Go Embed 打入同一个二进制，用户不需要额外维护资源文件。
 
 检测结果缓存 24 小时；点击“重新检测全部”会在确认后忽略缓存强制重检，图片/视频生成任务可能消耗少量免费额度。Video 接口返回任务已受理即视为探测成功，不等待完整成片。任一能力探测失败都会把整个模型从运行缓存删除；诊断记录仍保留在异常列表中。只有内置免费模型清单发生变化时，本地缓存才会重建。
 
@@ -354,7 +354,7 @@ export FREE_ROUTER_PROVIDERS='[
 }
 ```
 
-免费判断只在 Formula 中完成。运行时 Provider 配置不接受过滤策略，也不会根据 `/models` 或价格字段自行猜测免费模型。
+免费模型由维护者核实后写入内置清单。运行时 Provider 配置不接受过滤策略，也不会根据 `/models` 或价格字段自行猜测免费模型。
 
 ## 命令
 
@@ -365,7 +365,7 @@ free-router serve --addr :9000    # 前台启动服务
 free-router daemon install        # 安装并启动守护进程
 free-router daemon status         # 查看守护进程状态
 free-router providers             # 查看内置源及配置状态
-free-router models                # 输出 Formula 已准入的本地模型
+free-router models                # 输出内置清单已收录的本地模型
 free-router setup groq             # 交互式保存 API Key
 free-router auth add gemini        # 添加或替换凭据
 free-router auth list              # 只显示 provider 和存储后端

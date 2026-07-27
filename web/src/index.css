@@ -180,7 +180,8 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .status-badge { width: max-content; padding: 4px 7px; border-radius: 999px; display: inline-flex; align-items: center; gap: 5px; background: var(--surface-3); color: var(--muted); font-size: 8px; font-weight: 700; white-space: nowrap; }
 .status-badge > span { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .status-badge.healthy, .status-badge.configured { background: var(--accent-soft); color: var(--accent); }
-.status-badge.failed { background: var(--danger-soft); color: var(--danger); }
+.status-badge.open, .status-badge.failed { background: var(--danger-soft); color: var(--danger); }
+.status-badge.degraded, .status-badge.half-open, .status-badge.cooling, .status-badge.manual { background: var(--amber-soft); color: var(--amber); }
 .status-badge.missing { color: var(--subtle); }
 .pill-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
 .capability-pill, .route-pill { padding: 3px 6px; border-radius: 5px; background: var(--surface-3); color: var(--muted); font-size: 8px; font-weight: 700; }
