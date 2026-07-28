@@ -344,6 +344,118 @@ func TestMultipartFailureKeepsModelAndExplicitSuccessRecoversCapability(t *testi
 	}
 }
 
+func TestHalfOpenContentionReturnsUnavailableAndClosesMetrics(t *testing.T) {
+	tests := []struct {
+		name             string
+		upstreamCatalog  string
+		upstreamResponse string
+		modelID          string
+		capability       string
+		requests         func(*testing.T) [2]*http.Request
+	}{
+		{
+			name:             "JSON",
+			upstreamCatalog:  `{"data":[{"id":"chat-a"}]}`,
+			upstreamResponse: `{"choices":[{"message":{"content":"ok"}}]}`,
+			modelID:          "test/chat-a",
+			capability:       catalog.FunctionChat,
+			requests: func(t *testing.T) [2]*http.Request {
+				return [2]*http.Request{
+					httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test/chat-a","messages":[]}`)),
+					httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test/chat-a","messages":[]}`)),
+				}
+			},
+		},
+		{
+			name:             "Multipart",
+			upstreamCatalog:  `{"data":[{"id":"whisper-a","type":"audio","supported_endpoints":["/audio/transcriptions"]}]}`,
+			upstreamResponse: `{"text":"ok"}`,
+			modelID:          "test/whisper-a",
+			capability:       catalog.FunctionSpeechToText,
+			requests: func(t *testing.T) [2]*http.Request {
+				return [2]*http.Request{
+					newMultipartRequest(t, "/v1/audio/transcriptions", "test/whisper-a"),
+					newMultipartRequest(t, "/v1/audio/transcriptions", "test/whisper-a"),
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clearBuiltinKeys(t)
+			upstreamStarted := make(chan struct{}, 1)
+			releaseUpstream := make(chan struct{})
+			var upstreamCalls atomic.Int32
+			client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Path == "/models" {
+					return testResponse(http.StatusOK, test.upstreamCatalog), nil
+				}
+				upstreamCalls.Add(1)
+				upstreamStarted <- struct{}{}
+				<-releaseUpstream
+				return testResponse(http.StatusOK, test.upstreamResponse), nil
+			})}
+			registry, err := provider.NewRegistry(`[{"id":"test","base_url":"https://test.invalid","no_auth":true}]`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), client)
+			discoverModelsForTest(t, store)
+			tracker := health.New()
+			tracker.Failure(test.modelID, test.capability, 0, http.StatusTooManyRequests, "cool down", time.Nanosecond)
+			time.Sleep(time.Millisecond)
+			handler := New(store, registry, Config{Health: tracker}, client)
+
+			candidatesReady := make(chan struct{})
+			var ready atomic.Int32
+			handler.beforeCandidateAcquire = func() {
+				if ready.Add(1) == 2 {
+					close(candidatesReady)
+				}
+				<-candidatesReady
+			}
+
+			requests := test.requests(t)
+			statuses := make(chan int, 2)
+			for _, request := range requests {
+				go func(request *http.Request) {
+					recorder := httptest.NewRecorder()
+					handler.ServeHTTP(recorder, request)
+					statuses <- recorder.Code
+				}(request)
+			}
+
+			select {
+			case <-upstreamStarted:
+			case <-time.After(time.Second):
+				t.Fatal("half-open probe did not reach upstream")
+			}
+			var rejected int
+			select {
+			case rejected = <-statuses:
+			case <-time.After(time.Second):
+				t.Fatal("competing request did not finish")
+			}
+			if rejected != http.StatusServiceUnavailable {
+				t.Fatalf("competing status=%d, want %d", rejected, http.StatusServiceUnavailable)
+			}
+			close(releaseUpstream)
+			if completed := <-statuses; completed != http.StatusOK {
+				t.Fatalf("probe status=%d, want %d", completed, http.StatusOK)
+			}
+
+			metrics := handler.metrics.Snapshot()
+			if upstreamCalls.Load() != 1 {
+				t.Fatalf("upstream calls=%d, want 1", upstreamCalls.Load())
+			}
+			if metrics.Requests != 2 || metrics.Successes != 1 || metrics.Failures != 1 || metrics.Concurrency != 0 {
+				t.Fatalf("metrics=%#v", metrics)
+			}
+		})
+	}
+}
+
 func TestCapabilityAliasMustMatchOpenAIEndpoint(t *testing.T) {
 	clearBuiltinKeys(t)
 	registry, _ := provider.NewRegistry("")

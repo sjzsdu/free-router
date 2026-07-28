@@ -45,6 +45,9 @@ type Gateway struct {
 	apiToken   string
 	limiters   sync.Map
 	metrics    *Metrics
+	// beforeCandidateAcquire is a deterministic test seam for exercising the
+	// race between candidate snapshots and half-open probe acquisition.
+	beforeCandidateAcquire func()
 }
 
 func New(store *catalog.Store, registry *provider.Registry, config Config, client *http.Client) *Gateway {
@@ -254,6 +257,7 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 		g.metrics.RecordFailure(0, http.StatusServiceUnavailable)
 		return
 	}
+	g.runBeforeCandidateAcquire()
 
 	for index, model := range candidates {
 		if !g.tracker.TryAcquire(model.ID, capability) {
@@ -322,8 +326,7 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 		}
 		return
 	}
-	writeError(w, http.StatusBadGateway, "all configured free providers failed")
-	g.metrics.RecordFailure(0, http.StatusBadGateway)
+	g.writeCandidateUnavailable(w, requested)
 }
 
 func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoint, defaultAlias string) {
@@ -365,6 +368,7 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 		g.metrics.RecordFailure(0, http.StatusServiceUnavailable)
 		return
 	}
+	g.runBeforeCandidateAcquire()
 	for index, model := range candidates {
 		if !g.tracker.TryAcquire(model.ID, capability) {
 			continue
@@ -429,6 +433,18 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 		}
 		return
 	}
+	g.writeCandidateUnavailable(w, requested)
+}
+
+func (g *Gateway) runBeforeCandidateAcquire() {
+	if g.beforeCandidateAcquire != nil {
+		g.beforeCandidateAcquire()
+	}
+}
+
+func (g *Gateway) writeCandidateUnavailable(w http.ResponseWriter, requested string) {
+	writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("route %q has no currently acquirable models; retry shortly", requested))
+	g.metrics.RecordFailure(0, http.StatusServiceUnavailable)
 }
 
 func multipartModel(body []byte, boundary string) (string, error) {
