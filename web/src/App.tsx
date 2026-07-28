@@ -134,11 +134,13 @@ function StatusBadge({ status }: { status: ModelDisplayStatus | 'failed' }) {
 }
 
 function CapabilityPills({ model }: { model: EffectiveModel }) {
+  const unverifiedTools = !model.capabilities.tool_call_known && model.route_types.includes('chat-tools')
   return <div className="pill-row">
     {model.capabilities.tool_call && <span className="capability-pill accent">Tools</span>}
+    {unverifiedTools && <span className="capability-pill muted">Tools 待验证</span>}
     {model.capabilities.vision && <span className="capability-pill">Vision</span>}
     {model.capabilities.reasoning && <span className="capability-pill">Reasoning</span>}
-    {!model.capabilities.tool_call && !model.capabilities.vision && !model.capabilities.reasoning && <span className="capability-pill muted">Standard</span>}
+    {!model.capabilities.tool_call && !unverifiedTools && !model.capabilities.vision && !model.capabilities.reasoning && <span className="capability-pill muted">Standard</span>}
   </div>
 }
 

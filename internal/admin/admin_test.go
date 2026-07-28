@@ -261,8 +261,13 @@ func TestCredentialSaveKeepsInvalidKeyAndMarksProviderModelsFailed(t *testing.T)
 		t.Fatalf("saved key=%q", saved)
 	}
 	states := tracker.Snapshot()
-	if len(states) != 1 || states[0].Status != health.StatusOpen || states[0].LastStatus != http.StatusUnauthorized {
+	if len(states) != 2 {
 		t.Fatalf("health=%#v", states)
+	}
+	for _, state := range states {
+		if state.Status != health.StatusOpen || state.LastStatus != http.StatusUnauthorized {
+			t.Fatalf("health=%#v", states)
+		}
 	}
 }
 

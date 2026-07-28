@@ -154,8 +154,14 @@ func TestDiscoveredToolCapabilityPreservesUnknownState(t *testing.T) {
 	if byID["unknown"].Capabilities.ToolCallKnown {
 		t.Fatalf("missing metadata was treated as known: %#v", byID["unknown"].Capabilities)
 	}
+	if !byID["unknown"].SupportsFunction(FunctionChatTools) {
+		t.Fatalf("unknown tool capability was not exposed as a probeable fallback candidate: %#v", byID["unknown"])
+	}
 	if !byID["unsupported"].Capabilities.ToolCallKnown || byID["unsupported"].Capabilities.ToolCall {
 		t.Fatalf("explicit parameter inventory was not treated as unsupported: %#v", byID["unsupported"].Capabilities)
+	}
+	if byID["unsupported"].SupportsFunction(FunctionChatTools) {
+		t.Fatalf("explicitly unsupported model became a tool candidate: %#v", byID["unsupported"])
 	}
 	if !byID["supported"].Capabilities.ToolCallKnown || !byID["supported"].Capabilities.ToolCall || !byID["supported"].SupportsFunction(FunctionChatTools) {
 		t.Fatalf("tools parameter was not treated as supported: %#v", byID["supported"])

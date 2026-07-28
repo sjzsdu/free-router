@@ -204,10 +204,18 @@ func providerProbeCandidates(h *Handler, providerID string) ([]probeJob, int) {
 
 func modelProbeJobs(model catalog.Model, discoverTools bool) []probeJob {
 	jobs := make([]probeJob, 0, len(model.Functions)+1)
+	hasToolCandidate := false
 	for _, capability := range model.Functions {
-		jobs = append(jobs, probeJob{Model: model, Capability: capability})
+		discovery := capability == catalog.FunctionChatTools && !model.Capabilities.ToolCallKnown
+		if discovery {
+			hasToolCandidate = true
+			if !discoverTools {
+				continue
+			}
+		}
+		jobs = append(jobs, probeJob{Model: model, Capability: capability, Discovery: discovery})
 	}
-	if discoverTools && model.SupportsFunction(catalog.FunctionChat) && !model.Capabilities.ToolCallKnown {
+	if discoverTools && !hasToolCandidate && model.SupportsFunction(catalog.FunctionChat) && !model.Capabilities.ToolCallKnown {
 		jobs = append(jobs, probeJob{Model: model, Capability: catalog.FunctionChatTools, Discovery: true})
 	}
 	return jobs

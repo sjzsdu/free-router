@@ -347,7 +347,7 @@ func modelsFromDiscovery(spec provider.Spec) []Model {
 			functions = []string{FunctionChat}
 		}
 		toolCall, toolCallKnown := discoveredToolCapability(candidate)
-		if toolCall && contains(functions, FunctionChat) && !contains(functions, FunctionChatTools) {
+		if advertisesToolCandidate(functions, toolCall, toolCallKnown) && !contains(functions, FunctionChatTools) {
 			functions = append(functions, FunctionChatTools)
 		}
 		capabilities := Capabilities{
@@ -386,6 +386,10 @@ func discoveredToolCapability(candidate provider.DiscoveredModel) (bool, bool) {
 		contains(candidate.SupportedParameters, "tools") ||
 		contains(candidate.SupportedParameters, "tool_choice")
 	return supported, supported || len(candidate.SupportedParameters) > 0
+}
+
+func advertisesToolCandidate(functions []string, supported, known bool) bool {
+	return contains(functions, FunctionChat) && (supported || !known)
 }
 
 func upstreamErrorDetail(body io.Reader) string {
@@ -910,7 +914,7 @@ func (s *Store) loadCache() error {
 				}
 				model.Capabilities.ToolCall, model.Capabilities.ToolCallKnown = discoveredToolCapability(candidate)
 				model.Functions = withoutString(model.Functions, FunctionChatTools)
-				if model.Capabilities.ToolCall {
+				if advertisesToolCandidate(model.Functions, model.Capabilities.ToolCall, model.Capabilities.ToolCallKnown) {
 					model.Functions = append(model.Functions, FunctionChatTools)
 				}
 				break
