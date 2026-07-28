@@ -36,19 +36,27 @@ type Entry struct {
 // Vault stores secrets in macOS Keychain when available and otherwise falls
 // back to a user-only local file. The file also records which backend is used.
 type Vault struct {
-	path        string
-	useKeychain bool
-	mu          sync.Mutex
+	path           string
+	useKeychain    bool
+	keychainSet    func(string, string) error
+	keychainGet    func(string) (string, error)
+	keychainDelete func(string) error
+	mu             sync.Mutex
 }
 
 func New(path string) *Vault {
-	return &Vault{path: path, useKeychain: runtime.GOOS == "darwin"}
+	return &Vault{
+		path: path, useKeychain: runtime.GOOS == "darwin",
+		keychainSet: keychainSet, keychainGet: keychainGet, keychainDelete: keychainDelete,
+	}
 }
 
 // NewFileOnly is intended for environments where a system credential store is
 // unavailable, and for tests which must not modify a user's Keychain.
 func NewFileOnly(path string) *Vault {
-	return &Vault{path: path}
+	return &Vault{
+		path: path, keychainSet: keychainSet, keychainGet: keychainGet, keychainDelete: keychainDelete,
+	}
 }
 
 func (v *Vault) Path() string { return v.path }
@@ -66,7 +74,7 @@ func (v *Vault) Get(provider string) (string, bool) {
 		return "", false
 	}
 	if rec.Backend == "keychain" {
-		secret, err := keychainGet(provider)
+		secret, err := v.keychainGet(provider)
 		return secret, err == nil && secret != ""
 	}
 	return rec.Secret, rec.Secret != ""
@@ -88,13 +96,22 @@ func (v *Vault) Set(provider, secret string) (string, error) {
 	}
 
 	rec := record{Backend: "file", Secret: secret}
-	if v.useKeychain && keychainSet(provider, secret) == nil {
-		rec = record{Backend: "keychain"}
+	if v.useKeychain && v.keychainSet(provider, secret) == nil {
+		stored, getErr := v.keychainGet(provider)
+		if getErr == nil && stored == secret {
+			rec = record{Backend: "keychain"}
+		} else {
+			// A Keychain write can report success even when the daemon's
+			// security context cannot read the item back. Persist the secret in
+			// the permission-restricted fallback file instead of recording a
+			// credential that cannot configure the Provider at runtime.
+			_ = v.keychainDelete(provider)
+		}
 	}
 	data.Credentials[provider] = rec
 	if err := v.save(data); err != nil {
 		if rec.Backend == "keychain" {
-			_ = keychainDelete(provider)
+			_ = v.keychainDelete(provider)
 		}
 		return "", err
 	}
@@ -114,7 +131,7 @@ func (v *Vault) Delete(provider string) error {
 		return fmt.Errorf("no saved credential for %q", provider)
 	}
 	if rec.Backend == "keychain" {
-		_ = keychainDelete(provider)
+		_ = v.keychainDelete(provider)
 	}
 	delete(data.Credentials, provider)
 	return v.save(data)
