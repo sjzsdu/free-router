@@ -149,14 +149,15 @@ type modelsResponse struct {
 }
 
 type Store struct {
-	registry   *provider.Registry
-	cache      string
-	client     *http.Client
-	refreshMu  sync.Mutex
-	mu         sync.RWMutex
-	models     []Model
-	quarantine map[string]string
-	updated    time.Time
+	registry      *provider.Registry
+	cache         string
+	client        *http.Client
+	refreshMu     sync.Mutex
+	mu            sync.RWMutex
+	models        []Model
+	quarantine    map[string]string
+	verifiedTools map[string]bool
+	updated       time.Time
 }
 
 type cacheFile struct {
@@ -164,10 +165,14 @@ type cacheFile struct {
 	CatalogFingerprint string            `json:"catalog_fingerprint"`
 	Models             []Model           `json:"models"`
 	Quarantined        map[string]string `json:"quarantined,omitempty"`
+	VerifiedTools      map[string]bool   `json:"verified_tools,omitempty"`
 }
 
 func New(registry *provider.Registry, cache string, client *http.Client) *Store {
-	return &Store{registry: registry, cache: cache, client: client, quarantine: make(map[string]string)}
+	return &Store{
+		registry: registry, cache: cache, client: client,
+		quarantine: make(map[string]string), verifiedTools: make(map[string]bool),
+	}
 }
 
 func (s *Store) Bootstrap(ctx context.Context) error {
@@ -187,6 +192,7 @@ func (s *Store) Refresh(ctx context.Context) error {
 	for _, spec := range s.registry.CatalogAll() {
 		merged = append(merged, modelsFromDiscovery(spec)...)
 	}
+	merged = s.applyVerifiedTools(merged)
 	merged = s.applyQuarantine(merged)
 	sort.Slice(merged, func(i, j int) bool { return merged[i].ID < merged[j].ID })
 	s.set(merged, time.Now())
@@ -212,6 +218,7 @@ func (s *Store) RefreshProvider(ctx context.Context, providerID string) error {
 		return fmt.Errorf("provider %q is not in the maintained model catalog", providerID)
 	}
 	models := modelsFromDiscovery(spec)
+	models = s.applyVerifiedTools(models)
 	models = s.applyQuarantine(models)
 	merged := make([]Model, 0, len(s.Models())+len(models))
 	for _, model := range s.Models() {
@@ -339,9 +346,13 @@ func modelsFromDiscovery(spec provider.Spec) []Model {
 		if len(functions) == 0 {
 			functions = []string{FunctionChat}
 		}
+		toolCall, toolCallKnown := discoveredToolCapability(candidate)
+		if toolCall && contains(functions, FunctionChat) && !contains(functions, FunctionChatTools) {
+			functions = append(functions, FunctionChatTools)
+		}
 		capabilities := Capabilities{
-			ToolCall:       contains(functions, FunctionChatTools),
-			ToolCallKnown:  len(candidate.Functions) > 0,
+			ToolCall:       toolCall,
+			ToolCallKnown:  toolCallKnown,
 			Vision:         contains(functions, FunctionImageUnderstanding),
 			VisionKnown:    len(candidate.Functions) > 0,
 			Reasoning:      contains(candidate.SupportedParameters, "reasoning"),
@@ -368,6 +379,13 @@ func modelsFromDiscovery(spec provider.Spec) []Model {
 	}
 	sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
 	return models
+}
+
+func discoveredToolCapability(candidate provider.DiscoveredModel) (bool, bool) {
+	supported := contains(candidate.Functions, FunctionChatTools) ||
+		contains(candidate.SupportedParameters, "tools") ||
+		contains(candidate.SupportedParameters, "tool_choice")
+	return supported, supported || len(candidate.SupportedParameters) > 0
 }
 
 func upstreamErrorDetail(body io.Reader) string {
@@ -517,7 +535,7 @@ func (s *Store) ProbeModel(ctx context.Context, modelID, function string) (Model
 		input = map[string]any{"model": model.UpstreamID, "messages": []map[string]string{{"role": "user", "content": "ping"}}, "max_tokens": 1, "stream": false}
 	case FunctionChatTools:
 		endpoint = "/chat/completions"
-		input = map[string]any{"model": model.UpstreamID, "messages": []map[string]string{{"role": "user", "content": "say ping"}}, "max_tokens": 1, "stream": false, "tools": []map[string]any{{"type": "function", "function": map[string]any{"name": "ping", "description": "return ping", "parameters": map[string]any{"type": "object", "properties": map[string]any{}}}}}}
+		input = map[string]any{"model": model.UpstreamID, "messages": []map[string]string{{"role": "user", "content": "Call the ping tool. Do not answer directly."}}, "max_tokens": 16, "stream": false, "tools": []map[string]any{{"type": "function", "function": map[string]any{"name": "ping", "description": "return ping", "parameters": map[string]any{"type": "object", "properties": map[string]any{}}}}}}
 	case FunctionImageUnderstanding:
 		endpoint = "/chat/completions"
 		input = multimodalProbeInput(model.UpstreamID, "image_url", "data:image/png;base64,"+strings.TrimSpace(probePNGBase64))
@@ -598,8 +616,39 @@ func (s *Store) ProbeModel(ctx context.Context, modelID, function string) (Model
 		}
 		return result, &ModelProbeError{Status: resp.StatusCode, Message: message}
 	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return result, err
+	}
+	if function == FunctionChatTools && !containsToolCall(body) {
+		return result, &ModelProbeError{Status: resp.StatusCode, Message: "successful response did not contain a tool call"}
+	}
 	return result, nil
+}
+
+func containsToolCall(body []byte) bool {
+	var response struct {
+		Choices []struct {
+			Message struct {
+				ToolCalls    json.RawMessage `json:"tool_calls"`
+				FunctionCall json.RawMessage `json:"function_call"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal(body, &response) != nil {
+		return false
+	}
+	for _, choice := range response.Choices {
+		if hasJSONValue(choice.Message.ToolCalls) || hasJSONValue(choice.Message.FunctionCall) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasJSONValue(value json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(value)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) && !bytes.Equal(trimmed, []byte("[]")) && !bytes.Equal(trimmed, []byte("{}"))
 }
 
 func audioUsesTranscription(model Model) bool {
@@ -847,6 +896,7 @@ func (s *Store) loadCache() error {
 	}
 	s.mu.Lock()
 	s.quarantine = cloneMap(cached.Quarantined)
+	s.verifiedTools = cloneBoolMap(cached.VerifiedTools)
 	s.mu.Unlock()
 	if cached.CatalogFingerprint != s.catalogFingerprint() {
 		return errors.New("cache was produced from a different free model manifest")
@@ -854,6 +904,17 @@ func (s *Store) loadCache() error {
 	models := make([]Model, 0, len(cached.Models))
 	for _, model := range cached.Models {
 		if spec, exists := s.registry.CatalogGet(model.Provider); exists && cacheEligible(spec, model) {
+			for _, candidate := range spec.DiscoveredModels {
+				if candidate.ID != model.UpstreamID {
+					continue
+				}
+				model.Capabilities.ToolCall, model.Capabilities.ToolCallKnown = discoveredToolCapability(candidate)
+				model.Functions = withoutString(model.Functions, FunctionChatTools)
+				if model.Capabilities.ToolCall {
+					model.Functions = append(model.Functions, FunctionChatTools)
+				}
+				break
+			}
 			if model.Type == "" {
 				model.Type = classifyID(model.UpstreamID)
 				model.Free = true
@@ -865,6 +926,7 @@ func (s *Store) loadCache() error {
 			models = append(models, model)
 		}
 	}
+	models = s.applyVerifiedTools(models)
 	updated := time.Now()
 	if info, err := os.Stat(s.cache); err == nil {
 		updated = info.ModTime()
@@ -880,7 +942,13 @@ func (s *Store) saveCache(models []Model) error {
 	s.mu.RLock()
 	quarantined := cloneMap(s.quarantine)
 	s.mu.RUnlock()
-	data, err := json.MarshalIndent(cacheFile{SchemaVersion: 4, CatalogFingerprint: s.catalogFingerprint(), Models: models, Quarantined: quarantined}, "", "  ")
+	s.mu.RLock()
+	verifiedTools := cloneBoolMap(s.verifiedTools)
+	s.mu.RUnlock()
+	data, err := json.MarshalIndent(cacheFile{
+		SchemaVersion: 4, CatalogFingerprint: s.catalogFingerprint(), Models: models,
+		Quarantined: quarantined, VerifiedTools: verifiedTools,
+	}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -889,6 +957,53 @@ func (s *Store) saveCache(models []Model) error {
 		return err
 	}
 	return os.Rename(tmp, s.cache)
+}
+
+// RecordToolSupport promotes a model after a successful tool-call probe. The
+// verification is persisted separately from Formula metadata so future catalog
+// refreshes can retain evidence that the upstream catalog did not provide.
+func (s *Store) RecordToolSupport(modelID string) error {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	models := s.Models()
+	found := false
+	for index := range models {
+		if models[index].ID != modelID {
+			continue
+		}
+		found = true
+		models[index].Capabilities.ToolCall = true
+		models[index].Capabilities.ToolCallKnown = true
+		if models[index].SupportsFunction(FunctionChat) && !models[index].SupportsFunction(FunctionChatTools) {
+			models[index].Functions = append(models[index].Functions, FunctionChatTools)
+		}
+		break
+	}
+	if !found {
+		return fmt.Errorf("model %q is not in the catalog", modelID)
+	}
+	s.mu.Lock()
+	s.verifiedTools[modelID] = true
+	s.mu.Unlock()
+	s.set(models, time.Now())
+	return s.saveCache(models)
+}
+
+func (s *Store) applyVerifiedTools(models []Model) []Model {
+	s.mu.RLock()
+	verified := cloneBoolMap(s.verifiedTools)
+	s.mu.RUnlock()
+	for index := range models {
+		if !verified[models[index].ID] {
+			continue
+		}
+		models[index].Capabilities.ToolCall = true
+		models[index].Capabilities.ToolCallKnown = true
+		if models[index].SupportsFunction(FunctionChat) && !models[index].SupportsFunction(FunctionChatTools) {
+			models[index].Functions = append(models[index].Functions, FunctionChatTools)
+		}
+	}
+	return models
 }
 
 func (s *Store) applyQuarantine(models []Model) []Model {
@@ -968,6 +1083,24 @@ func cloneMap(source map[string]string) map[string]string {
 	result := make(map[string]string, len(source)+1)
 	for key, value := range source {
 		result[key] = value
+	}
+	return result
+}
+
+func cloneBoolMap(source map[string]bool) map[string]bool {
+	result := make(map[string]bool, len(source)+1)
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
+}
+
+func withoutString(values []string, unwanted string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != unwanted {
+			result = append(result, value)
+		}
 	}
 	return result
 }

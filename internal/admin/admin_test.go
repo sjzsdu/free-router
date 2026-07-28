@@ -145,7 +145,17 @@ func TestCredentialSaveValidatesProviderAndUpdatesModelHealth(t *testing.T) {
 			_, _ = w.Write([]byte(`{"data":[{"id":"chat-a"}]}`))
 		case "/chat/completions":
 			modelCalls.Add(1)
-			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+			var input struct {
+				Tools []json.RawMessage `json:"tools"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Fatal(err)
+			}
+			if len(input.Tools) > 0 {
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"ping","arguments":"{}"}}]}}]}`))
+			} else {
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+			}
 		default:
 			http.NotFound(w, r)
 		}
@@ -197,7 +207,8 @@ func TestCredentialSaveValidatesProviderAndUpdatesModelHealth(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	states := tracker.Snapshot()
-	if modelCalls.Load() != 1 || len(states) != 1 || states[0].Status != health.StatusHealthy {
+	model, ok := models.Find("groq/chat-a")
+	if modelCalls.Load() != 2 || len(states) != 2 || !ok || !model.Capabilities.ToolCallKnown || !model.Capabilities.ToolCall || !model.SupportsFunction(catalog.FunctionChatTools) {
 		t.Fatalf("model_calls=%d health=%#v", modelCalls.Load(), states)
 	}
 

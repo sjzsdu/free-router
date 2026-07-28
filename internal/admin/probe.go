@@ -38,6 +38,7 @@ type probeManager struct {
 type probeJob struct {
 	Model      catalog.Model
 	Capability string
+	Discovery  bool
 }
 
 func newProbeManager() *probeManager {
@@ -125,10 +126,7 @@ func (manager *probeManager) StartModel(h *Handler, modelID string, allowExpensi
 	if !enabled {
 		return manager.status, false, errors.New("disabled model cannot be probed")
 	}
-	jobs := make([]probeJob, 0, len(model.Functions))
-	for _, capability := range model.Functions {
-		jobs = append(jobs, probeJob{Model: model, Capability: capability})
-	}
+	jobs := modelProbeJobs(model, true)
 	if hasExpensiveProbe(jobs) && !allowExpensive {
 		return manager.status, false, errors.New("image and video probes require explicit cost confirmation")
 	}
@@ -154,7 +152,8 @@ func probeCandidates(h *Handler, force bool) ([]probeJob, int) {
 			skipped++
 			continue
 		}
-		for _, capability := range model.Functions {
+		for _, job := range modelProbeJobs(model, false) {
+			capability := job.Capability
 			if expensiveCapability(capability) {
 				skipped++
 				continue
@@ -163,7 +162,7 @@ func probeCandidates(h *Handler, force bool) ([]probeJob, int) {
 				skipped++
 				continue
 			}
-			jobs = append(jobs, probeJob{Model: model, Capability: capability})
+			jobs = append(jobs, job)
 		}
 	}
 	sort.SliceStable(jobs, func(i, j int) bool {
@@ -191,15 +190,27 @@ func providerProbeCandidates(h *Handler, providerID string) ([]probeJob, int) {
 			skipped++
 			continue
 		}
-		for _, capability := range model.Functions {
+		for _, job := range modelProbeJobs(model, true) {
+			capability := job.Capability
 			if expensiveCapability(capability) {
 				skipped++
 				continue
 			}
-			jobs = append(jobs, probeJob{Model: model, Capability: capability})
+			jobs = append(jobs, job)
 		}
 	}
 	return jobs, skipped
+}
+
+func modelProbeJobs(model catalog.Model, discoverTools bool) []probeJob {
+	jobs := make([]probeJob, 0, len(model.Functions)+1)
+	for _, capability := range model.Functions {
+		jobs = append(jobs, probeJob{Model: model, Capability: capability})
+	}
+	if discoverTools && model.SupportsFunction(catalog.FunctionChat) && !model.Capabilities.ToolCallKnown {
+		jobs = append(jobs, probeJob{Model: model, Capability: catalog.FunctionChatTools, Discovery: true})
+	}
+	return jobs
 }
 
 func (h *Handler) startProviderModelProbe(providerID string) bool {
@@ -304,6 +315,13 @@ func (manager *probeManager) run(h *Handler, models []probeJob) {
 				<-lock
 				latency := time.Since(started)
 				if err == nil {
+					if job.Discovery {
+						if err = h.catalog.RecordToolSupport(job.Model.ID); err != nil {
+							h.health.ProbeFailure(job.Model.ID, job.Capability, latency, 0, err.Error())
+							manager.record(false)
+							continue
+						}
+					}
 					h.health.ProbeSuccess(job.Model.ID, job.Capability, latency)
 					manager.record(true)
 					continue

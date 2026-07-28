@@ -133,8 +133,99 @@ func TestOfficialAudioTextEndpointIsTextToSpeech(t *testing.T) {
 
 func TestDiscoveredModelsConvertWithoutProviderCatalogRequest(t *testing.T) {
 	models := modelsFromDiscovery(provider.Spec{ID: "test", Tier: "free", DiscoveredModels: []provider.DiscoveredModel{{ID: "free-chat", Functions: []string{FunctionChatTools}, ContextLength: 32768, Pricing: provider.DiscoveredPricing{Prompt: "0", Completion: "0"}}}})
-	if len(models) != 1 || models[0].UpstreamID != "free-chat" || !models[0].Capabilities.ToolCall || models[0].Pricing.Prompt != "0" {
+	if len(models) != 1 || models[0].UpstreamID != "free-chat" || !models[0].Capabilities.ToolCall || !models[0].Capabilities.ToolCallKnown || models[0].Pricing.Prompt != "0" {
 		t.Fatalf("models=%#v", models)
+	}
+}
+
+func TestDiscoveredToolCapabilityPreservesUnknownState(t *testing.T) {
+	models := modelsFromDiscovery(provider.Spec{ID: "test", DiscoveredModels: []provider.DiscoveredModel{
+		{ID: "unknown", Functions: []string{FunctionChat}},
+		{ID: "unsupported", Functions: []string{FunctionChat}, SupportedParameters: []string{"stream"}},
+		{ID: "supported", Functions: []string{FunctionChat}, SupportedParameters: []string{"stream", "tools"}},
+	}})
+	if len(models) != 3 {
+		t.Fatalf("models=%#v", models)
+	}
+	byID := make(map[string]Model, len(models))
+	for _, model := range models {
+		byID[model.UpstreamID] = model
+	}
+	if byID["unknown"].Capabilities.ToolCallKnown {
+		t.Fatalf("missing metadata was treated as known: %#v", byID["unknown"].Capabilities)
+	}
+	if !byID["unsupported"].Capabilities.ToolCallKnown || byID["unsupported"].Capabilities.ToolCall {
+		t.Fatalf("explicit parameter inventory was not treated as unsupported: %#v", byID["unsupported"].Capabilities)
+	}
+	if !byID["supported"].Capabilities.ToolCallKnown || !byID["supported"].Capabilities.ToolCall || !byID["supported"].SupportsFunction(FunctionChatTools) {
+		t.Fatalf("tools parameter was not treated as supported: %#v", byID["supported"])
+	}
+}
+
+func TestToolProbeRequiresStructuredToolCall(t *testing.T) {
+	clearBuiltinKeys(t)
+	var response = `{"choices":[{"message":{"content":"ping"}}]}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/chat/completions" {
+			_, _ = w.Write([]byte(response))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + server.URL + `","no_auth":true}]`)
+	store := New(registry, filepath.Join(t.TempDir(), "models.json"), server.Client())
+	store.set([]Model{{ID: "test/chat", Provider: "test", UpstreamID: "chat", Type: "normal", Functions: []string{FunctionChat}}}, time.Now())
+	if _, err := store.ProbeModel(context.Background(), "test/chat", FunctionChatTools); err == nil {
+		t.Fatal("plain text response was accepted as tool-call support")
+	}
+	response = `{"choices":[{"message":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"ping","arguments":"{}"}}]}}]}`
+	if _, err := store.ProbeModel(context.Background(), "test/chat", FunctionChatTools); err != nil {
+		t.Fatalf("structured tool call was rejected: %v", err)
+	}
+}
+
+func TestVerifiedToolSupportSurvivesRefreshAndCacheReload(t *testing.T) {
+	clearBuiltinKeys(t)
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "free-models.json")
+	cachePath := filepath.Join(dir, "models.json")
+	manifest := `{"schema_version":2,"generated_at":"test","providers":{"test":{"source_urls":["https://example.com/models"],"models":[{"id":"chat-a","functions":["chat"]}]}}}`
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := provider.NewRegistryWithManifest(
+		`[{"id":"test","base_url":"https://example.invalid","no_auth":true}]`,
+		provider.DefaultEnvMap(), manifestPath,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := New(registry, cachePath, http.DefaultClient)
+	if err := store.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	model, ok := store.Find("test/chat-a")
+	if !ok || model.Capabilities.ToolCallKnown {
+		t.Fatalf("initial model should have unknown tool support: %#v", model)
+	}
+	if err := store.RecordToolSupport(model.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	model, _ = store.Find("test/chat-a")
+	if !model.Capabilities.ToolCall || !model.SupportsFunction(FunctionChatTools) {
+		t.Fatalf("refresh discarded verified tool support: %#v", model)
+	}
+	reloaded := New(registry, cachePath, http.DefaultClient)
+	if err := reloaded.Bootstrap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	model, _ = reloaded.Find("test/chat-a")
+	if !model.Capabilities.ToolCallKnown || !model.Capabilities.ToolCall || !model.SupportsFunction(FunctionChatTools) {
+		t.Fatalf("cache reload discarded verified tool support: %#v", model)
 	}
 }
 
