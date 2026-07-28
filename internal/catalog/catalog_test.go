@@ -138,7 +138,7 @@ func TestDiscoveredModelsConvertWithoutProviderCatalogRequest(t *testing.T) {
 	}
 }
 
-func TestDiscoveredToolCapabilityPreservesUnknownState(t *testing.T) {
+func TestDiscoveredToolCapabilityUsesMaintainedModelContract(t *testing.T) {
 	models := modelsFromDiscovery(provider.Spec{ID: "test", DiscoveredModels: []provider.DiscoveredModel{
 		{ID: "unknown", Functions: []string{FunctionChat}},
 		{ID: "unsupported", Functions: []string{FunctionChat}, SupportedParameters: []string{"stream"}},
@@ -151,11 +151,8 @@ func TestDiscoveredToolCapabilityPreservesUnknownState(t *testing.T) {
 	for _, model := range models {
 		byID[model.UpstreamID] = model
 	}
-	if byID["unknown"].Capabilities.ToolCallKnown {
-		t.Fatalf("missing metadata was treated as known: %#v", byID["unknown"].Capabilities)
-	}
-	if !byID["unknown"].SupportsFunction(FunctionChatTools) {
-		t.Fatalf("unknown tool capability was not exposed as a probeable fallback candidate: %#v", byID["unknown"])
+	if !byID["unknown"].Capabilities.ToolCallKnown || !byID["unknown"].Capabilities.ToolCall || !byID["unknown"].SupportsFunction(FunctionChatTools) {
+		t.Fatalf("maintained Chat model did not inherit complete capabilities: %#v", byID["unknown"])
 	}
 	if !byID["unsupported"].Capabilities.ToolCallKnown || byID["unsupported"].Capabilities.ToolCall {
 		t.Fatalf("explicit parameter inventory was not treated as unsupported: %#v", byID["unsupported"].Capabilities)
@@ -191,7 +188,7 @@ func TestToolProbeRequiresStructuredToolCall(t *testing.T) {
 	}
 }
 
-func TestVerifiedToolSupportSurvivesRefreshAndCacheReload(t *testing.T) {
+func TestMaintainedToolSupportSurvivesRefreshAndCacheReload(t *testing.T) {
 	clearBuiltinKeys(t)
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "free-models.json")
@@ -212,18 +209,15 @@ func TestVerifiedToolSupportSurvivesRefreshAndCacheReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	model, ok := store.Find("test/chat-a")
-	if !ok || model.Capabilities.ToolCallKnown {
-		t.Fatalf("initial model should have unknown tool support: %#v", model)
-	}
-	if err := store.RecordToolSupport(model.ID); err != nil {
-		t.Fatal(err)
+	if !ok || !model.Capabilities.ToolCallKnown || !model.Capabilities.ToolCall || !model.SupportsFunction(FunctionChatTools) {
+		t.Fatalf("initial model should inherit complete tool support: %#v", model)
 	}
 	if err := store.Refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	model, _ = store.Find("test/chat-a")
 	if !model.Capabilities.ToolCall || !model.SupportsFunction(FunctionChatTools) {
-		t.Fatalf("refresh discarded verified tool support: %#v", model)
+		t.Fatalf("refresh discarded maintained tool support: %#v", model)
 	}
 	reloaded := New(registry, cachePath, http.DefaultClient)
 	if err := reloaded.Bootstrap(context.Background()); err != nil {
@@ -231,7 +225,7 @@ func TestVerifiedToolSupportSurvivesRefreshAndCacheReload(t *testing.T) {
 	}
 	model, _ = reloaded.Find("test/chat-a")
 	if !model.Capabilities.ToolCallKnown || !model.Capabilities.ToolCall || !model.SupportsFunction(FunctionChatTools) {
-		t.Fatalf("cache reload discarded verified tool support: %#v", model)
+		t.Fatalf("cache reload discarded maintained tool support: %#v", model)
 	}
 }
 

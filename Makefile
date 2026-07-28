@@ -1,4 +1,5 @@
 BINARY := free-router
+BINARY := free-router
 GO ?= go
 NPM ?= npm
 WEB_DIR := web
@@ -7,7 +8,7 @@ BUILD_DIR ?= bin
 GOBIN ?= $(shell $(GO) env GOBIN)
 
 ifeq ($(strip $(GOBIN)),)
-GOBIN := $(shell $(GO) env GOPATH)/bin
+GOBIN := /Users/juzhongsun/.local/bin
 endif
 
 LDFLAGS := -s -w

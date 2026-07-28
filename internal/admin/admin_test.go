@@ -208,8 +208,13 @@ func TestCredentialSaveValidatesProviderAndUpdatesModelHealth(t *testing.T) {
 	}
 	states := tracker.Snapshot()
 	model, ok := models.Find("groq/chat-a")
-	if modelCalls.Load() != 2 || len(states) != 2 || !ok || !model.Capabilities.ToolCallKnown || !model.Capabilities.ToolCall || !model.SupportsFunction(catalog.FunctionChatTools) {
+	if modelCalls.Load() != 1 || len(states) != 2 || !ok || !model.Capabilities.ToolCallKnown || !model.Capabilities.ToolCall || !model.SupportsFunction(catalog.FunctionChatTools) {
 		t.Fatalf("model_calls=%d health=%#v", modelCalls.Load(), states)
+	}
+	for _, state := range states {
+		if state.Status != "healthy" {
+			t.Fatalf("one successful model probe did not update every capability: %#v", states)
+		}
 	}
 
 	stateRequest := httptest.NewRequest(http.MethodGet, "/admin/api/state", nil)
@@ -444,8 +449,13 @@ func TestModelHealthProbeUses24HourCacheAndSupportsForce(t *testing.T) {
 	}
 
 	probe(false)
-	if chatCalls.Load() != 1 || tracker.Snapshot()[0].Status != "healthy" {
+	if chatCalls.Load() != 1 || len(tracker.Snapshot()) != 1 {
 		t.Fatalf("chat_calls=%d health=%#v", chatCalls.Load(), tracker.Snapshot())
+	}
+	for _, state := range tracker.Snapshot() {
+		if state.Status != "healthy" {
+			t.Fatalf("one successful model probe did not update every capability: %#v", tracker.Snapshot())
+		}
 	}
 	probe(false)
 	if chatCalls.Load() != 1 {

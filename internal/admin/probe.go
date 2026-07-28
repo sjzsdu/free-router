@@ -38,7 +38,6 @@ type probeManager struct {
 type probeJob struct {
 	Model      catalog.Model
 	Capability string
-	Discovery  bool
 }
 
 func newProbeManager() *probeManager {
@@ -202,23 +201,21 @@ func providerProbeCandidates(h *Handler, providerID string) ([]probeJob, int) {
 	return jobs, skipped
 }
 
-func modelProbeJobs(model catalog.Model, discoverTools bool) []probeJob {
-	jobs := make([]probeJob, 0, len(model.Functions)+1)
-	hasToolCandidate := false
+func modelProbeJobs(model catalog.Model, _ bool) []probeJob {
+	if len(model.Functions) == 0 {
+		return nil
+	}
 	for _, capability := range model.Functions {
-		discovery := capability == catalog.FunctionChatTools && !model.Capabilities.ToolCallKnown
-		if discovery {
-			hasToolCandidate = true
-			if !discoverTools {
-				continue
-			}
+		if capability == catalog.FunctionChat {
+			return []probeJob{{Model: model, Capability: capability}}
 		}
-		jobs = append(jobs, probeJob{Model: model, Capability: capability, Discovery: discovery})
 	}
-	if discoverTools && !hasToolCandidate && model.SupportsFunction(catalog.FunctionChat) && !model.Capabilities.ToolCallKnown {
-		jobs = append(jobs, probeJob{Model: model, Capability: catalog.FunctionChatTools, Discovery: true})
+	for _, capability := range model.Functions {
+		if !expensiveCapability(capability) {
+			return []probeJob{{Model: model, Capability: capability}}
+		}
 	}
-	return jobs
+	return []probeJob{{Model: model, Capability: model.Functions[0]}}
 }
 
 func (h *Handler) startProviderModelProbe(providerID string) bool {
@@ -323,14 +320,9 @@ func (manager *probeManager) run(h *Handler, models []probeJob) {
 				<-lock
 				latency := time.Since(started)
 				if err == nil {
-					if job.Discovery {
-						if err = h.catalog.RecordToolSupport(job.Model.ID); err != nil {
-							h.health.ProbeFailure(job.Model.ID, job.Capability, latency, 0, err.Error())
-							manager.record(false)
-							continue
-						}
+					for _, capability := range job.Model.Functions {
+						h.health.ProbeSuccess(job.Model.ID, capability, latency)
 					}
-					h.health.ProbeSuccess(job.Model.ID, job.Capability, latency)
 					manager.record(true)
 					continue
 				}
@@ -339,7 +331,9 @@ func (manager *probeManager) run(h *Handler, models []probeJob) {
 				if errors.As(err, &probeError) {
 					status = probeError.Status
 				}
-				h.health.ProbeFailure(job.Model.ID, job.Capability, latency, status, err.Error())
+				for _, capability := range job.Model.Functions {
+					h.health.ProbeFailure(job.Model.ID, capability, latency, status, err.Error())
+				}
 				manager.record(false)
 			}
 		}()
