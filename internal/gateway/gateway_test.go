@@ -87,6 +87,46 @@ func TestAutoRetriesNextFreeModel(t *testing.T) {
 	}
 }
 
+func TestAliasRouteRequiresPersistedCapabilityVerification(t *testing.T) {
+	clearBuiltinKeys(t)
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/models":
+			return testResponse(http.StatusOK, `{"data":[{"id":"chat-a"}]}`), nil
+		case "/chat/completions":
+			return testResponse(http.StatusOK, `{"choices":[{"message":{"content":"ok"}}]}`), nil
+		default:
+			return testResponse(http.StatusNotFound, "not found"), nil
+		}
+	})}
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"https://test.invalid","no_auth":true}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), client)
+	models, failures := store.DiscoverFromProviders(context.Background())
+	if len(failures) != 0 || len(models) != 1 {
+		t.Fatalf("models=%#v failures=%#v", models, failures)
+	}
+	handler := New(store, registry, Config{Health: health.New()}, client)
+
+	request := func() *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat","messages":[]}`)))
+		return recorder
+	}
+	if recorder := request(); recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unverified status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if err := store.RecordCapabilityVerification(models[0].ID, catalog.FunctionChat, time.Now(), time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	handler = New(store, registry, Config{Health: health.New()}, client)
+	if recorder := request(); recorder.Code != http.StatusOK {
+		t.Fatalf("verified status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestNetworkFailureKeepsModelAndIsolatesCapability(t *testing.T) {
 	clearBuiltinKeys(t)
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -621,7 +661,7 @@ func TestNamedRouteUsesConfiguredFallbackOrder(t *testing.T) {
 	}
 	recorder = httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat","messages":[]}`)))
-	if recorder.Code != http.StatusOK || strings.Join(calls, ",") != "first,second,first,second" {
+	if recorder.Code != http.StatusOK || strings.Join(calls, ",") != "first,second,second" {
 		t.Fatalf("unexpected call pattern: status=%d calls=%v", recorder.Code, calls)
 	}
 }
@@ -823,5 +863,12 @@ func discoverModelsForTest(t *testing.T, store *catalog.Store) {
 	models, failures := store.DiscoverFromProviders(context.Background())
 	if len(failures) > 0 || len(models) == 0 {
 		t.Fatalf("models=%d failures=%#v", len(models), failures)
+	}
+	for _, model := range models {
+		for _, capability := range model.Functions {
+			if err := store.RecordCapabilityVerification(model.ID, capability, time.Now(), time.Millisecond); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 }

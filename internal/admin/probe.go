@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	healthProbeTTL         = 24 * time.Hour
 	healthProbeConcurrency = 8
 	healthProbeTimeout     = 10 * time.Second
 	expensiveProbeTimeout  = 2 * time.Minute
@@ -125,12 +124,14 @@ func (manager *probeManager) StartModel(h *Handler, modelID string, allowExpensi
 	if !enabled {
 		return manager.status, false, errors.New("disabled model cannot be probed")
 	}
-	jobs := modelProbeJobs(model, true)
+	jobs := unverifiedProbeJobs(h, model)
 	if hasExpensiveProbe(jobs) && !allowExpensive {
 		return manager.status, false, errors.New("image and video probes require explicit cost confirmation")
 	}
 	if len(jobs) == 0 {
-		return manager.status, false, errors.New("this model does not advertise a probeable capability")
+		now := time.Now()
+		manager.status = ProbeStatus{Status: "completed", Skipped: len(model.Functions), StartedAt: now, FinishedAt: now}
+		return manager.status, false, nil
 	}
 	manager.status = ProbeStatus{Status: "running", Total: len(jobs), StartedAt: time.Now()}
 	go manager.run(h, jobs)
@@ -157,7 +158,7 @@ func probeCandidates(h *Handler, force bool) ([]probeJob, int) {
 				skipped++
 				continue
 			}
-			if !force && !h.health.ProbeDue(model.ID, capability, healthProbeTTL) {
+			if !force && h.catalog.ModelCapabilityVerified(model, capability) {
 				skipped++
 				continue
 			}
@@ -195,6 +196,10 @@ func providerProbeCandidates(h *Handler, providerID string) ([]probeJob, int) {
 				skipped++
 				continue
 			}
+			if h.catalog.ModelCapabilityVerified(model, capability) {
+				skipped++
+				continue
+			}
 			jobs = append(jobs, job)
 		}
 	}
@@ -205,17 +210,21 @@ func modelProbeJobs(model catalog.Model, _ bool) []probeJob {
 	if len(model.Functions) == 0 {
 		return nil
 	}
+	jobs := make([]probeJob, 0, len(model.Functions))
 	for _, capability := range model.Functions {
-		if capability == catalog.FunctionChat {
-			return []probeJob{{Model: model, Capability: capability}}
+		jobs = append(jobs, probeJob{Model: model, Capability: capability})
+	}
+	return jobs
+}
+
+func unverifiedProbeJobs(h *Handler, model catalog.Model) []probeJob {
+	jobs := make([]probeJob, 0, len(model.Functions))
+	for _, job := range modelProbeJobs(model, true) {
+		if !h.catalog.ModelCapabilityVerified(model, job.Capability) {
+			jobs = append(jobs, job)
 		}
 	}
-	for _, capability := range model.Functions {
-		if !expensiveCapability(capability) {
-			return []probeJob{{Model: model, Capability: capability}}
-		}
-	}
-	return []probeJob{{Model: model, Capability: model.Functions[0]}}
+	return jobs
 }
 
 func (h *Handler) startProviderModelProbe(providerID string) bool {
@@ -320,20 +329,20 @@ func (manager *probeManager) run(h *Handler, models []probeJob) {
 				<-lock
 				latency := time.Since(started)
 				if err == nil {
-					for _, capability := range job.Model.Functions {
-						h.health.ProbeSuccess(job.Model.ID, capability, latency)
+					err = h.catalog.RecordModelCapabilityVerification(job.Model, job.Capability, time.Now(), latency)
+					if err == nil {
+						h.health.ProbeSuccess(job.Model.ID, job.Capability, latency)
+						manager.record(true)
+						continue
 					}
-					manager.record(true)
-					continue
 				}
 				status := result.Status
 				var probeError *catalog.ModelProbeError
 				if errors.As(err, &probeError) {
 					status = probeError.Status
 				}
-				for _, capability := range job.Model.Functions {
-					h.health.ProbeFailure(job.Model.ID, capability, latency, status, err.Error())
-				}
+				_ = h.catalog.ResetCapabilityVerification(job.Model.ID, job.Capability)
+				h.health.ProbeFailure(job.Model.ID, job.Capability, latency, status, err.Error())
 				manager.record(false)
 			}
 		}()

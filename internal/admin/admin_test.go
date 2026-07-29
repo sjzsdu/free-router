@@ -33,6 +33,9 @@ func TestAdminUpdatesRouteConfiguration(t *testing.T) {
 	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","api_key":"key"}]`)
 	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
 	discoverModelsForTest(t, models)
+	if err := models.RecordCapabilityVerification("test/chat-a", catalog.FunctionChat, time.Now(), time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
 	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
 	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
 	handler := New(routes, models, vault, health.New(), Config{}, nil)
@@ -52,6 +55,23 @@ func TestAdminUpdatesRouteConfiguration(t *testing.T) {
 	saved, _ := routes.Route("chat")
 	if len(saved.Models) != 1 || saved.Models[0] != "test/chat-a" {
 		t.Fatalf("saved route = %#v", saved)
+	}
+	if !models.CapabilityVerified("test/chat-a", catalog.FunctionChat) {
+		t.Fatal("route ordering change invalidated an unchanged model verification")
+	}
+
+	config = routes.Config()
+	config.Models["test/chat-a"] = routing.ModelOverride{Disabled: true}
+	body, _ = json.Marshal(config)
+	request = httptest.NewRequest(http.MethodPut, "/admin/api/config", bytes.NewReader(body))
+	request.RemoteAddr = "127.0.0.1:1234"
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("override status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if models.CapabilityVerified("test/chat-a", catalog.FunctionChat) {
+		t.Fatal("model override change retained stale capability verification")
 	}
 }
 
@@ -208,12 +228,12 @@ func TestCredentialSaveValidatesProviderAndUpdatesModelHealth(t *testing.T) {
 	}
 	states := tracker.Snapshot()
 	model, ok := models.Find("groq/chat-a")
-	if modelCalls.Load() != 1 || len(states) != 2 || !ok || !model.Capabilities.ToolCallKnown || !model.Capabilities.ToolCall || !model.SupportsFunction(catalog.FunctionChatTools) {
+	if modelCalls.Load() != 2 || len(states) != 2 || !ok || !model.Capabilities.ToolCallKnown || !model.Capabilities.ToolCall || !model.SupportsFunction(catalog.FunctionChatTools) {
 		t.Fatalf("model_calls=%d health=%#v", modelCalls.Load(), states)
 	}
 	for _, state := range states {
 		if state.Status != "healthy" {
-			t.Fatalf("one successful model probe did not update every capability: %#v", states)
+			t.Fatalf("each capability probe must update only its own health: %#v", states)
 		}
 	}
 
@@ -406,7 +426,7 @@ func TestAdminResetsFailedModelHealth(t *testing.T) {
 	}
 }
 
-func TestModelHealthProbeUses24HourCacheAndSupportsForce(t *testing.T) {
+func TestModelHealthProbeUsesPersistentCacheAndSupportsForce(t *testing.T) {
 	for _, key := range provider.SupportedKeyEnvs() {
 		t.Setenv(key, "")
 	}
@@ -454,12 +474,17 @@ func TestModelHealthProbeUses24HourCacheAndSupportsForce(t *testing.T) {
 	}
 	for _, state := range tracker.Snapshot() {
 		if state.Status != "healthy" {
-			t.Fatalf("one successful model probe did not update every capability: %#v", tracker.Snapshot())
+			t.Fatalf("successful model probe did not update capability: %#v", tracker.Snapshot())
 		}
+	}
+	tracker = health.New()
+	handler = New(routes, models, vault, tracker, Config{}, nil)
+	if states := tracker.Snapshot(); len(states) != 1 || states[0].Status != health.StatusHealthy {
+		t.Fatalf("persisted verification was not hydrated after handler restart: %#v", states)
 	}
 	probe(false)
 	if chatCalls.Load() != 1 {
-		t.Fatalf("fresh cached model was probed again: calls=%d", chatCalls.Load())
+		t.Fatalf("persistently healthy model was probed again: calls=%d", chatCalls.Load())
 	}
 	probe(true)
 	if chatCalls.Load() != 2 {

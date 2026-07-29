@@ -34,6 +34,7 @@ type State struct {
 	LastError           string    `json:"last_error,omitempty"`
 	LastUsedAt          time.Time `json:"last_used_at,omitempty"`
 	Checks              uint64    `json:"checks"`
+	Verified            bool      `json:"verified"`
 	LastCheckedAt       time.Time `json:"last_checked_at,omitempty"`
 	LastCheckLatencyMS  float64   `json:"last_check_latency_ms,omitempty"`
 	FailureThreshold    int       `json:"failure_threshold"`
@@ -97,6 +98,30 @@ func (t *Tracker) Available(model, capability string) bool {
 		return false
 	}
 	return true
+}
+
+// Healthy is stricter than Available: it is used for route candidacy and only
+// accepts capabilities with an explicit healthy state. Degraded, half-open,
+// cooling, open, and unknown capabilities must be revalidated first.
+func (t *Tracker) Healthy(model, capability string) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	provider := providerFromModel(model)
+	if provider != "" {
+		if state := t.providerStates[provider]; state != nil && state.Status != StatusHealthy {
+			return false
+		}
+	}
+	state := t.states[stateKey(model, capability)]
+	return state != nil && state.Verified && state.Status == StatusHealthy
+}
+
+func (t *Tracker) HasState(model, capability string) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	_, ok := t.states[stateKey(model, capability)]
+	return ok
 }
 
 func (t *Tracker) TryAcquire(model, capability string) bool {
@@ -251,6 +276,7 @@ func (t *Tracker) ProbeSuccess(model, capability string, latency time.Duration) 
 
 	state := t.state(model, capability)
 	state.Checks++
+	state.Verified = true
 	state.LastCheckedAt = t.now()
 	state.LastCheckLatencyMS = float64(latency.Microseconds()) / 1000
 	state.LastStatus = 200
@@ -268,12 +294,31 @@ func (t *Tracker) ProbeSuccess(model, capability string, latency time.Duration) 
 	}
 }
 
+// RestoreProbeSuccess hydrates a persisted capability verification without
+// treating service startup as a new probe.
+func (t *Tracker) RestoreProbeSuccess(model, capability string, checkedAt time.Time, latencyMS float64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	state := t.state(model, capability)
+	state.Checks = 1
+	state.Verified = true
+	state.LastCheckedAt = checkedAt
+	state.LastCheckLatencyMS = latencyMS
+	state.LastStatus = 200
+	state.LastError = ""
+	state.ConsecutiveFailures = 0
+	state.Status = StatusHealthy
+	state.CooldownUntil = time.Time{}
+}
+
 func (t *Tracker) ProbeFailure(model, capability string, latency time.Duration, status int, message string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	state := t.state(model, capability)
 	state.Checks++
+	state.Verified = false
 	state.LastCheckedAt = t.now()
 	state.LastCheckLatencyMS = float64(latency.Microseconds()) / 1000
 	state.LastStatus = status
@@ -283,7 +328,7 @@ func (t *Tracker) ProbeFailure(model, capability string, latency time.Duration, 
 
 	errType := classifyError(status)
 	if errType == ErrorClient {
-		state.Status = StatusHealthy
+		state.Status = StatusDegraded
 		return
 	}
 

@@ -111,6 +111,91 @@ func TestModelFingerprintUsesStableRoutingMetadata(t *testing.T) {
 	}
 }
 
+func TestCapabilityVerificationPersistsAndInvalidatesWithModelFingerprint(t *testing.T) {
+	clearBuiltinKeys(t)
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "free-models.json")
+	cachePath := filepath.Join(dir, "models.json")
+	writeManifest := func(contextLength int) {
+		t.Helper()
+		content := fmt.Sprintf(`{"schema_version":2,"generated_at":"test","providers":{"test":{"source_urls":["https://example.com/models"],"models":[{"id":"chat-a","functions":["chat","chat-tools"],"context_length":%d}]}}}`, contextLength)
+		if err := os.WriteFile(manifestPath, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	newStore := func() *Store {
+		t.Helper()
+		registry, err := provider.NewRegistryWithManifest(
+			`[{"id":"test","base_url":"https://example.invalid","no_auth":true}]`,
+			provider.DefaultEnvMap(), manifestPath,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return New(registry, cachePath, http.DefaultClient)
+	}
+
+	writeManifest(8192)
+	store := newStore()
+	if err := store.Bootstrap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	checkedAt := time.Date(2026, 7, 29, 10, 0, 0, 0, time.UTC)
+	if err := store.RecordCapabilityVerification("test/chat-a", FunctionChatTools, checkedAt, 25*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := newStore()
+	if err := reloaded.Bootstrap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !reloaded.CapabilityVerified("test/chat-a", FunctionChatTools) {
+		t.Fatal("successful capability verification was not restored from cache")
+	}
+	verifications := reloaded.CapabilityVerifications()
+	if len(verifications) != 1 || !verifications[0].CheckedAt.Equal(checkedAt) || verifications[0].LatencyMS != 25 {
+		t.Fatalf("verifications=%#v", verifications)
+	}
+
+	writeManifest(16384)
+	changed := newStore()
+	if err := changed.Bootstrap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if changed.CapabilityVerified("test/chat-a", FunctionChatTools) || len(changed.CapabilityVerifications()) != 0 {
+		t.Fatal("routing metadata change retained stale capability verification")
+	}
+}
+
+func TestResetCapabilityVerificationRequiresAProbeAgain(t *testing.T) {
+	clearBuiltinKeys(t)
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "free-models.json")
+	if err := os.WriteFile(manifestPath, []byte(`{"schema_version":2,"providers":{"test":{"source_urls":["https://example.com/models"],"models":[{"id":"chat-a","functions":["chat"]}]}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := provider.NewRegistryWithManifest(
+		`[{"id":"test","base_url":"https://example.invalid","no_auth":true}]`,
+		provider.DefaultEnvMap(), manifestPath,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := New(registry, filepath.Join(dir, "models.json"), http.DefaultClient)
+	if err := store.Bootstrap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordCapabilityVerification("test/chat-a", FunctionChat, time.Now(), time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ResetCapabilityVerification("test/chat-a", FunctionChat); err != nil {
+		t.Fatal(err)
+	}
+	if store.CapabilityVerified("test/chat-a", FunctionChat) {
+		t.Fatal("reset capability remained verified")
+	}
+}
+
 func TestApplyQuarantineDoesNotMutateQuarantineState(t *testing.T) {
 	old := Model{ID: "test/model", Type: "normal", Functions: []string{"chat"}, ContextLength: 8192}
 	changed := old

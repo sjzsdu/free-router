@@ -321,8 +321,8 @@ function RoutesPage({ config, setConfig, models, healthMap }: { config: RouterCo
   const modelMap = new Map(models.map(model => [model.id, model]))
   const eligible = models.filter(model => !model.disabled && model.route_types.includes(route.capability))
   const routable = eligible.filter(model => {
-    const status = healthMap.get(healthKey(model.id, route.capability))?.status
-    return status !== 'open' && status !== 'cooling'
+    const health = healthMap.get(healthKey(model.id, route.capability))
+    return health?.verified === true && health.status === 'healthy'
   })
   const providers = [...new Set(routable.map(model => model.provider))].sort()
   const candidates = routable.filter(model => !route.models.includes(model.id) && (!provider || model.provider === provider) && (!search || `${model.id} ${model.name || ''}`.toLowerCase().includes(search.toLowerCase())))
@@ -353,7 +353,7 @@ function RoutesPage({ config, setConfig, models, healthMap }: { config: RouterCo
     </section>
 
     <aside className="candidate-panel panel"><div className="candidate-heading"><div><span className="eyebrow">CANDIDATES</span><h2>添加候选模型</h2></div><span>{candidates.length}</span></div><div className="candidate-filters"><label className="search-field"><Search size={15} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索模型" /></label><select value={provider} onChange={event => setProvider(event.target.value)}><option value="">全部 Provider</option>{providers.map(item => <option key={item}>{item}</option>)}</select></div>
-      <div className="candidate-list">{candidates.slice(0, 80).map(model => <div key={model.id} className="candidate-row"><div><strong title={model.id}>{model.id}</strong><span><StatusBadge status={healthMap.get(healthKey(model.id, route.capability))?.status || 'unknown'} /> · {formatNumber(model.context_length)} context</span></div><IconButton label="加入优先级" onClick={() => updateModels([...route.models, model.id])}><Plus size={16} /></IconButton></div>)}{!candidates.length && <div className="small-empty"><Search size={22} /><span>没有匹配的候选模型</span></div>}</div>
+      <div className="candidate-list">{candidates.map(model => <div key={model.id} className="candidate-row"><div><strong title={model.id}>{model.id}</strong><span><StatusBadge status={healthMap.get(healthKey(model.id, route.capability))?.status || 'unknown'} /> · {formatNumber(model.context_length)} context</span></div><IconButton label="加入优先级" onClick={() => updateModels([...route.models, model.id])}><Plus size={16} /></IconButton></div>)}{!candidates.length && <div className="small-empty"><Search size={22} /><span>仅显示已检测健康的模型；请先在模型页运行能力检测</span></div>}</div>
     </aside>
   </div>
 }

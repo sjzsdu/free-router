@@ -67,7 +67,9 @@ func New(routes *routing.Store, models *catalog.Store, vault *credentials.Vault,
 	if tokenURL == "" {
 		tokenURL = "https://openrouter.ai/api/v1/auth/keys"
 	}
-	return &Handler{routes: routes, catalog: models, vault: vault, health: tracker, probes: newProbeManager(), providerProbes: newProviderProbeStore(), config: config, reload: reload, static: http.FileServer(http.FS(staticFS)), started: time.Now(), oauthFlows: newOAuthFlows(), oauthHTTPClient: client, openRouterAuthURL: authURL, openRouterTokenURL: tokenURL}
+	handler := &Handler{routes: routes, catalog: models, vault: vault, health: tracker, probes: newProbeManager(), providerProbes: newProviderProbeStore(), config: config, reload: reload, static: http.FileServer(http.FS(staticFS)), started: time.Now(), oauthFlows: newOAuthFlows(), oauthHTTPClient: client, openRouterAuthURL: authURL, openRouterTokenURL: tokenURL}
+	handler.syncVerifiedHealth()
+	return handler
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -192,6 +194,24 @@ func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
 	if !reflect.DeepEqual(previousConfig.ProviderEnv, h.routes.Config().ProviderEnv) {
 		h.refreshAllAsync()
 	}
+	changedModels := make(map[string]bool)
+	for modelID, previous := range previousConfig.Models {
+		if current, ok := h.routes.Config().Models[modelID]; !ok || !reflect.DeepEqual(previous, current) {
+			changedModels[modelID] = true
+		}
+	}
+	for modelID, current := range h.routes.Config().Models {
+		if previous, ok := previousConfig.Models[modelID]; !ok || !reflect.DeepEqual(previous, current) {
+			changedModels[modelID] = true
+		}
+	}
+	for modelID := range changedModels {
+		if err := h.catalog.ResetCapabilityVerification(modelID, ""); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		h.health.Reset(modelID, "")
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"saved": true, "config": h.routes.Config()})
 }
 
@@ -200,6 +220,7 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	h.syncVerifiedHealth()
 	writeJSON(w, http.StatusOK, map[string]any{"refreshed": true, "models": len(h.catalog.Models())})
 }
 
@@ -214,6 +235,10 @@ func (h *Handler) resetHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.catalog.RestoreModel(input.Model); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err := h.catalog.ResetCapabilityVerification(input.Model, input.Capability); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	h.health.Reset(input.Model, input.Capability)
@@ -343,8 +368,43 @@ func (h *Handler) refreshAllAsync() {
 		defer cancel()
 		if err := h.catalog.Refresh(ctx); err != nil {
 			slog.Warn("background model catalog refresh failed", "error", err)
+			return
 		}
+		h.syncVerifiedHealth()
 	}()
+}
+
+func (h *Handler) syncVerifiedHealth() {
+	models := make(map[string]catalog.Model, len(h.catalog.Models()))
+	for _, model := range h.catalog.Models() {
+		if effective, enabled := h.routes.Apply(model); enabled {
+			models[model.ID] = effective
+		}
+	}
+	existing := make(map[string]bool)
+	for _, state := range h.health.Snapshot() {
+		key := state.Model + "\x00" + state.Capability
+		if !state.Verified {
+			continue
+		}
+		existing[key] = true
+		model, ok := models[state.Model]
+		if !ok || !h.catalog.ModelCapabilityVerified(model, state.Capability) {
+			h.health.Reset(state.Model, state.Capability)
+			delete(existing, key)
+		}
+	}
+	for _, verification := range h.catalog.CapabilityVerifications() {
+		key := verification.Model + "\x00" + verification.Capability
+		if existing[key] {
+			continue
+		}
+		model, ok := models[verification.Model]
+		if !ok || !h.catalog.ModelCapabilityVerified(model, verification.Capability) {
+			continue
+		}
+		h.health.RestoreProbeSuccess(verification.Model, verification.Capability, verification.CheckedAt, verification.LatencyMS)
+	}
 }
 
 func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {

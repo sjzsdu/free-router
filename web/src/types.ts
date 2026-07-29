@@ -99,6 +99,7 @@ export interface HealthState {
   last_error?: string
   last_used_at?: string
   checks: number
+  verified: boolean
   last_checked_at?: string
   last_check_latency_ms?: number
 }

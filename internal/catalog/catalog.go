@@ -149,29 +149,41 @@ type modelsResponse struct {
 }
 
 type Store struct {
-	registry      *provider.Registry
-	cache         string
-	client        *http.Client
-	refreshMu     sync.Mutex
-	mu            sync.RWMutex
-	models        []Model
-	quarantine    map[string]string
-	verifiedTools map[string]bool
-	updated       time.Time
+	registry             *provider.Registry
+	cache                string
+	client               *http.Client
+	refreshMu            sync.Mutex
+	mu                   sync.RWMutex
+	models               []Model
+	quarantine           map[string]string
+	verifiedTools        map[string]bool
+	verifiedCapabilities map[string]CapabilityVerification
+	updated              time.Time
+}
+
+type CapabilityVerification struct {
+	Model                   string    `json:"model"`
+	Capability              string    `json:"capability"`
+	CatalogModelFingerprint string    `json:"catalog_model_fingerprint"`
+	ModelFingerprint        string    `json:"model_fingerprint"`
+	CheckedAt               time.Time `json:"checked_at"`
+	LatencyMS               float64   `json:"latency_ms,omitempty"`
 }
 
 type cacheFile struct {
-	SchemaVersion      int               `json:"schema_version"`
-	CatalogFingerprint string            `json:"catalog_fingerprint"`
-	Models             []Model           `json:"models"`
-	Quarantined        map[string]string `json:"quarantined,omitempty"`
-	VerifiedTools      map[string]bool   `json:"verified_tools,omitempty"`
+	SchemaVersion        int                               `json:"schema_version"`
+	CatalogFingerprint   string                            `json:"catalog_fingerprint"`
+	Models               []Model                           `json:"models"`
+	Quarantined          map[string]string                 `json:"quarantined,omitempty"`
+	VerifiedTools        map[string]bool                   `json:"verified_tools,omitempty"`
+	VerifiedCapabilities map[string]CapabilityVerification `json:"verified_capabilities,omitempty"`
 }
 
 func New(registry *provider.Registry, cache string, client *http.Client) *Store {
 	return &Store{
 		registry: registry, cache: cache, client: client,
 		quarantine: make(map[string]string), verifiedTools: make(map[string]bool),
+		verifiedCapabilities: make(map[string]CapabilityVerification),
 	}
 }
 
@@ -195,6 +207,7 @@ func (s *Store) Refresh(ctx context.Context) error {
 	merged = s.applyVerifiedTools(merged)
 	merged = s.applyQuarantine(merged)
 	sort.Slice(merged, func(i, j int) bool { return merged[i].ID < merged[j].ID })
+	s.pruneCapabilityVerifications(merged)
 	s.set(merged, time.Now())
 	return s.saveCache(merged)
 }
@@ -228,6 +241,7 @@ func (s *Store) RefreshProvider(ctx context.Context, providerID string) error {
 	}
 	merged = append(merged, models...)
 	sort.Slice(merged, func(i, j int) bool { return merged[i].ID < merged[j].ID })
+	s.pruneCapabilityVerifications(merged)
 	s.set(merged, time.Now())
 	if err := s.saveCache(merged); err != nil {
 		return fmt.Errorf("save model cache: %w", err)
@@ -910,6 +924,7 @@ func (s *Store) loadCache() error {
 	s.mu.Lock()
 	s.quarantine = cloneMap(cached.Quarantined)
 	s.verifiedTools = cloneBoolMap(cached.VerifiedTools)
+	s.verifiedCapabilities = cloneCapabilityVerifications(cached.VerifiedCapabilities)
 	s.mu.Unlock()
 	if cached.CatalogFingerprint != s.catalogFingerprint() {
 		return errors.New("cache was produced from a different free model manifest")
@@ -940,6 +955,7 @@ func (s *Store) loadCache() error {
 		}
 	}
 	models = s.applyVerifiedTools(models)
+	s.pruneCapabilityVerifications(models)
 	updated := time.Now()
 	if info, err := os.Stat(s.cache); err == nil {
 		updated = info.ModTime()
@@ -957,10 +973,11 @@ func (s *Store) saveCache(models []Model) error {
 	s.mu.RUnlock()
 	s.mu.RLock()
 	verifiedTools := cloneBoolMap(s.verifiedTools)
+	verifiedCapabilities := cloneCapabilityVerifications(s.verifiedCapabilities)
 	s.mu.RUnlock()
 	data, err := json.MarshalIndent(cacheFile{
 		SchemaVersion: 4, CatalogFingerprint: s.catalogFingerprint(), Models: models,
-		Quarantined: quarantined, VerifiedTools: verifiedTools,
+		Quarantined: quarantined, VerifiedTools: verifiedTools, VerifiedCapabilities: verifiedCapabilities,
 	}, "", "  ")
 	if err != nil {
 		return err
@@ -1017,6 +1034,139 @@ func (s *Store) applyVerifiedTools(models []Model) []Model {
 		}
 	}
 	return models
+}
+
+// RecordCapabilityVerification persists a successful model capability probe.
+// The model fingerprint makes the result reusable across restarts while
+// preventing stale verification from surviving routing-relevant model changes.
+func (s *Store) RecordCapabilityVerification(modelID, capability string, checkedAt time.Time, latency time.Duration) error {
+	model, ok := findModel(s.Models(), modelID)
+	if !ok {
+		return fmt.Errorf("model %q is not in the catalog", modelID)
+	}
+	return s.RecordModelCapabilityVerification(model, capability, checkedAt, latency)
+}
+
+func (s *Store) RecordModelCapabilityVerification(model Model, capability string, checkedAt time.Time, latency time.Duration) error {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+
+	catalogModel, ok := findModel(s.Models(), model.ID)
+	if !ok {
+		return fmt.Errorf("model %q is not in the catalog", model.ID)
+	}
+	if !model.SupportsFunction(capability) {
+		return fmt.Errorf("model %q does not advertise capability %q", model.ID, capability)
+	}
+	if checkedAt.IsZero() {
+		checkedAt = time.Now()
+	}
+	verification := CapabilityVerification{
+		Model: model.ID, Capability: capability,
+		CatalogModelFingerprint: modelFingerprint(catalogModel), ModelFingerprint: modelFingerprint(model),
+		CheckedAt: checkedAt, LatencyMS: float64(latency.Microseconds()) / 1000,
+	}
+	s.mu.Lock()
+	s.verifiedCapabilities[capabilityVerificationKey(model.ID, capability)] = verification
+	s.mu.Unlock()
+	return s.saveCache(s.Models())
+}
+
+// ResetCapabilityVerification invalidates persisted probe success for one
+// capability, or for every capability when capability is empty.
+func (s *Store) ResetCapabilityVerification(modelID, capability string) error {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+
+	s.mu.Lock()
+	if capability != "" {
+		delete(s.verifiedCapabilities, capabilityVerificationKey(modelID, capability))
+	} else {
+		for key, verification := range s.verifiedCapabilities {
+			if verification.Model == modelID {
+				delete(s.verifiedCapabilities, key)
+			}
+		}
+	}
+	s.mu.Unlock()
+	return s.saveCache(s.Models())
+}
+
+func (s *Store) CapabilityVerified(modelID, capability string) bool {
+	s.mu.RLock()
+	model, ok := findModel(s.models, modelID)
+	s.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	return s.ModelCapabilityVerified(model, capability)
+}
+
+func (s *Store) ModelCapabilityVerified(model Model, capability string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	catalogModel, ok := findModel(s.models, model.ID)
+	if !ok {
+		return false
+	}
+	verification, ok := s.verifiedCapabilities[capabilityVerificationKey(model.ID, capability)]
+	return ok &&
+		verification.CatalogModelFingerprint == modelFingerprint(catalogModel) &&
+		verification.ModelFingerprint == modelFingerprint(model)
+}
+
+func (s *Store) CapabilityVerifications() []CapabilityVerification {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	models := make(map[string]Model, len(s.models))
+	for _, model := range s.models {
+		models[model.ID] = model
+	}
+	result := make([]CapabilityVerification, 0, len(s.verifiedCapabilities))
+	for _, verification := range s.verifiedCapabilities {
+		model, ok := models[verification.Model]
+		if !ok || verification.CatalogModelFingerprint != modelFingerprint(model) {
+			continue
+		}
+		result = append(result, verification)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Model == result[j].Model {
+			return result[i].Capability < result[j].Capability
+		}
+		return result[i].Model < result[j].Model
+	})
+	return result
+}
+
+func (s *Store) pruneCapabilityVerifications(models []Model) {
+	known := make(map[string]Model, len(models))
+	for _, model := range models {
+		known[model.ID] = model
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, verification := range s.verifiedCapabilities {
+		model, ok := known[verification.Model]
+		if !ok || verification.CatalogModelFingerprint != modelFingerprint(model) {
+			delete(s.verifiedCapabilities, key)
+		}
+	}
+}
+
+func capabilityVerificationKey(model, capability string) string {
+	return model + "\x00" + capability
+}
+
+func findModel(models []Model, id string) (Model, bool) {
+	for _, model := range models {
+		if model.ID == id {
+			return model, true
+		}
+	}
+	return Model{}, false
 }
 
 func (s *Store) applyQuarantine(models []Model) []Model {
@@ -1102,6 +1252,14 @@ func cloneMap(source map[string]string) map[string]string {
 
 func cloneBoolMap(source map[string]bool) map[string]bool {
 	result := make(map[string]bool, len(source)+1)
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
+}
+
+func cloneCapabilityVerifications(source map[string]CapabilityVerification) map[string]CapabilityVerification {
+	result := make(map[string]CapabilityVerification, len(source)+1)
 	for key, value := range source {
 		result[key] = value
 	}

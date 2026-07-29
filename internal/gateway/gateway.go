@@ -57,6 +57,11 @@ func New(store *catalog.Store, registry *provider.Registry, config Config, clien
 	if config.Health == nil {
 		config.Health = health.New()
 	}
+	for _, verification := range store.CapabilityVerifications() {
+		if !config.Health.HasState(verification.Model, verification.Capability) {
+			config.Health.RestoreProbeSuccess(verification.Model, verification.Capability, verification.CheckedAt, verification.LatencyMS)
+		}
+	}
 	gateway := &Gateway{catalog: store, registry: registry, adapterReg: adapter.NewRegistry(), config: config, client: client, tracker: config.Health, mux: http.NewServeMux(), apiToken: config.APIToken, metrics: NewMetrics()}
 	gateway.mux.HandleFunc("GET /healthz", gateway.health)
 	gateway.mux.HandleFunc("GET /livez", gateway.livez)
@@ -210,7 +215,7 @@ func (g *Gateway) routeAvailable(route routing.Route) bool {
 				continue
 			}
 		}
-		if routing.Accepts(route, model) && g.tracker.Available(model.ID, route.Capability) {
+		if routing.Accepts(route, model) && g.catalog.ModelCapabilityVerified(model, route.Capability) && g.tracker.Healthy(model.ID, route.Capability) {
 			return true
 		}
 	}
@@ -612,6 +617,9 @@ func (g *Gateway) dynamicCandidates(route routing.Route, needsTools bool) []cata
 		if !routing.Accepts(route, model) {
 			continue
 		}
+		if !g.catalog.ModelCapabilityVerified(model, route.Capability) {
+			continue
+		}
 		if model.Provider == "openrouter" && model.UpstreamID == "openrouter/free" {
 			copy := model
 			preferred = &copy
@@ -656,7 +664,7 @@ func (g *Gateway) dynamicCandidates(route routing.Route, needsTools bool) []cata
 func (g *Gateway) strictlyAvailable(models []catalog.Model, capability string) []catalog.Model {
 	result := make([]catalog.Model, 0, len(models))
 	for _, model := range models {
-		if g.tracker.Available(model.ID, capability) {
+		if g.catalog.ModelCapabilityVerified(model, capability) && g.tracker.Healthy(model.ID, capability) {
 			result = append(result, model)
 		}
 	}
@@ -679,7 +687,8 @@ func (g *Gateway) pickRemaining(route routing.Route, excluded map[string]bool, h
 				continue
 			}
 		}
-		if !routing.Accepts(route, model) || (healthyOnly && !g.tracker.Available(model.ID, route.Capability)) {
+		if !routing.Accepts(route, model) ||
+			(healthyOnly && (!g.catalog.ModelCapabilityVerified(model, route.Capability) || !g.tracker.Healthy(model.ID, route.Capability))) {
 			continue
 		}
 		models = append(models, model)
@@ -694,7 +703,7 @@ func (g *Gateway) pickRemaining(route routing.Route, excluded map[string]bool, h
 func (g *Gateway) availableCandidates(models []catalog.Model, capability string) []catalog.Model {
 	available := make([]catalog.Model, 0, len(models))
 	for _, model := range models {
-		if g.tracker.Available(model.ID, capability) {
+		if g.catalog.ModelCapabilityVerified(model, capability) && g.tracker.Healthy(model.ID, capability) {
 			available = append(available, model)
 		}
 	}

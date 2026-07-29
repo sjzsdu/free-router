@@ -190,15 +190,34 @@ func TestProbeHealthUsesTTLWithoutInflatingRequests(t *testing.T) {
 	}
 }
 
-func TestProbeFailureWithClientErrorKeepsHealthy(t *testing.T) {
+func TestHealthyRequiresExplicitSuccessAndRejectsDegradedState(t *testing.T) {
+	tracker := New()
+	if tracker.Healthy("provider/model", "chat") {
+		t.Fatal("unknown capability must not be a healthy route candidate")
+	}
+	tracker.Success("provider/model", "chat", time.Millisecond, 200)
+	if tracker.Healthy("provider/model", "chat") {
+		t.Fatal("ordinary traffic success must not replace explicit capability verification")
+	}
+	tracker.ProbeSuccess("provider/model", "chat", time.Millisecond)
+	if !tracker.Healthy("provider/model", "chat") {
+		t.Fatal("successful capability probe did not make the route candidate healthy")
+	}
+	tracker.Failure("provider/model", "chat", time.Millisecond, 500, "server error", 0)
+	if tracker.Healthy("provider/model", "chat") {
+		t.Fatal("degraded capability remained a healthy route candidate")
+	}
+}
+
+func TestProbeFailureWithClientErrorIsNotHealthy(t *testing.T) {
 	tracker := New()
 	tracker.ProbeFailure("provider/model", "chat", time.Second, 400, "client error")
 	if !tracker.Available("provider/model", "chat") {
-		t.Fatal("client error probe should not quarantine model")
+		t.Fatal("one client error probe should remain below the circuit-breaker threshold")
 	}
 	state := tracker.Snapshot()[0]
-	if state.Status != StatusHealthy {
-		t.Fatalf("client error probe set status to %q, want %q", state.Status, StatusHealthy)
+	if state.Status != StatusDegraded {
+		t.Fatalf("client error probe set status to %q, want %q", state.Status, StatusDegraded)
 	}
 }
 
