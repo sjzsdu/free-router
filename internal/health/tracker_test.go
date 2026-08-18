@@ -343,3 +343,85 @@ func TestTryAcquireConcurrentCooldownProtection(t *testing.T) {
 		t.Fatalf("TryAcquire should reject all requests during cooldown, got %d successes", successCount)
 	}
 }
+
+func TestCooldownForNeverOverflows(t *testing.T) {
+	tracker := New()
+	for _, failures := range []int{1, 5, 30, 63, 64, 100, 1000} {
+		cooldown := tracker.cooldownFor(failures)
+		if cooldown < 0 {
+			t.Fatalf("cooldownFor(%d) returned negative %v", failures, cooldown)
+		}
+		if cooldown > tracker.cooldownMax+tracker.cooldownMax/2 {
+			t.Fatalf("cooldownFor(%d) = %v exceeds cooldownMax + jitter", failures, cooldown)
+		}
+	}
+}
+
+func TestClientErrorReleasesInFlightSlot(t *testing.T) {
+	tracker := New()
+	now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
+	tracker.now = func() time.Time { return now }
+
+	// Drive the model open with repeated server errors, then let the
+	// cooldown expire so it becomes half-open.
+	for i := 0; i < tracker.failureThreshold; i++ {
+		tracker.Failure("provider/model", "chat", time.Second, 500, "boom", 0)
+	}
+	now = now.Add(tracker.cooldownMax + time.Minute)
+
+	if !tracker.TryAcquire("provider/model", "chat") {
+		t.Fatal("half-open model should accept a single probe")
+	}
+	if tracker.TryAcquire("provider/model", "chat") {
+		t.Fatal("half-open model must not accept a second probe while one is in flight")
+	}
+
+	// A client error completes the attempt and must release the slot,
+	// otherwise the model would be wedged permanently.
+	tracker.Failure("provider/model", "chat", time.Second, 400, "bad request", 0)
+	if !tracker.TryAcquire("provider/model", "chat") {
+		t.Fatal("client error should release the in-flight slot")
+	}
+}
+
+func TestAuthErrorReleasesModelInFlightSlot(t *testing.T) {
+	tracker := New()
+	now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
+	tracker.now = func() time.Time { return now }
+
+	for i := 0; i < tracker.failureThreshold; i++ {
+		tracker.Failure("provider/model", "chat", time.Second, 500, "boom", 0)
+	}
+	now = now.Add(tracker.cooldownMax + time.Minute)
+	if !tracker.TryAcquire("provider/model", "chat") {
+		t.Fatal("half-open model should accept a probe")
+	}
+
+	// 401 opens the provider; the model-level in-flight slot must be
+	// released too or the model stays wedged after provider recovery.
+	tracker.Failure("provider/model", "chat", time.Second, 401, "unauthorized", 0)
+	state := tracker.Snapshot()[0]
+	if state.LastStatus != 401 {
+		t.Fatalf("model should record the auth failure, got last_status=%d", state.LastStatus)
+	}
+}
+
+func TestReleaseIsIdempotent(t *testing.T) {
+	tracker := New()
+	now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
+	tracker.now = func() time.Time { return now }
+
+	for i := 0; i < tracker.failureThreshold; i++ {
+		tracker.Failure("provider/model", "chat", time.Second, 500, "boom", 0)
+	}
+	now = now.Add(tracker.cooldownMax + time.Minute)
+
+	if !tracker.TryAcquire("provider/model", "chat") {
+		t.Fatal("half-open model should accept a probe")
+	}
+	tracker.Release("provider/model", "chat")
+	tracker.Release("provider/model", "chat")
+	if !tracker.TryAcquire("provider/model", "chat") {
+		t.Fatal("idempotent Release should free the slot")
+	}
+}

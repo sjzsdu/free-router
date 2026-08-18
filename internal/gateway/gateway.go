@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -105,6 +107,13 @@ func New(store *catalog.Store, registry *provider.Registry, config Config, clien
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("panic serving request", "error", recovered, "stack", string(debug.Stack()))
+			g.metrics.RecordFailure(0, http.StatusInternalServerError)
+			writeError(w, http.StatusInternalServerError, "internal server error")
+		}
+	}()
 	if g.apiToken != "" && !g.authorized(r) {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="free-router api"`)
 		http.Error(w, "api authentication required", http.StatusUnauthorized)
@@ -236,6 +245,9 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 		g.metrics.RecordFailure(0, http.StatusBadRequest)
 		return
 	}
+	if request == nil {
+		request = map[string]any{}
+	}
 	requested, _ := request["model"].(string)
 	if requested == "" {
 		requested = defaultAlias
@@ -268,6 +280,9 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 		if !g.tracker.TryAcquire(model.ID, capability) {
 			continue
 		}
+		// Release the in-flight slot on every exit path (including panics)
+		// so a half-open model can never wedge permanently.
+		defer g.tracker.Release(model.ID, capability)
 		request["model"] = model.UpstreamID
 		payload, err := json.Marshal(request)
 		if err != nil {
@@ -275,61 +290,9 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 			g.metrics.RecordFailure(0, http.StatusBadRequest)
 			return
 		}
-		started := time.Now()
-		resp, err := g.forward(r, model, payload, endpoint, "application/json")
-		if err != nil {
-			g.tracker.Failure(model.ID, capability, time.Since(started), 0, err.Error(), 0)
-			slog.Warn("provider request failed", "provider", model.Provider, "model", model.UpstreamID, "error", err)
-			decision := g.shouldRetry(model, capability, 0, false, index)
-			if decision.ShouldRetry && index+1 < len(candidates) {
-				g.metrics.RecordFallback()
-				continue
-			}
-			writeError(w, http.StatusBadGateway, "all configured free providers failed")
-			g.metrics.RecordFailure(time.Since(started), 0)
+		if g.tryCandidate(w, r, model, capability, endpoint, payload, "application/json", index, candidates) {
 			return
 		}
-		providerAdapter := g.adapterReg.Get(model.Provider)
-		decision := g.shouldRetry(model, capability, resp.StatusCode, resp.ContentLength > 0, index)
-		if decision.ShouldRetry && index+1 < len(candidates) {
-			g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, resp.Status, parseRetryAfter(resp.Header.Get("Retry-After")))
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-			resp.Body.Close()
-			slog.Info("free provider unavailable; trying next", "provider", model.Provider, "model", model.UpstreamID, "status", resp.StatusCode, "reason", decision.Reason)
-			if decision.Delay > 0 {
-				time.Sleep(decision.Delay)
-			}
-			g.metrics.RecordFallback()
-			if resp.StatusCode == http.StatusTooManyRequests {
-				g.metrics.RecordRateLimit()
-			}
-			continue
-		}
-		normalizedResp, err := providerAdapter.NormalizeResponse(resp)
-		if err != nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-			resp.Body.Close()
-			g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, err.Error(), 0)
-			writeError(w, http.StatusBadGateway, err.Error())
-			g.metrics.RecordFailure(time.Since(started), resp.StatusCode)
-			return
-		}
-		if normalizedResp.Error != nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-			resp.Body.Close()
-			g.tracker.Failure(model.ID, capability, time.Since(started), normalizedResp.Error.StatusCode, normalizedResp.Error.Message, 0)
-			writeError(w, normalizedResp.Error.StatusCode, normalizedResp.Error.Message)
-			g.metrics.RecordFailure(time.Since(started), normalizedResp.Error.StatusCode)
-			return
-		}
-		g.recordResponse(model.ID, capability, time.Since(started), resp)
-		result := copyResponse(w, resp, model)
-		if result.Complete {
-			g.metrics.RecordSuccess(time.Since(started))
-		} else {
-			g.metrics.RecordFailure(time.Since(started), resp.StatusCode)
-		}
-		return
 	}
 	g.writeCandidateUnavailable(w, requested)
 }
@@ -378,67 +341,120 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 		if !g.tracker.TryAcquire(model.ID, capability) {
 			continue
 		}
+		// Release the in-flight slot on every exit path (including panics)
+		// so a half-open model can never wedge permanently.
+		defer g.tracker.Release(model.ID, capability)
 		payload, contentType, err := rewriteMultipartModel(body, params["boundary"], model.UpstreamID)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "could not encode multipart request")
 			g.metrics.RecordFailure(0, http.StatusBadRequest)
 			return
 		}
-		started := time.Now()
-		resp, err := g.forward(r, model, payload, endpoint, contentType)
-		if err != nil {
-			g.tracker.Failure(model.ID, capability, time.Since(started), 0, err.Error(), 0)
-			decision := g.shouldRetry(model, capability, 0, false, index)
-			if decision.ShouldRetry && index+1 < len(candidates) {
-				g.metrics.RecordFallback()
-				continue
-			}
-			writeError(w, http.StatusBadGateway, "all configured free providers failed")
-			g.metrics.RecordFailure(time.Since(started), 0)
+		if g.tryCandidate(w, r, model, capability, endpoint, payload, contentType, index, candidates) {
 			return
 		}
-		providerAdapter := g.adapterReg.Get(model.Provider)
-		decision := g.shouldRetry(model, capability, resp.StatusCode, resp.ContentLength > 0, index)
-		if decision.ShouldRetry && index+1 < len(candidates) {
-			g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, resp.Status, parseRetryAfter(resp.Header.Get("Retry-After")))
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-			resp.Body.Close()
-			if decision.Delay > 0 {
-				time.Sleep(decision.Delay)
-			}
-			g.metrics.RecordFallback()
-			if resp.StatusCode == http.StatusTooManyRequests {
-				g.metrics.RecordRateLimit()
-			}
-			continue
-		}
-		normalizedResp, err := providerAdapter.NormalizeResponse(resp)
-		if err != nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-			resp.Body.Close()
-			g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, err.Error(), 0)
-			writeError(w, http.StatusBadGateway, err.Error())
-			g.metrics.RecordFailure(time.Since(started), resp.StatusCode)
-			return
-		}
-		if normalizedResp.Error != nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-			resp.Body.Close()
-			g.tracker.Failure(model.ID, capability, time.Since(started), normalizedResp.Error.StatusCode, normalizedResp.Error.Message, 0)
-			writeError(w, normalizedResp.Error.StatusCode, normalizedResp.Error.Message)
-			g.metrics.RecordFailure(time.Since(started), normalizedResp.Error.StatusCode)
-			return
-		}
-		g.recordResponse(model.ID, capability, time.Since(started), resp)
-		result := copyResponse(w, resp, model)
-		if result.Complete {
-			g.metrics.RecordSuccess(time.Since(started))
-		} else {
-			g.metrics.RecordFailure(time.Since(started), resp.StatusCode)
-		}
-		return
 	}
 	g.writeCandidateUnavailable(w, requested)
+}
+
+// tryCandidate forwards a payload to a single candidate model and writes the
+// upstream response back to the client. It returns true when the caller must
+// stop (a terminal response was written); false means "try the next
+// candidate". Health is recorded only after the body transfer completes, so a
+// stream interrupted midway counts as a failure rather than a success.
+func (g *Gateway) tryCandidate(w http.ResponseWriter, r *http.Request, model catalog.Model, capability, endpoint string, payload []byte, contentType string, index int, candidates []catalog.Model) bool {
+	started := time.Now()
+	resp, err := g.forward(r, model, payload, endpoint, contentType)
+	if err != nil {
+		g.tracker.Failure(model.ID, capability, time.Since(started), 0, err.Error(), 0)
+		slog.Warn("provider request failed", "provider", model.Provider, "model", model.UpstreamID, "error", err)
+		decision := g.shouldRetry(model, capability, 0, false, index)
+		if decision.ShouldRetry && index+1 < len(candidates) {
+			g.metrics.RecordFallback()
+			// No backoff sleep on connection errors: fallback moves to a
+			// different provider, and waiting would only delay recovery.
+			return false
+		}
+		writeError(w, http.StatusBadGateway, "all configured free providers failed")
+		g.metrics.RecordFailure(time.Since(started), 0)
+		return true
+	}
+	providerAdapter := g.adapterReg.Get(model.Provider)
+	decision := g.shouldRetry(model, capability, resp.StatusCode, resp.ContentLength > 0, index)
+	if decision.ShouldRetry && index+1 < len(candidates) {
+		retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
+		g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, resp.Status, retryAfter)
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		slog.Info("free provider unavailable; trying next", "provider", model.Provider, "model", model.UpstreamID, "status", resp.StatusCode, "reason", decision.Reason)
+		g.metrics.RecordFallback()
+		if resp.StatusCode == http.StatusTooManyRequests {
+			g.metrics.RecordRateLimit()
+		}
+		sleepBackoff(r.Context(), effectiveDelay(decision.Delay, retryAfter))
+		return false
+	}
+	normalizedResp, err := providerAdapter.NormalizeResponse(resp)
+	if err != nil {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, err.Error(), 0)
+		writeError(w, http.StatusBadGateway, err.Error())
+		g.metrics.RecordFailure(time.Since(started), resp.StatusCode)
+		return true
+	}
+	if normalizedResp.Error != nil {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		g.tracker.Failure(model.ID, capability, time.Since(started), normalizedResp.Error.StatusCode, normalizedResp.Error.Message, 0)
+		writeError(w, normalizedResp.Error.StatusCode, normalizedResp.Error.Message)
+		g.metrics.RecordFailure(time.Since(started), normalizedResp.Error.StatusCode)
+		return true
+	}
+	result := copyResponse(w, resp, model)
+	if result.Complete && resp.StatusCode < http.StatusBadRequest {
+		g.tracker.Success(model.ID, capability, time.Since(started), resp.StatusCode)
+		g.metrics.RecordSuccess(time.Since(started))
+	} else {
+		message := resp.Status
+		if result.Error != nil {
+			message = result.Error.Error()
+		}
+		g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, message, parseRetryAfter(resp.Header.Get("Retry-After")))
+		g.metrics.RecordFailure(time.Since(started), resp.StatusCode)
+	}
+	return true
+}
+
+// maxFallbackDelay bounds how long a fallback waits before trying the next
+// candidate. An upstream Retry-After beyond this is effectively a long outage;
+// waiting for it would pin the handler goroutine for hours.
+const maxFallbackDelay = 5 * time.Minute
+
+// effectiveDelay combines the retry backoff with any Retry-After hint from
+// the upstream, honouring the longer of the two, capped at maxFallbackDelay.
+func effectiveDelay(backoff, retryAfter time.Duration) time.Duration {
+	if retryAfter > backoff {
+		backoff = retryAfter
+	}
+	if backoff > maxFallbackDelay {
+		return maxFallbackDelay
+	}
+	return backoff
+}
+
+// sleepBackoff waits for the retry delay, aborting early when the client
+// disconnects so a stale handler does not keep sleeping.
+func sleepBackoff(ctx context.Context, delay time.Duration) {
+	if delay <= 0 {
+		return
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
 }
 
 func (g *Gateway) runBeforeCandidateAcquire() {
@@ -717,24 +733,26 @@ func (g *Gateway) limitCandidates(models []catalog.Model) []catalog.Model {
 	return models
 }
 
-func (g *Gateway) recordResponse(model, capability string, latency time.Duration, resp *http.Response) {
-	if resp.StatusCode >= 400 {
-		g.tracker.Failure(model, capability, latency, resp.StatusCode, resp.Status, parseRetryAfter(resp.Header.Get("Retry-After")))
-		return
-	}
-	g.tracker.Success(model, capability, latency, resp.StatusCode)
-}
-
 func parseRetryAfter(value string) time.Duration {
+	const maxRetryAfter = 24 * time.Hour
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return 0
 	}
 	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
-		return time.Duration(seconds) * time.Second
+		delay := time.Duration(seconds) * time.Second
+		// A huge Retry-After can overflow int64 into a negative duration,
+		// which would defeat rate-limit cooling entirely; clamp it.
+		if delay < 0 || delay > maxRetryAfter {
+			return maxRetryAfter
+		}
+		return delay
 	}
 	if deadline, err := http.ParseTime(value); err == nil {
 		if duration := time.Until(deadline); duration > 0 {
+			if duration > maxRetryAfter {
+				return maxRetryAfter
+			}
 			return duration
 		}
 	}
@@ -747,15 +765,19 @@ func (g *Gateway) forward(original *http.Request, model catalog.Model, body []by
 		return nil, fmt.Errorf("provider %s is not configured", model.Provider)
 	}
 
-	limiter, ok := g.limiters.LoadOrStore(model.Provider, g.newLimiter(spec))
+	limiterAny, ok := g.limiters.Load(model.Provider)
 	if !ok {
-		limiter, _ = g.limiters.Load(model.Provider)
+		// LoadOrStore only evaluates newLimiter when the provider is
+		// missing, so we do not leak a discarded Limiter (and its
+		// token-refill goroutine) on every request.
+		limiterAny, _ = g.limiters.LoadOrStore(model.Provider, g.newLimiter(spec))
 	}
+	limiter := limiterAny.(*transport.Limiter)
 
-	if err := limiter.(*transport.Limiter).Acquire(original.Context()); err != nil {
+	if err := limiter.Acquire(original.Context()); err != nil {
 		return nil, err
 	}
-	defer limiter.(*transport.Limiter).Release()
+	defer limiter.Release()
 
 	providerAdapter := g.adapterReg.Get(model.Provider)
 	reqHeaders := make(map[string]string)
@@ -801,8 +823,63 @@ type StreamResult struct {
 	Error        error
 }
 
+// stallTimeout bounds how long a body read may sit without producing data.
+// The gateway client only sets ResponseHeaderTimeout, so an upstream that
+// sends headers and then stalls would otherwise pin the connection, the
+// handler goroutine and the metrics concurrency slot forever.
+const stallTimeout = 5 * time.Minute
+
+// stallTimeoutReader closes the underlying body when no data has been read
+// for the configured interval. Closing from another goroutine unblocks a
+// pending Read, so copyStream terminates instead of hanging.
+type stallTimeoutReader struct {
+	r     io.ReadCloser
+	delay time.Duration
+	timer *time.Timer
+	mu    sync.Mutex
+	done  bool
+}
+
+func newStallTimeoutReader(r io.ReadCloser, delay time.Duration) *stallTimeoutReader {
+	s := &stallTimeoutReader{r: r, delay: delay}
+	s.timer = time.AfterFunc(delay, s.timeout)
+	return s
+}
+
+func (s *stallTimeoutReader) timeout() {
+	s.mu.Lock()
+	s.done = true
+	s.mu.Unlock()
+	_ = s.r.Close()
+}
+
+func (s *stallTimeoutReader) Read(p []byte) (int, error) {
+	s.mu.Lock()
+	if !s.done {
+		if !s.timer.Stop() {
+			// The timer already fired (or is about to): the timeout
+			// goroutine is closing the body, so this Read will fail
+			// shortly. Reset would schedule a second callback; do not.
+			s.mu.Unlock()
+			return s.r.Read(p)
+		}
+		s.timer.Reset(s.delay)
+	}
+	s.mu.Unlock()
+	return s.r.Read(p)
+}
+
+func (s *stallTimeoutReader) Close() error {
+	s.mu.Lock()
+	s.done = true
+	s.mu.Unlock()
+	s.timer.Stop()
+	return s.r.Close()
+}
+
 func copyResponse(w http.ResponseWriter, resp *http.Response, model catalog.Model) StreamResult {
-	defer resp.Body.Close()
+	body := newStallTimeoutReader(resp.Body, stallTimeout)
+	defer body.Close()
 	for key, values := range resp.Header {
 		if isHopByHop(key) {
 			continue
@@ -815,9 +892,9 @@ func copyResponse(w http.ResponseWriter, resp *http.Response, model catalog.Mode
 	w.Header().Set("X-Free-Router-Model", model.UpstreamID)
 	w.WriteHeader(resp.StatusCode)
 	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return copyStream(w, resp.Body)
+		return copyStream(w, body)
 	}
-	n, err := io.Copy(w, resp.Body)
+	n, err := io.Copy(w, body)
 	return StreamResult{
 		Complete:     err == nil,
 		BytesWritten: n,

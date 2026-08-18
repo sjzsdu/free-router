@@ -170,12 +170,14 @@ func (s *Store) Update(config Config) error {
 	if err := validate(&config); err != nil {
 		return err
 	}
+	// Serialize save+set so two concurrent PUTs cannot leave the on-disk
+	// config and the in-memory config divergent (disk=A, memory=B).
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := s.save(config); err != nil {
 		return err
 	}
-	s.mu.Lock()
 	s.config = cloneConfig(config)
-	s.mu.Unlock()
 	return nil
 }
 
@@ -191,13 +193,13 @@ func (s *Store) UpdateTransactional(config Config, validateFunc func(Config) err
 		}
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := s.save(config); err != nil {
 		return err
 	}
 
-	s.mu.Lock()
 	s.config = cloneConfig(config)
-	s.mu.Unlock()
 	return nil
 }
 

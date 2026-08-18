@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -869,6 +870,114 @@ func discoverModelsForTest(t *testing.T, store *catalog.Store) {
 			if err := store.RecordCapabilityVerification(model.ID, capability, time.Now(), time.Millisecond); err != nil {
 				t.Fatal(err)
 			}
+		}
+	}
+}
+
+func TestParseRetryAfterOverflowClamped(t *testing.T) {
+	if got := parseRetryAfter("99999999999"); got != 24*time.Hour {
+		t.Fatalf("parseRetryAfter overflow = %v, want 24h", got)
+	}
+	if got := parseRetryAfter("120"); got != 2*time.Minute {
+		t.Fatalf("parseRetryAfter seconds = %v, want 2m", got)
+	}
+}
+
+func TestEffectiveDelayCapped(t *testing.T) {
+	if got := effectiveDelay(time.Second, 48*time.Hour); got != maxFallbackDelay {
+		t.Fatalf("effectiveDelay cap = %v, want %v", got, maxFallbackDelay)
+	}
+	if got := effectiveDelay(2*time.Second, 0); got != 2*time.Second {
+		t.Fatalf("effectiveDelay backoff = %v, want 2s", got)
+	}
+	if got := effectiveDelay(time.Second, 3*time.Second); got != 3*time.Second {
+		t.Fatalf("effectiveDelay retryAfter = %v, want 3s", got)
+	}
+}
+
+func TestNullJSONBodyDoesNotPanic(t *testing.T) {
+	clearBuiltinKeys(t)
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/models":
+			return testResponse(http.StatusOK, `{"data":[{"id":"chat-a","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]}}]}`), nil
+		default:
+			return testResponse(http.StatusOK, `{"choices":[]}`), nil
+		}
+	})}
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"https://test.invalid","api_key":"test"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), client)
+	discoverModelsForTest(t, store)
+	handler := New(store, registry, Config{}, client)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("null"))
+	handler.ServeHTTP(recorder, request)
+	// JSON null must not panic (it used to hit an assignment into a nil
+	// map); it is treated like an empty object, which falls back to the
+	// default model alias.
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("null JSON body: status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+}
+
+func TestStallTimeoutReaderInterruptsStalledBody(t *testing.T) {
+	stalled := newStallTimeoutReader(newInterruptibleReader(), 30*time.Millisecond)
+	defer stalled.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		buffer := make([]byte, 16)
+		_, err := stalled.Read(buffer)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil || err == io.EOF {
+			t.Fatalf("stalled read should fail with a real error, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stall timeout reader did not interrupt the stalled read")
+	}
+}
+
+// interruptibleReader blocks on Read until Close is called, mimicking an
+// upstream body whose connection is torn down by the stall timeout.
+type interruptibleReader struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newInterruptibleReader() *interruptibleReader {
+	return &interruptibleReader{closed: make(chan struct{})}
+}
+
+func (r *interruptibleReader) Read([]byte) (int, error) {
+	<-r.closed
+	return 0, errors.New("read interrupted")
+}
+
+func (r *interruptibleReader) Close() error {
+	r.once.Do(func() { close(r.closed) })
+	return nil
+}
+
+func TestStallTimeoutReaderResumesOnData(t *testing.T) {
+	body := io.NopCloser(strings.NewReader("hello world"))
+	reader := newStallTimeoutReader(body, 10*time.Millisecond)
+	defer reader.Close()
+
+	buffer := make([]byte, 5)
+	for i := 0; i < 3; i++ {
+		// Idle longer than the timeout between reads: each successful read
+		// must reset the timer or the reader would interrupt itself.
+		time.Sleep(20 * time.Millisecond)
+		if n, err := reader.Read(buffer); err != nil || n == 0 {
+			t.Fatalf("read %d failed after idle: n=%d err=%v", i, n, err)
 		}
 	}
 }

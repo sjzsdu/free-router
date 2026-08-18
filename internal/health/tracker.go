@@ -161,6 +161,23 @@ func (t *Tracker) TryAcquire(model, capability string) bool {
 	return true
 }
 
+// Release returns the in-flight slot taken by a successful TryAcquire. It is
+// idempotent and safe to call from a deferred function on every exit path, so
+// a half-open model can never wedge permanently.
+func (t *Tracker) Release(model, capability string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	key := stateKey(model, capability)
+	if state, ok := t.states[key]; ok {
+		atomic.StoreInt32(&state.InFlight, 0)
+	}
+	if provider := providerFromModel(model); provider != "" {
+		if pState, ok := t.providerStates[provider]; ok {
+			atomic.StoreInt32(&pState.InFlight, 0)
+		}
+	}
+}
+
 func (t *Tracker) isStateAvailable(status string, cooldownUntil time.Time) bool {
 	switch status {
 	case StatusUnknown, StatusHealthy, StatusDegraded, StatusHalfOpen:
@@ -224,6 +241,9 @@ func (t *Tracker) Failure(model, capability string, latency time.Duration, statu
 		if state.Status == StatusUnknown {
 			state.Status = StatusHealthy
 		}
+		// A client error still completes the attempt: release the in-flight
+		// slot so a half-open model is not wedged by a single 4xx.
+		atomic.StoreInt32(&state.InFlight, 0)
 		return
 	}
 
@@ -241,6 +261,15 @@ func (t *Tracker) Failure(model, capability string, latency time.Duration, statu
 			pState.CooldownUntil = t.now().Add(t.cooldownFor(pState.ConsecutiveFailures))
 			atomic.StoreInt32(&pState.InFlight, 0)
 		}
+		// Record the credential failure on the model as well and always
+		// release its in-flight slot: a model that was half-open when the
+		// 401 arrived would otherwise stay permanently unwedgeable.
+		state := t.state(model, capability)
+		state.Requests++
+		state.LastStatus = status
+		state.LastError = message
+		state.LastUsedAt = t.now()
+		atomic.StoreInt32(&state.InFlight, 0)
 		return
 	}
 
@@ -441,11 +470,24 @@ func (t *Tracker) providerState(provider string) *State {
 }
 
 func (t *Tracker) cooldownFor(failures int) time.Duration {
-	backoff := t.cooldownBase * time.Duration(1<<uint(failures-1))
+	// Exponential backoff with saturation: double up to cooldownMax
+	// without ever overflowing int64 (a negative backoff would panic
+	// rand.Int63n below). Values of failures <= 0 fall back to the base.
+	backoff := t.cooldownBase
+	for i := 1; i < failures; i++ {
+		if backoff >= t.cooldownMax/2 {
+			backoff = t.cooldownMax
+			break
+		}
+		backoff *= 2
+	}
 	if backoff > t.cooldownMax {
 		backoff = t.cooldownMax
 	}
-	jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
+	var jitter time.Duration
+	if backoff >= 2 {
+		jitter = time.Duration(rand.Int63n(int64(backoff / 2)))
+	}
 	return backoff + jitter
 }
 

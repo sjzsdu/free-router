@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -190,6 +191,10 @@ func New(registry *provider.Registry, cache string, client *http.Client) *Store 
 func (s *Store) Bootstrap(ctx context.Context) error {
 	if err := s.loadCache(); err == nil {
 		return nil
+	} else if _, statErr := os.Stat(s.cache); statErr == nil {
+		// The cache exists but could not be used: warn instead of silently
+		// dropping quarantine/verification state during the rebuild.
+		slog.Warn("model cache unusable; rebuilding from maintained manifest", "cache", s.cache, "error", err)
 	}
 	return s.Refresh(ctx)
 }
@@ -921,14 +926,26 @@ func (s *Store) loadCache() error {
 	if cached.SchemaVersion != 4 {
 		return errors.New("unsupported model cache schema")
 	}
+	// Validate the manifest fingerprint BEFORE loading quarantine and
+	// verification evidence: otherwise a stale cache would persist its old
+	// verified-tools marks into a freshly rebuilt catalog.
+	if cached.CatalogFingerprint != s.catalogFingerprint() {
+		// A stale cache must not mark new manifest models as verified tool
+		// callers. Quarantine and capability verifications carry model
+		// fingerprints (they only apply to identical models), so they are
+		// kept for future rollbacks; the fingerprint-less verifiedTools
+		// evidence is discarded.
+		s.mu.Lock()
+		s.quarantine = cloneMap(cached.Quarantined)
+		s.verifiedCapabilities = cloneCapabilityVerifications(cached.VerifiedCapabilities)
+		s.mu.Unlock()
+		return errors.New("cache was produced from a different free model manifest")
+	}
 	s.mu.Lock()
 	s.quarantine = cloneMap(cached.Quarantined)
 	s.verifiedTools = cloneBoolMap(cached.VerifiedTools)
 	s.verifiedCapabilities = cloneCapabilityVerifications(cached.VerifiedCapabilities)
 	s.mu.Unlock()
-	if cached.CatalogFingerprint != s.catalogFingerprint() {
-		return errors.New("cache was produced from a different free model manifest")
-	}
 	models := make([]Model, 0, len(cached.Models))
 	for _, model := range cached.Models {
 		if spec, exists := s.registry.CatalogGet(model.Provider); exists && cacheEligible(spec, model) {
@@ -955,6 +972,9 @@ func (s *Store) loadCache() error {
 		}
 	}
 	models = s.applyVerifiedTools(models)
+	if !s.cachedModelsMatchManifest(models) {
+		return errors.New("cache models are out of sync with the free model manifest")
+	}
 	s.pruneCapabilityVerifications(models)
 	updated := time.Now()
 	if info, err := os.Stat(s.cache); err == nil {
@@ -970,8 +990,6 @@ func (s *Store) saveCache(models []Model) error {
 	}
 	s.mu.RLock()
 	quarantined := cloneMap(s.quarantine)
-	s.mu.RUnlock()
-	s.mu.RLock()
 	verifiedTools := cloneBoolMap(s.verifiedTools)
 	verifiedCapabilities := cloneCapabilityVerifications(s.verifiedCapabilities)
 	s.mu.RUnlock()
@@ -982,11 +1000,47 @@ func (s *Store) saveCache(models []Model) error {
 	if err != nil {
 		return err
 	}
-	tmp := s.cache + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	dir := filepath.Dir(s.cache)
+	tmp, err := os.CreateTemp(dir, ".models-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.cache)
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, s.cache)
+}
+
+// cachedModelsMatchManifest reports whether every model in the cache exists in
+// the current maintained manifest. It guards against a cache whose fingerprint
+// was computed after a registry hot-reload but whose Models predate it.
+func (s *Store) cachedModelsMatchManifest(models []Model) bool {
+	expected := make(map[string]bool)
+	for _, spec := range s.registry.CatalogAll() {
+		for _, model := range modelsFromDiscovery(spec) {
+			expected[model.Provider+"\x00"+model.UpstreamID] = true
+		}
+	}
+	for _, model := range models {
+		if !expected[model.Provider+"\x00"+model.UpstreamID] {
+			return false
+		}
+	}
+	return true
 }
 
 // RecordToolSupport promotes a model after a successful tool-call probe. The

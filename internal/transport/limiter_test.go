@@ -148,3 +148,42 @@ func TestLimiterConcurrentRequests(t *testing.T) {
 		t.Fatalf("max concurrent requests exceeded: %d > 5", maxInProgress)
 	}
 }
+
+func TestLimiterFractionalRateDoesNotPanic(t *testing.T) {
+	config := NewRateLimitConfig()
+	config.RateLimitPerSecond = 0.5
+	limiter := NewLimiter(config)
+	defer limiter.Close()
+	if err := limiter.Acquire(context.Background()); err != nil {
+		t.Fatalf("acquire failed: %v", err)
+	}
+	limiter.Release()
+}
+
+func TestLimiterReturnsTokenOnSemaphoreTimeout(t *testing.T) {
+	config := NewRateLimitConfig()
+	config.MaxConcurrentRequests = 1
+	config.QueueSize = 10
+	config.RateLimitPerSecond = 100
+	limiter := NewLimiter(config)
+	defer limiter.Close()
+
+	if err := limiter.Acquire(context.Background()); err != nil {
+		t.Fatalf("first acquire failed: %v", err)
+	}
+	// Second acquire times out waiting for the semaphore; the token it
+	// consumed must be returned or the bucket permanently loses capacity.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := limiter.Acquire(ctx); err == nil {
+		t.Fatal("second acquire should time out on the semaphore")
+	}
+	limiter.Release()
+	// Drain enough acquires to prove the token was not lost.
+	for i := 0; i < 100; i++ {
+		if err := limiter.Acquire(context.Background()); err != nil {
+			t.Fatalf("acquire %d failed after token return: %v", i, err)
+		}
+		limiter.Release()
+	}
+}

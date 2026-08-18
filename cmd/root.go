@@ -214,9 +214,13 @@ func runServer(ctx context.Context, opts options) error {
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       90 * time.Second,
-		MaxHeaderBytes:    10 * 1024 * 1024,
+		// WriteTimeout acts as an idle deadline for each write: a long
+		// reasoning pause in a streaming SSE response must not hard-cut
+		// the stream, so it is kept well above typical model latency.
+		// Stalled upstream bodies are guarded separately in copyResponse.
+		WriteTimeout:   15 * time.Minute,
+		IdleTimeout:    90 * time.Second,
+		MaxHeaderBytes: 10 * 1024 * 1024,
 	}
 
 	errCh := make(chan error, 1)

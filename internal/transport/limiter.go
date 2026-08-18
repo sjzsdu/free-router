@@ -42,6 +42,11 @@ func NewLimiter(config RateLimitConfig) *Limiter {
 	if config.RateLimitPerSecond <= 0 {
 		config.RateLimitPerSecond = 50
 	}
+	// Rates in (0,1) would truncate to zero and divide-by-zero in the
+	// ticker interval; clamp to a minimum of 1 token per second.
+	if config.RateLimitPerSecond < 1 {
+		config.RateLimitPerSecond = 1
+	}
 	if config.QueueSize <= 0 {
 		config.QueueSize = 100
 	}
@@ -108,13 +113,24 @@ func (l *Limiter) Acquire(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
+		l.returnToken()
 		return ctx.Err()
 	case l.sem <- struct{}{}:
 	case <-time.After(time.Second * 2):
+		l.returnToken()
 		return ErrOverloaded
 	}
 
 	return nil
+}
+
+// returnToken puts a consumed token back into the bucket so a timed-out or
+// cancelled Acquire does not permanently lose capacity.
+func (l *Limiter) returnToken() {
+	select {
+	case l.tokens <- struct{}{}:
+	default:
+	}
 }
 
 func (l *Limiter) Release() {
