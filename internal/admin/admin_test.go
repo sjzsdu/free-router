@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -72,6 +73,108 @@ func TestAdminUpdatesRouteConfiguration(t *testing.T) {
 	}
 	if models.CapabilityVerified("test/chat-a", catalog.FunctionChat) {
 		t.Fatal("model override change retained stale capability verification")
+	}
+}
+
+func TestAdminRejectsStaleConfigurationRevision(t *testing.T) {
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	registry, _ := provider.NewRegistry("")
+	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
+	handler := New(routes, models, credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json")), health.New(), Config{}, nil)
+	first := routes.Config()
+	stale := routes.Config()
+	first.Comment = "first"
+	for index, config := range []routing.Config{first, stale} {
+		body, _ := json.Marshal(config)
+		request := httptest.NewRequest(http.MethodPut, "/admin/api/config", bytes.NewReader(body))
+		request.RemoteAddr = "127.0.0.1:1234"
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		want := http.StatusOK
+		if index == 1 {
+			want = http.StatusConflict
+		}
+		if recorder.Code != want {
+			t.Fatalf("update %d status=%d want=%d body=%s", index, recorder.Code, want, recorder.Body.String())
+		}
+	}
+}
+
+func TestConfigSaveFailureRollsBackProviderReload(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "config-dir")
+	routes, err := routing.New(filepath.Join(configDir, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, _ := provider.NewRegistry("")
+	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
+	var reloads atomic.Int64
+	var rollbacks atomic.Int64
+	handler := New(routes, models, credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json")), health.New(), Config{}, func(map[string][]string) (func(), error) {
+		reloads.Add(1)
+		return func() { rollbacks.Add(1) }, nil
+	})
+	config := routes.Config()
+	config.ProviderEnv["test"] = []string{"TEST_API_KEY"}
+
+	backupDir := configDir + "-backup"
+	if err := os.Rename(configDir, backupDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configDir, []byte("blocks directory recreation"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(config)
+	request := httptest.NewRequest(http.MethodPut, "/admin/api/config", bytes.NewReader(body))
+	request.RemoteAddr = "127.0.0.1:1234"
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadGateway || reloads.Load() != 1 || rollbacks.Load() != 1 {
+		t.Fatalf("status=%d reloads=%d rollbacks=%d body=%s", recorder.Code, reloads.Load(), rollbacks.Load(), recorder.Body.String())
+	}
+	if _, ok := routes.Config().ProviderEnv["test"]; ok {
+		t.Fatalf("failed save changed in-memory config: %#v", routes.Config().ProviderEnv)
+	}
+}
+
+func TestCredentialMutationsRollBackWhenReloadFails(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		method     string
+		path       string
+		body       string
+		initialKey string
+	}{
+		{name: "new credential", method: http.MethodPost, path: "/admin/api/credentials", body: `{"provider":"test","api_key":"new"}`},
+		{name: "replace credential", method: http.MethodPost, path: "/admin/api/credentials", body: `{"provider":"test","api_key":"new"}`, initialKey: "old"},
+		{name: "delete credential", method: http.MethodDelete, path: "/admin/api/credentials/test", initialKey: "old"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+			registry, _ := provider.NewRegistry("")
+			models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
+			vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
+			if test.initialKey != "" {
+				if _, err := vault.Set("test", test.initialKey); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var rollbacks atomic.Int64
+			handler := New(routes, models, vault, health.New(), Config{}, func(map[string][]string) (func(), error) {
+				return func() { rollbacks.Add(1) }, errors.New("injected reload failure")
+			})
+			request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
+			request.RemoteAddr = "127.0.0.1:1234"
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusInternalServerError || rollbacks.Load() != 1 {
+				t.Fatalf("status=%d rollbacks=%d body=%s", recorder.Code, rollbacks.Load(), recorder.Body.String())
+			}
+			key, exists := vault.Get("test")
+			if exists != (test.initialKey != "") || key != test.initialKey {
+				t.Fatalf("credential after rollback=(%q, %t), want (%q, %t)", key, exists, test.initialKey, test.initialKey != "")
+			}
+		})
 	}
 }
 
@@ -566,6 +669,74 @@ func TestHealthProbeRunsEightProvidersConcurrently(t *testing.T) {
 	}
 }
 
+func TestHealthProbeSerializesRequestsWithinProvider(t *testing.T) {
+	for _, key := range provider.SupportedKeyEnvs() {
+		t.Setenv(key, "")
+	}
+	var active atomic.Int64
+	var maximum atomic.Int64
+	var calls atomic.Int64
+	firstStarted := make(chan struct{})
+	release := make(chan struct{})
+	modelsJSON := `{"data":[{"id":"chat-1"},{"id":"chat-2"},{"id":"chat-3"}]}`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(modelsJSON))
+		case "/chat/completions":
+			current := active.Add(1)
+			defer active.Add(-1)
+			for {
+				previous := maximum.Load()
+				if current <= previous || maximum.CompareAndSwap(previous, current) {
+					break
+				}
+			}
+			if calls.Add(1) == 1 {
+				close(firstStarted)
+			}
+			<-release
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","no_auth":true}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	discoverModelsForTest(t, models)
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	handler := New(routes, models, credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json")), health.New(), Config{}, nil)
+
+	status, started := handler.probes.Start(handler, true)
+	if !started || status.Total != 3 {
+		t.Fatalf("started=%t status=%#v", started, status)
+	}
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("first provider probe did not start")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := maximum.Load(); got != 1 {
+		close(release)
+		t.Fatalf("same-provider concurrency=%d, want 1", got)
+	}
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for handler.probes.Snapshot().Status == "running" && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("probe calls=%d, want 3", got)
+	}
+}
+
 func TestExpensiveModelProbeRequiresConfirmation(t *testing.T) {
 	for _, key := range provider.SupportedKeyEnvs() {
 		t.Setenv(key, "")
@@ -599,6 +770,14 @@ func TestExpensiveModelProbeRequiresConfirmation(t *testing.T) {
 		t.Fatalf("unconfirmed status=%d calls=%d", recorder.Code, imageCalls.Load())
 	}
 
+	request = httptest.NewRequest(http.MethodPost, "/admin/api/health/probe/model", strings.NewReader(`{"model":"test/image-test","allow_expensive":true,"dry_run":true}`))
+	request.RemoteAddr = "127.0.0.1:1234"
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || imageCalls.Load() != 0 || !strings.Contains(recorder.Body.String(), `"dry_run":true`) {
+		t.Fatalf("dry-run status=%d calls=%d body=%s", recorder.Code, imageCalls.Load(), recorder.Body.String())
+	}
+
 	request = httptest.NewRequest(http.MethodPost, "/admin/api/health/probe/model", strings.NewReader(`{"model":"test/image-test","allow_expensive":true}`))
 	request.RemoteAddr = "127.0.0.1:1234"
 	recorder = httptest.NewRecorder()
@@ -612,6 +791,21 @@ func TestExpensiveModelProbeRequiresConfirmation(t *testing.T) {
 	}
 	if imageCalls.Load() != 1 || tracker.Snapshot()[0].Status != "healthy" {
 		t.Fatalf("calls=%d health=%#v", imageCalls.Load(), tracker.Snapshot())
+	}
+	remaining, err := handler.probes.reserveExpensiveBudget(2)
+	if err != nil || remaining != 0 {
+		t.Fatalf("reserve remaining=%d err=%v", remaining, err)
+	}
+	restarted := newProbeManager(filepath.Dir(routes.Path()))
+	if remaining, err := restarted.expensiveBudgetRemaining(); err != nil || remaining != 0 {
+		t.Fatalf("persisted remaining=%d err=%v", remaining, err)
+	}
+	if _, err := restarted.reserveExpensiveBudget(1); err == nil {
+		t.Fatal("daily expensive probe budget should reject a fourth task")
+	}
+	audit, err := os.ReadFile(filepath.Join(filepath.Dir(routes.Path()), "probe-audit.jsonl"))
+	if err != nil || !bytes.Contains(audit, []byte(`"action":"dry-run"`)) || !bytes.Contains(audit, []byte(`"action":"started"`)) {
+		t.Fatalf("audit=%s err=%v", audit, err)
 	}
 }
 

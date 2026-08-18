@@ -1,6 +1,9 @@
 package adapter
 
 import (
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/sjzsdu/free-router/internal/catalog"
@@ -23,7 +26,7 @@ func TestClassifyError(t *testing.T) {
 		{"408 timeout", 408, nil, "request timeout", true, false},
 		{"400 client error", 400, []byte(`{"error":{"message":"bad request"}}`), "bad request", false, false},
 		{"401 auth error", 401, []byte(`{"error":{"message":"unauthorized"}}`), "unauthorized", false, false},
-		{"400 error without message", 400, []byte(`{}`), "HTTP 0", false, false},
+		{"400 error without message", 400, []byte(`{}`), "HTTP 400", false, false},
 	}
 
 	for _, tt := range tests {
@@ -39,6 +42,66 @@ func TestClassifyError(t *testing.T) {
 				t.Errorf("RateLimit = %v, want %v", err.RateLimit, tt.wantRate)
 			}
 		})
+	}
+}
+
+func TestNormalizeResponseClassifiesErrorAndPreservesBody(t *testing.T) {
+	adapter := &OpenAICompatibleAdapter{}
+	response := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"invalid model"}}`)),
+	}
+	normalized, err := adapter.NormalizeResponse(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.Error == nil || normalized.Error.StatusCode != http.StatusBadRequest || normalized.Error.Message != "invalid model" {
+		t.Fatalf("normalized=%#v", normalized)
+	}
+	preserved, err := io.ReadAll(response.Body)
+	if err != nil || string(preserved) != `{"error":{"message":"invalid model"}}` {
+		t.Fatalf("preserved body=%q err=%v", preserved, err)
+	}
+}
+
+func TestCloudflareAdapterHandlesProviderErrorEnvelope(t *testing.T) {
+	registry := NewRegistry()
+	cloudflare := registry.Get("cloudflare")
+	if cloudflare.Name() != "cloudflare-workers-ai" {
+		t.Fatalf("adapter=%q", cloudflare.Name())
+	}
+	response := &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"success":false,"errors":[{"message":"daily neuron limit reached"}]}`)),
+	}
+	normalized, err := cloudflare.NormalizeResponse(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.Error == nil || normalized.Error.Message != "daily neuron limit reached" || !normalized.Error.RateLimit || !normalized.Error.Retryable {
+		t.Fatalf("normalized=%#v", normalized)
+	}
+}
+
+func TestNormalizeResponseLeavesStreamingBodyUntouched(t *testing.T) {
+	adapter := &OpenAICompatibleAdapter{}
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream; charset=utf-8"}},
+		Body:       io.NopCloser(strings.NewReader("data: ok\n\n")),
+	}
+	normalized, err := adapter.NormalizeResponse(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !normalized.Stream || normalized.Error != nil {
+		t.Fatalf("normalized=%#v", normalized)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil || string(body) != "data: ok\n\n" {
+		t.Fatalf("stream body=%q err=%v", body, err)
 	}
 }
 

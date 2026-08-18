@@ -12,8 +12,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sjzsdu/free-router/internal/catalog"
@@ -27,6 +29,7 @@ import (
 var assets embed.FS
 
 type Handler struct {
+	updateMu           sync.Mutex
 	routes             *routing.Store
 	catalog            *catalog.Store
 	vault              *credentials.Vault
@@ -67,7 +70,7 @@ func New(routes *routing.Store, models *catalog.Store, vault *credentials.Vault,
 	if tokenURL == "" {
 		tokenURL = "https://openrouter.ai/api/v1/auth/keys"
 	}
-	handler := &Handler{routes: routes, catalog: models, vault: vault, health: tracker, probes: newProbeManager(), providerProbes: newProviderProbeStore(), config: config, reload: reload, static: http.FileServer(http.FS(staticFS)), started: time.Now(), oauthFlows: newOAuthFlows(), oauthHTTPClient: client, openRouterAuthURL: authURL, openRouterTokenURL: tokenURL}
+	handler := &Handler{routes: routes, catalog: models, vault: vault, health: tracker, probes: newProbeManager(filepath.Dir(routes.Path())), providerProbes: newProviderProbeStore(), config: config, reload: reload, static: http.FileServer(http.FS(staticFS)), started: time.Now(), oauthFlows: newOAuthFlows(), oauthHTTPClient: client, openRouterAuthURL: authURL, openRouterTokenURL: tokenURL}
 	handler.syncVerifiedHealth()
 	return handler
 }
@@ -163,16 +166,19 @@ func (h *Handler) runtimeState() map[string]any {
 }
 
 func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
+	h.updateMu.Lock()
+	defer h.updateMu.Unlock()
 	var config routing.Config
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&config); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid configuration")
 		return
 	}
 
-	previousConfig := h.routes.Config()
+	var previousConfig routing.Config
 
 	var rollback func()
-	validateFunc := func(newConfig routing.Config) error {
+	validateFunc := func(currentConfig, newConfig routing.Config) error {
+		previousConfig = currentConfig
 		if !reflect.DeepEqual(previousConfig.ProviderEnv, newConfig.ProviderEnv) {
 			var err error
 			rollback, err = h.reloadProviders(newConfig.ProviderEnv)
@@ -187,7 +193,11 @@ func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
 		if rollback != nil {
 			rollback()
 		}
-		writeError(w, http.StatusBadGateway, err.Error())
+		status := http.StatusBadGateway
+		if errors.Is(err, routing.ErrConfigConflict) {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
 		return
 	}
 
@@ -267,6 +277,8 @@ func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request, escapedID
 }
 
 func (h *Handler) saveCredential(w http.ResponseWriter, r *http.Request) {
+	h.updateMu.Lock()
+	defer h.updateMu.Unlock()
 	var input struct {
 		Provider string `json:"provider"`
 		APIKey   string `json:"api_key"`
@@ -317,6 +329,8 @@ func (h *Handler) saveCredential(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) deleteCredential(w http.ResponseWriter, r *http.Request, providerID string) {
+	h.updateMu.Lock()
+	defer h.updateMu.Unlock()
 	if providerID == "" {
 		writeError(w, http.StatusBadRequest, "provider is required")
 		return

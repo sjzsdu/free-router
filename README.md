@@ -66,6 +66,19 @@ export GITHUB_TOKEN=github_pat_xxx
 go run . serve
 ```
 
+容器默认监听 `0.0.0.0:1314`，因此必须显式提供推理 API Token；需要从宿主机访问管理页时，还要单独启用远程 Admin 并设置独立 Token：
+
+```bash
+docker build -t free-router .
+docker run --rm -p 127.0.0.1:1314:1314 \
+  -e FREE_ROUTER_API_TOKEN='替换为推理接口随机 Token' \
+  -e FREE_ROUTER_ADMIN_ALLOW_REMOTE=true \
+  -e FREE_ROUTER_ADMIN_TOKEN='替换为管理界面随机 Token' \
+  free-router
+```
+
+推理请求使用 `Authorization: Bearer ...`；管理页使用用户名 `admin` 和独立的 Admin Token。端口发布到宿主机 loopback 可避免管理面直接暴露到局域网。
+
 优先级是：环境变量 > 已保存凭据。Cloudflare 除 API Token 外仍需设置非敏感的 `CLOUDFLARE_ACCOUNT_ID`。
 
 也可以一键安装到 `GOBIN`；未设置 `GOBIN` 时默认安装到 `$(go env GOPATH)/bin`：

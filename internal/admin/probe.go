@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -13,25 +16,35 @@ import (
 )
 
 const (
-	healthProbeConcurrency = 8
-	healthProbeTimeout     = 10 * time.Second
-	expensiveProbeTimeout  = 2 * time.Minute
+	healthProbeConcurrency   = 8
+	healthProbeTimeout       = 10 * time.Second
+	expensiveProbeTimeout    = 2 * time.Minute
+	expensiveProbeDailyLimit = 3
 )
 
 type ProbeStatus struct {
-	Status     string    `json:"status"`
-	Total      int       `json:"total"`
-	Completed  int       `json:"completed"`
-	Healthy    int       `json:"healthy"`
-	Failed     int       `json:"failed"`
-	Skipped    int       `json:"skipped"`
-	StartedAt  time.Time `json:"started_at,omitempty"`
-	FinishedAt time.Time `json:"finished_at,omitempty"`
+	Status                   string    `json:"status"`
+	Total                    int       `json:"total"`
+	Completed                int       `json:"completed"`
+	Healthy                  int       `json:"healthy"`
+	Failed                   int       `json:"failed"`
+	Skipped                  int       `json:"skipped"`
+	StartedAt                time.Time `json:"started_at,omitempty"`
+	FinishedAt               time.Time `json:"finished_at,omitempty"`
+	DryRun                   bool      `json:"dry_run,omitempty"`
+	ExpensiveBudgetRemaining int       `json:"expensive_budget_remaining"`
 }
 
 type probeManager struct {
-	mu     sync.RWMutex
-	status ProbeStatus
+	mu         sync.RWMutex
+	status     ProbeStatus
+	budgetPath string
+	auditPath  string
+}
+
+type probeBudget struct {
+	Date string `json:"date"`
+	Used int    `json:"used"`
 }
 
 type probeJob struct {
@@ -39,8 +52,12 @@ type probeJob struct {
 	Capability string
 }
 
-func newProbeManager() *probeManager {
-	return &probeManager{status: ProbeStatus{Status: "idle"}}
+func newProbeManager(dataDir string) *probeManager {
+	return &probeManager{
+		status:     ProbeStatus{Status: "idle", ExpensiveBudgetRemaining: expensiveProbeDailyLimit},
+		budgetPath: filepath.Join(dataDir, "probe-budget.json"),
+		auditPath:  filepath.Join(dataDir, "probe-audit.jsonl"),
+	}
 }
 
 func (manager *probeManager) Snapshot() ProbeStatus {
@@ -71,12 +88,13 @@ func (h *Handler) startModelHealthProbe(w http.ResponseWriter, r *http.Request) 
 	var input struct {
 		Model          string `json:"model"`
 		AllowExpensive bool   `json:"allow_expensive"`
+		DryRun         bool   `json:"dry_run"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&input); err != nil || input.Model == "" {
 		writeError(w, http.StatusBadRequest, "model is required")
 		return
 	}
-	status, started, err := h.probes.StartModel(h, input.Model, input.AllowExpensive)
+	status, started, err := h.probes.StartModel(h, input.Model, input.AllowExpensive, input.DryRun)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -109,7 +127,7 @@ func (manager *probeManager) Start(h *Handler, force bool) (ProbeStatus, bool) {
 	return manager.status, true
 }
 
-func (manager *probeManager) StartModel(h *Handler, modelID string, allowExpensive bool) (ProbeStatus, bool, error) {
+func (manager *probeManager) StartModel(h *Handler, modelID string, allowExpensive, dryRun bool) (ProbeStatus, bool, error) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	if manager.status.Status == "running" {
@@ -128,14 +146,115 @@ func (manager *probeManager) StartModel(h *Handler, modelID string, allowExpensi
 	if hasExpensiveProbe(jobs) && !allowExpensive {
 		return manager.status, false, errors.New("image and video probes require explicit cost confirmation")
 	}
+	expensive := countExpensiveProbes(jobs)
+	remaining, err := manager.expensiveBudgetRemaining()
+	if err != nil {
+		return manager.status, false, err
+	}
+	if dryRun {
+		now := time.Now()
+		manager.status = ProbeStatus{Status: "completed", Total: len(jobs), Skipped: len(model.Functions) - len(jobs), StartedAt: now, FinishedAt: now, DryRun: true, ExpensiveBudgetRemaining: remaining}
+		manager.audit(modelID, expensive, "dry-run")
+		return manager.status, false, nil
+	}
+	if expensive > 0 {
+		remaining, err = manager.reserveExpensiveBudget(expensive)
+		if err != nil {
+			manager.audit(modelID, expensive, "budget-denied")
+			return manager.status, false, err
+		}
+		manager.audit(modelID, expensive, "started")
+	}
 	if len(jobs) == 0 {
 		now := time.Now()
 		manager.status = ProbeStatus{Status: "completed", Skipped: len(model.Functions), StartedAt: now, FinishedAt: now}
 		return manager.status, false, nil
 	}
-	manager.status = ProbeStatus{Status: "running", Total: len(jobs), StartedAt: time.Now()}
+	manager.status = ProbeStatus{Status: "running", Total: len(jobs), StartedAt: time.Now(), ExpensiveBudgetRemaining: remaining}
 	go manager.run(h, jobs)
 	return manager.status, true, nil
+}
+
+func countExpensiveProbes(jobs []probeJob) int {
+	count := 0
+	for _, job := range jobs {
+		if expensiveCapability(job.Capability) {
+			count++
+		}
+	}
+	return count
+}
+
+func (manager *probeManager) expensiveBudgetRemaining() (int, error) {
+	budget, err := manager.loadBudget()
+	if err != nil {
+		return 0, err
+	}
+	return max(0, expensiveProbeDailyLimit-budget.Used), nil
+}
+
+func (manager *probeManager) reserveExpensiveBudget(count int) (int, error) {
+	budget, err := manager.loadBudget()
+	if err != nil {
+		return 0, err
+	}
+	if budget.Used+count > expensiveProbeDailyLimit {
+		return max(0, expensiveProbeDailyLimit-budget.Used), fmt.Errorf("daily expensive probe budget exceeded: used %d of %d", budget.Used, expensiveProbeDailyLimit)
+	}
+	budget.Used += count
+	if err := manager.saveBudget(budget); err != nil {
+		return 0, err
+	}
+	return expensiveProbeDailyLimit - budget.Used, nil
+}
+
+func (manager *probeManager) loadBudget() (probeBudget, error) {
+	today := time.Now().Format("2006-01-02")
+	budget := probeBudget{Date: today}
+	content, err := os.ReadFile(manager.budgetPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return budget, nil
+	}
+	if err != nil {
+		return budget, fmt.Errorf("read probe budget: %w", err)
+	}
+	if err := json.Unmarshal(content, &budget); err != nil {
+		return budget, fmt.Errorf("decode probe budget: %w", err)
+	}
+	if budget.Date != today {
+		budget = probeBudget{Date: today}
+	}
+	return budget, nil
+}
+
+func (manager *probeManager) saveBudget(budget probeBudget) error {
+	if err := os.MkdirAll(filepath.Dir(manager.budgetPath), 0o700); err != nil {
+		return fmt.Errorf("create probe budget directory: %w", err)
+	}
+	content, err := json.Marshal(budget)
+	if err != nil {
+		return err
+	}
+	temporary := manager.budgetPath + ".tmp"
+	if err := os.WriteFile(temporary, content, 0o600); err != nil {
+		return fmt.Errorf("write probe budget: %w", err)
+	}
+	if err := os.Rename(temporary, manager.budgetPath); err != nil {
+		return fmt.Errorf("commit probe budget: %w", err)
+	}
+	return nil
+}
+
+func (manager *probeManager) audit(model string, expensive int, action string) {
+	if err := os.MkdirAll(filepath.Dir(manager.auditPath), 0o700); err != nil {
+		return
+	}
+	file, err := os.OpenFile(manager.auditPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	_ = json.NewEncoder(file).Encode(map[string]any{"at": time.Now().UTC(), "model": model, "expensive_probes": expensive, "action": action})
 }
 
 func probeCandidates(h *Handler, force bool) ([]probeJob, int) {

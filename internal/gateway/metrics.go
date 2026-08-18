@@ -19,6 +19,11 @@ type Metrics struct {
 	ErrorsNetwork    atomic.Uint64
 	LatencySum       atomic.Int64
 	LatencyCount     atomic.Uint64
+	TTFBSum          atomic.Int64
+	TTFBCount        atomic.Uint64
+	OutputBytes      atomic.Uint64
+	Incomplete       atomic.Uint64
+	Cancellations    atomic.Uint64
 	Concurrency      atomic.Int32
 	MaxConcurrency   atomic.Int32
 }
@@ -64,6 +69,37 @@ func (m *Metrics) RecordFailure(latency time.Duration, statusCode int) {
 	}
 }
 
+func (m *Metrics) RecordTransfer(success bool, total, ttfb time.Duration, outputBytes int64, statusCode int, canceled bool) {
+	if success {
+		m.Successes.Add(1)
+	} else {
+		m.Failures.Add(1)
+		m.Incomplete.Add(1)
+		if canceled {
+			m.Cancellations.Add(1)
+		} else {
+			switch {
+			case statusCode == 0:
+				m.ErrorsNetwork.Add(1)
+			case statusCode >= 400 && statusCode < 500:
+				m.ErrorsClient.Add(1)
+			case statusCode >= 500:
+				m.ErrorsServer.Add(1)
+			}
+		}
+	}
+	m.LatencySum.Add(int64(total))
+	m.LatencyCount.Add(1)
+	if ttfb > 0 {
+		m.TTFBSum.Add(int64(ttfb))
+		m.TTFBCount.Add(1)
+	}
+	if outputBytes > 0 {
+		m.OutputBytes.Add(uint64(outputBytes))
+	}
+	m.Concurrency.Add(-1)
+}
+
 func (m *Metrics) RecordFallback() {
 	m.FallbackAttempts.Add(1)
 }
@@ -89,6 +125,10 @@ type MetricsSnapshot struct {
 	Concurrency      int32         `json:"concurrency"`
 	MaxConcurrency   int32         `json:"max_concurrency"`
 	AverageLatency   time.Duration `json:"average_latency_ms"`
+	AverageTTFB      time.Duration `json:"average_ttfb_ms"`
+	OutputBytes      uint64        `json:"output_bytes"`
+	Incomplete       uint64        `json:"incomplete"`
+	Cancellations    uint64        `json:"cancellations"`
 }
 
 func (m *Metrics) Snapshot() MetricsSnapshot {
@@ -96,6 +136,11 @@ func (m *Metrics) Snapshot() MetricsSnapshot {
 	var avgLatency time.Duration
 	if count > 0 {
 		avgLatency = time.Duration(m.LatencySum.Load() / int64(count))
+	}
+	ttfbCount := m.TTFBCount.Load()
+	var avgTTFB time.Duration
+	if ttfbCount > 0 {
+		avgTTFB = time.Duration(m.TTFBSum.Load() / int64(ttfbCount))
 	}
 
 	return MetricsSnapshot{
@@ -111,6 +156,10 @@ func (m *Metrics) Snapshot() MetricsSnapshot {
 		Concurrency:      m.Concurrency.Load(),
 		MaxConcurrency:   m.MaxConcurrency.Load(),
 		AverageLatency:   avgLatency / time.Millisecond,
+		AverageTTFB:      avgTTFB / time.Millisecond,
+		OutputBytes:      m.OutputBytes.Load(),
+		Incomplete:       m.Incomplete.Load(),
+		Cancellations:    m.Cancellations.Load(),
 	}
 }
 

@@ -26,10 +26,42 @@ jobs:
         run: |
           npm ci --prefix web
           npm run build --prefix web
-          git diff --exit-code -- internal/admin/dist
+          test -f internal/admin/dist/index.html
+      - name: Frontend behavior tests
+        run: npm test --prefix web
       - name: Check
         run: make check
       - name: Race test
         run: make test-race
       - name: Build
         run: make build
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build clean image
+        run: docker build --tag free-router:ci .
+      - name: Smoke test container
+        env:
+          API_TOKEN: ci-inference-token
+          ADMIN_TOKEN: ci-admin-token
+        run: |
+          set -eu
+          container_id="$(docker run --detach --publish 127.0.0.1:1314:1314 \
+            --env FREE_ROUTER_API_TOKEN="$API_TOKEN" \
+            --env FREE_ROUTER_ADMIN_ALLOW_REMOTE=true \
+            --env FREE_ROUTER_ADMIN_TOKEN="$ADMIN_TOKEN" \
+            free-router:ci)"
+          trap 'docker logs "$container_id"; docker rm --force "$container_id"' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:1314/healthz >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              exit 1
+            fi
+            sleep 1
+          done
+          curl --fail --silent --user "admin:$ADMIN_TOKEN" http://127.0.0.1:1314/admin/ | grep --quiet '<div id="root"></div>'
+          curl --fail --silent --header "Authorization: Bearer $API_TOKEN" http://127.0.0.1:1314/v1/models | grep --quiet '"data"'

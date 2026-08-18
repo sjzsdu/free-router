@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,5 +114,154 @@ func TestInstallBinaryCopiesToStableUserPath(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o755 {
 		t.Fatalf("installed permissions = %o", info.Mode().Perm())
+	}
+}
+
+func fakeManager(t *testing.T, calls *[]string, respond func(string, []string) (string, error)) *Manager {
+	t.Helper()
+	manager := &Manager{goos: "darwin", home: filepath.Join(t.TempDir(), "home"), uid: "501", command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+		*calls = append(*calls, name+" "+strings.Join(args, " "))
+		joined := name + " " + strings.Join(args, " ")
+		if respond != nil {
+			output, err := respond(name, args)
+			if err != nil {
+				return nil, err
+			}
+			return []byte(output), err
+		}
+		return []byte(joined), nil
+	}}
+	plistPath := manager.launchdPath()
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plistPath, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return manager
+}
+
+func TestStartRunsLaunchctlSequence(t *testing.T) {
+	var calls []string
+	manager := fakeManager(t, &calls, nil)
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(calls, "|")
+	for _, expected := range []string{"launchctl enable", "launchctl bootstrap", "launchctl kickstart -k"} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("Start did not run %q: %v", expected, calls)
+		}
+	}
+}
+
+func TestStopRunsLaunchctlBootout(t *testing.T) {
+	var calls []string
+	manager := fakeManager(t, &calls, nil)
+	manager.command = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		// Status must report running, otherwise Stop short-circuits.
+		if name == "launchctl" && len(args) > 0 && args[0] == "print" {
+			return []byte("state = running\npid = 1"), nil
+		}
+		return []byte(""), nil
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(calls, "|")
+	if !strings.Contains(joined, "launchctl bootout") {
+		t.Fatalf("Stop should run launchctl bootout, got %v", calls)
+	}
+}
+
+func TestStatusParsesLaunchdStateAndPID(t *testing.T) {
+	var calls []string
+	manager := fakeManager(t, &calls, func(_ string, _ []string) (string, error) {
+		return "state = running\npid = 4242", nil
+	})
+	status, err := manager.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Installed || !status.Running {
+		t.Fatalf("status = %+v, want installed+running", status)
+	}
+	if status.PID != 4242 {
+		t.Fatalf("PID = %d, want 4242", status.PID)
+	}
+	if status.Message != "running" {
+		t.Fatalf("message = %q, want running", status.Message)
+	}
+}
+
+func TestStatusReportsStoppedWhenLaunchctlFails(t *testing.T) {
+	manager := fakeManager(t, &[]string{}, func(_ string, _ []string) (string, error) {
+		return "", errors.New("could not find service")
+	})
+	status, err := manager.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Running || status.Message != "stopped" {
+		t.Fatalf("status = %+v, want stopped", status)
+	}
+}
+
+func TestUninstallRemovesLaunchAgentsAndEnv(t *testing.T) {
+	var calls []string
+	manager := fakeManager(t, &calls, nil)
+	envPath := manager.daemonEnvPath()
+	if err := os.MkdirAll(filepath.Dir(envPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(envPath, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	trayPath := manager.trayLaunchdPath()
+	if err := os.WriteFile(trayPath, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Uninstall(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(envPath); !os.IsNotExist(err) {
+		t.Fatalf("daemon env should be removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(trayPath); !os.IsNotExist(err) {
+		t.Fatalf("tray LaunchAgent should be removed, stat err = %v", err)
+	}
+	joined := strings.Join(calls, "|")
+	if !strings.Contains(joined, "launchctl bootout") {
+		t.Fatalf("Uninstall should boot out launchd targets, got %v", calls)
+	}
+}
+
+func TestInstallRunsFullSequenceAndCopiesBinary(t *testing.T) {
+	var calls []string
+	executable := filepath.Join(t.TempDir(), "free-router")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\necho ok"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{goos: "darwin", executable: executable, home: filepath.Join(t.TempDir(), "home"), uid: "501", command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		return []byte("state = running"), nil
+	}}
+	if err := manager.Install(context.Background(), map[string]string{"GEMINI_KEY": "secret"}); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(calls, "|")
+	for _, expected := range []string{"launchctl enable", "launchctl bootstrap", "launchctl kickstart -k"} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("Install did not run %q: %v", expected, calls)
+		}
+	}
+	bin := manager.BinaryPath()
+	if _, err := os.Stat(bin); err != nil {
+		t.Fatalf("binary not installed at %s: %v", bin, err)
+	}
+	env, err := os.ReadFile(manager.daemonEnvPath())
+	if err != nil || !strings.Contains(string(env), "GEMINI_KEY") {
+		t.Fatalf("daemon env not written: %v %s", err, env)
 	}
 }

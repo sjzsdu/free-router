@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -153,5 +154,25 @@ func TestProviderEnvironmentMappingRejectsInvalidNames(t *testing.T) {
 	config.ProviderEnv["gemini"] = []string{"NOT-AN-ENV"}
 	if err := store.Update(config); err == nil {
 		t.Fatal("invalid environment variable was accepted")
+	}
+}
+
+func TestStoreRejectsStaleConcurrentUpdate(t *testing.T) {
+	store, err := New(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := store.Config()
+	stale := store.Config()
+	first.Comment = "first"
+	if err := store.Update(first); err != nil {
+		t.Fatal(err)
+	}
+	stale.Comment = "stale"
+	if err := store.Update(stale); !errors.Is(err, ErrConfigConflict) {
+		t.Fatalf("stale update error=%v, want conflict", err)
+	}
+	if got := store.Config().Comment; got != "first" {
+		t.Fatalf("stale update changed config to %q", got)
 	}
 }

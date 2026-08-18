@@ -1,3 +1,7 @@
 .git
 .cache
 free-router
+bin
+coverage.out
+internal/admin/dist
+web/node_modules

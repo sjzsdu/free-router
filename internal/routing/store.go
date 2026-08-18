@@ -15,6 +15,8 @@ import (
 
 const CurrentVersion = 6
 
+var ErrConfigConflict = errors.New("route configuration was changed by another request; reload the latest configuration and retry")
+
 const (
 	StrategyOrdered    = "ordered"
 	StrategyRoundRobin = "round-robin"
@@ -33,6 +35,7 @@ type Config struct {
 	Comment     string                   `json:"_comment,omitempty"`
 	Help        map[string]string        `json:"_help,omitempty"`
 	Version     int                      `json:"version"`
+	Revision    uint64                   `json:"revision"`
 	ProviderEnv map[string][]string      `json:"provider_env"`
 	Routes      map[string]Route         `json:"routes"`
 	Models      map[string]ModelOverride `json:"models"`
@@ -54,7 +57,7 @@ type Store struct {
 }
 
 func DefaultConfig() Config {
-	return Config{Version: CurrentVersion, Models: map[string]ModelOverride{}, ProviderEnv: map[string][]string{}, Routes: map[string]Route{
+	return Config{Version: CurrentVersion, Revision: 1, Models: map[string]ModelOverride{}, ProviderEnv: map[string][]string{}, Routes: map[string]Route{
 		catalog.FunctionChat:               {Capability: catalog.FunctionChat, Strategy: StrategyOrdered, Models: []string{}},
 		catalog.FunctionChatTools:          {Capability: catalog.FunctionChatTools, Strategy: StrategyOrdered, RequireTool: true, Models: []string{}},
 		catalog.FunctionImageUnderstanding: {Capability: catalog.FunctionImageUnderstanding, Strategy: StrategyOrdered, Models: []string{}},
@@ -174,6 +177,10 @@ func (s *Store) Update(config Config) error {
 	// config and the in-memory config divergent (disk=A, memory=B).
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if config.Revision != s.config.Revision {
+		return ErrConfigConflict
+	}
+	config.Revision++
 	if err := s.save(config); err != nil {
 		return err
 	}
@@ -181,20 +188,24 @@ func (s *Store) Update(config Config) error {
 	return nil
 }
 
-func (s *Store) UpdateTransactional(config Config, validateFunc func(Config) error) error {
+func (s *Store) UpdateTransactional(config Config, validateFunc func(Config, Config) error) error {
 	config = mergeDefaults(config)
 	if err := validate(&config); err != nil {
 		return err
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if config.Revision != s.config.Revision {
+		return ErrConfigConflict
+	}
+	current := cloneConfig(s.config)
+	config.Revision++
 	if validateFunc != nil {
-		if err := validateFunc(config); err != nil {
+		if err := validateFunc(current, config); err != nil {
 			return err
 		}
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if err := s.save(config); err != nil {
 		return err
 	}
@@ -258,6 +269,9 @@ func (s *Store) save(config Config) error {
 func mergeDefaults(config Config) Config {
 	defaults := DefaultConfig()
 	previousVersion := config.Version
+	if config.Revision == 0 {
+		config.Revision = 1
+	}
 	if config.Routes == nil {
 		config.Routes = make(map[string]Route)
 	}
@@ -429,7 +443,7 @@ func legacyFunctions(modelType string) []string {
 }
 
 func cloneConfig(config Config) Config {
-	clone := Config{Comment: config.Comment, Version: config.Version, Routes: make(map[string]Route, len(config.Routes)), Models: make(map[string]ModelOverride, len(config.Models)), ProviderEnv: make(map[string][]string, len(config.ProviderEnv))}
+	clone := Config{Comment: config.Comment, Version: config.Version, Revision: config.Revision, Routes: make(map[string]Route, len(config.Routes)), Models: make(map[string]ModelOverride, len(config.Models)), ProviderEnv: make(map[string][]string, len(config.ProviderEnv))}
 	if config.Help != nil {
 		clone.Help = make(map[string]string, len(config.Help))
 		for field, description := range config.Help {

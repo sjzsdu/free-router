@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -55,10 +56,12 @@ type Registry struct {
 }
 
 func NewRegistry() *Registry {
-	return &Registry{
+	registry := &Registry{
 		adapters: make(map[string]ProviderAdapter),
 		defaults: &OpenAICompatibleAdapter{},
 	}
+	registry.Register("cloudflare", &CloudflareAdapter{})
+	return registry
 }
 
 func (r *Registry) Register(providerID string, adapter ProviderAdapter) {
@@ -106,12 +109,30 @@ func (a *OpenAICompatibleAdapter) BuildRequest(req Request) (*http.Request, erro
 }
 
 func (a *OpenAICompatibleAdapter) NormalizeResponse(resp *http.Response) (Response, error) {
-	return Response{
+	return normalizeResponse(resp, a.ClassifyError)
+}
+
+func normalizeResponse(resp *http.Response, classify func(int, []byte) Error) (Response, error) {
+	result := Response{
 		StatusCode:  resp.StatusCode,
 		ContentType: resp.Header.Get("Content-Type"),
 		Headers:     resp.Header,
 		Stream:      isStreamResponse(resp),
-	}, nil
+	}
+	if resp.StatusCode < http.StatusBadRequest {
+		return result, nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return Response{}, fmt.Errorf("read provider error response: %w", err)
+	}
+	resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	resp.ContentLength = int64(len(body))
+	result.Body = body
+	classified := classify(resp.StatusCode, body)
+	result.Error = &classified
+	return result, nil
 }
 
 func (a *OpenAICompatibleAdapter) ClassifyError(statusCode int, body []byte) Error {
@@ -129,7 +150,7 @@ func (a *OpenAICompatibleAdapter) ClassifyError(statusCode int, body []byte) Err
 		err.Message = "request timeout"
 		err.Retryable = true
 	case statusCode >= 400:
-		err.Message = a.parseErrorMessage(body)
+		err.Message = a.parseErrorMessage(statusCode, body)
 		err.Retryable = false
 	default:
 		err.Message = "unknown error"
@@ -139,7 +160,7 @@ func (a *OpenAICompatibleAdapter) ClassifyError(statusCode int, body []byte) Err
 	return err
 }
 
-func (a *OpenAICompatibleAdapter) parseErrorMessage(body []byte) string {
+func (a *OpenAICompatibleAdapter) parseErrorMessage(statusCode int, body []byte) string {
 	var result struct {
 		Error struct {
 			Message string `json:"message"`
@@ -148,7 +169,32 @@ func (a *OpenAICompatibleAdapter) parseErrorMessage(body []byte) string {
 	if err := json.Unmarshal(body, &result); err == nil && result.Error.Message != "" {
 		return result.Error.Message
 	}
-	return fmt.Sprintf("HTTP %d", a.ClassifyError(0, nil).StatusCode)
+	return fmt.Sprintf("HTTP %d", statusCode)
+}
+
+// CloudflareAdapter handles Workers AI's non-OpenAI error envelope while
+// retaining the compatible request and successful response behavior.
+type CloudflareAdapter struct {
+	OpenAICompatibleAdapter
+}
+
+func (a *CloudflareAdapter) Name() string { return "cloudflare-workers-ai" }
+
+func (a *CloudflareAdapter) NormalizeResponse(resp *http.Response) (Response, error) {
+	return normalizeResponse(resp, a.ClassifyError)
+}
+
+func (a *CloudflareAdapter) ClassifyError(statusCode int, body []byte) Error {
+	classified := a.OpenAICompatibleAdapter.ClassifyError(statusCode, body)
+	var envelope struct {
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if json.Unmarshal(body, &envelope) == nil && len(envelope.Errors) > 0 && envelope.Errors[0].Message != "" {
+		classified.Message = envelope.Errors[0].Message
+	}
+	return classified
 }
 
 func (a *OpenAICompatibleAdapter) Capabilities(model catalog.Model) catalog.Capabilities {

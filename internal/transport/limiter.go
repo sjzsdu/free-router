@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"time"
 )
@@ -31,6 +32,7 @@ type Limiter struct {
 	tokens chan struct{}
 	ticker *time.Ticker
 	queue  chan struct{}
+	done   chan struct{}
 	closed bool
 	mu     sync.Mutex
 }
@@ -42,11 +44,6 @@ func NewLimiter(config RateLimitConfig) *Limiter {
 	if config.RateLimitPerSecond <= 0 {
 		config.RateLimitPerSecond = 50
 	}
-	// Rates in (0,1) would truncate to zero and divide-by-zero in the
-	// ticker interval; clamp to a minimum of 1 token per second.
-	if config.RateLimitPerSecond < 1 {
-		config.RateLimitPerSecond = 1
-	}
 	if config.QueueSize <= 0 {
 		config.QueueSize = 100
 	}
@@ -54,29 +51,26 @@ func NewLimiter(config RateLimitConfig) *Limiter {
 	l := &Limiter{
 		sem:    make(chan struct{}, config.MaxConcurrentRequests),
 		queue:  make(chan struct{}, config.QueueSize),
-		tokens: make(chan struct{}, int(config.RateLimitPerSecond)*2),
+		tokens: make(chan struct{}, max(1, int(math.Ceil(config.RateLimitPerSecond*2)))),
+		done:   make(chan struct{}),
 	}
 
-	for i := 0; i < int(config.RateLimitPerSecond); i++ {
+	for i := 0; i < max(1, int(math.Ceil(config.RateLimitPerSecond))); i++ {
 		l.tokens <- struct{}{}
 	}
 
-	l.ticker = time.NewTicker(time.Second / time.Duration(config.RateLimitPerSecond))
-	go l.tokenRefill(config.RateLimitPerSecond)
+	l.ticker = time.NewTicker(time.Duration(float64(time.Second) / config.RateLimitPerSecond))
+	go l.tokenRefill()
 
 	return l
 }
 
-func (l *Limiter) tokenRefill(rate float64) {
-	tokensPerTick := 1.0
-	for range l.ticker.C {
-		l.mu.Lock()
-		if l.closed {
-			l.mu.Unlock()
+func (l *Limiter) tokenRefill() {
+	for {
+		select {
+		case <-l.done:
 			return
-		}
-		l.mu.Unlock()
-		for i := 0; i < int(tokensPerTick); i++ {
+		case <-l.ticker.C:
 			select {
 			case l.tokens <- struct{}{}:
 			default:
@@ -143,5 +137,6 @@ func (l *Limiter) Close() {
 	if !l.closed {
 		l.closed = true
 		l.ticker.Stop()
+		close(l.done)
 	}
 }

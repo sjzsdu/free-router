@@ -40,6 +40,9 @@ type Manager struct {
 	executable string
 	home       string
 	uid        string
+	// command runs an external process and returns its combined output.
+	// It is replaced in tests to avoid touching the real service manager.
+	command func(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
 func New() (*Manager, error) {
@@ -58,7 +61,7 @@ func New() (*Manager, error) {
 	if current, userErr := user.Current(); userErr == nil && current.Uid != "" {
 		uid = current.Uid
 	}
-	return &Manager{goos: runtime.GOOS, executable: executable, home: home, uid: uid}, nil
+	return &Manager{goos: runtime.GOOS, executable: executable, home: home, uid: uid, command: execCommand}, nil
 }
 
 func (m *Manager) Install(ctx context.Context, environment map[string]string) error {
@@ -354,11 +357,17 @@ func (m *Manager) run(ctx context.Context, name string, args ...string) error {
 }
 
 func (m *Manager) output(ctx context.Context, name string, args ...string) (string, error) {
+	output, err := m.command(ctx, name, args...)
+	return string(output), err
+}
+
+// execCommand runs an external process and returns its combined output.
+func execCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
 	var output bytes.Buffer
 	command := exec.CommandContext(ctx, name, args...)
 	command.Stdout, command.Stderr = &output, &output
 	err := command.Run()
-	return output.String(), err
+	return output.Bytes(), err
 }
 
 func (m *Manager) launchdPath() string {

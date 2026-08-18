@@ -15,6 +15,7 @@ import {
   ShieldCheck, Sparkles, Sun, Trash2, Unplug, X,
 } from 'lucide-react'
 import { api } from './api'
+import { healthKey, modelDisplayStatus, modelHealth, type ModelDisplayStatus } from './modelStatus'
 import type {
   AppState, EffectiveModel, HealthProbeStatus, HealthState, Model, ModelOverride, ProviderStatus, RouteType, RouterConfig, RuntimeStatus,
 } from './types'
@@ -78,27 +79,6 @@ function effectiveModel(model: Model, config: RouterConfig): EffectiveModel {
       reasoning: override.reasoning ?? model.capabilities.reasoning,
     },
   }
-}
-
-const healthKey = (model: string, capability: string) => `${model}\u0000${capability}`
-const modelHealth = (model: EffectiveModel, healthMap: Map<string, HealthState>): HealthState | undefined => {
-  const states = model.route_types.map(capability => healthMap.get(healthKey(model.id, capability))).filter(Boolean) as HealthState[]
-  const priority: HealthState['status'][] = ['open', 'cooling', 'degraded', 'half-open', 'unknown']
-  for (const status of priority) {
-    const matched = states.find(item => item.status === status)
-    if (matched) return matched
-  }
-  return states.length === model.route_types.length && states.every(item => item.status === 'healthy') ? states[0] : undefined
-}
-
-type ModelDisplayStatus = HealthState['status'] | 'configured' | 'missing' | 'manual'
-
-function modelDisplayStatus(model: EffectiveModel, healthMap: Map<string, HealthState>, configuredProviders: Set<string>): ModelDisplayStatus {
-  const health = modelHealth(model, healthMap)
-  if (health) return health.status
-  if (!configuredProviders.has(model.provider)) return 'missing'
-  if (model.route_types.some(item => item === 'image-generation' || item === 'video-generation')) return 'manual'
-  return 'unknown'
 }
 
 function formatNumber(value?: number) { return Number(value || 0).toLocaleString() }

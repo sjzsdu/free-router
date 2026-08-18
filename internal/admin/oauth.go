@@ -130,6 +130,8 @@ func (h *Handler) finishOpenRouterOAuth(w http.ResponseWriter, r *http.Request, 
 		h.oauthRedirect(w, r, false, err.Error())
 		return
 	}
+	h.updateMu.Lock()
+	defer h.updateMu.Unlock()
 	oldKey, _ := h.vault.Get("openrouter")
 	if _, err := h.vault.Set("openrouter", key); err != nil {
 		h.oauthRedirect(w, r, false, "无法安全保存 OpenRouter 凭据")

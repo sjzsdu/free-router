@@ -158,6 +158,14 @@ func TestLimiterFractionalRateDoesNotPanic(t *testing.T) {
 		t.Fatalf("acquire failed: %v", err)
 	}
 	limiter.Release()
+	started := time.Now()
+	if err := limiter.Acquire(context.Background()); err != nil {
+		t.Fatalf("second acquire failed: %v", err)
+	}
+	limiter.Release()
+	if elapsed := time.Since(started); elapsed < 1500*time.Millisecond {
+		t.Fatalf("fractional rate was rounded up: second token arrived after %v", elapsed)
+	}
 }
 
 func TestLimiterReturnsTokenOnSemaphoreTimeout(t *testing.T) {

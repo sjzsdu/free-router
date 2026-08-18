@@ -50,6 +50,7 @@ export interface RouterConfig {
   _comment?: string
   _help?: Record<string, string>
   version: number
+  revision: number
   routes: Record<string, Route>
   models: Record<string, ModelOverride>
   provider_env?: Record<string, string[]>
@@ -113,6 +114,8 @@ export interface HealthProbeStatus {
   skipped: number
   started_at?: string
   finished_at?: string
+  dry_run?: boolean
+  expensive_budget_remaining: number
 }
 
 export interface Summary { requests: number; successes: number; failures: number; failed: number }

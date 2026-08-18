@@ -3,7 +3,9 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -114,7 +116,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "internal server error")
 		}
 	}()
-	if g.apiToken != "" && !g.authorized(r) {
+	if g.requiresAPIAuthentication(r) && !g.authorized(r) {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="free-router api"`)
 		http.Error(w, "api authentication required", http.StatusUnauthorized)
 		return
@@ -122,12 +124,16 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.mux.ServeHTTP(w, r)
 }
 
+func (g *Gateway) requiresAPIAuthentication(r *http.Request) bool {
+	return g.apiToken != "" && strings.HasPrefix(r.URL.Path, "/v1/")
+}
+
 func (g *Gateway) authorized(r *http.Request) bool {
 	if g.apiToken == "" {
 		return true
 	}
-	if token := r.Header.Get("Authorization"); strings.HasPrefix(token, "Bearer ") {
-		return strings.TrimPrefix(token, "Bearer ") == g.apiToken
+	if scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " "); ok && scheme == "Bearer" {
+		return subtle.ConstantTimeCompare([]byte(token), []byte(g.apiToken)) == 1
 	}
 	return false
 }
@@ -157,10 +163,16 @@ func (g *Gateway) readyz(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
+	capabilities := g.readyCapabilities()
 	hasHealthyModel := false
 	for _, model := range g.catalog.Models() {
-		if g.tracker.Available(model.ID, "chat") {
-			hasHealthyModel = true
+		for _, capability := range capabilities {
+			if model.SupportsFunction(capability) && g.tracker.Available(model.ID, capability) {
+				hasHealthyModel = true
+				break
+			}
+		}
+		if hasHealthyModel {
 			break
 		}
 	}
@@ -175,6 +187,27 @@ func (g *Gateway) readyz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"status":"ready","providers":` + strconv.Itoa(providers) + `}`))
+}
+
+// readyCapabilities returns the capability set the gateway must be ready for:
+// the capabilities of configured routes, falling back to text chat when no
+// routes are configured. A pure embedding/image/audio deployment must not be
+// reported unready just because no chat model is healthy.
+func (g *Gateway) readyCapabilities() []string {
+	seen := make(map[string]bool)
+	var capabilities []string
+	if g.config.Routes != nil {
+		for _, route := range g.config.Routes.Config().Routes {
+			if route.Capability != "" && !seen[route.Capability] {
+				seen[route.Capability] = true
+				capabilities = append(capabilities, route.Capability)
+			}
+		}
+	}
+	if len(capabilities) == 0 {
+		capabilities = append(capabilities, catalog.FunctionChat)
+	}
+	return capabilities
 }
 
 func (g *Gateway) models(w http.ResponseWriter, _ *http.Request) {
@@ -366,6 +399,18 @@ func (g *Gateway) tryCandidate(w http.ResponseWriter, r *http.Request, model cat
 	started := time.Now()
 	resp, err := g.forward(r, model, payload, endpoint, contentType)
 	if err != nil {
+		if status, message, local := localLimitError(err); local {
+			// Local backpressure (queue full / rate-limit timeout) is
+			// reported as-is instead of falling back to another provider:
+			// this gateway's own limits must not amplify load across
+			// providers. Upstream failures still fall back.
+			writeError(w, status, message)
+			if status == http.StatusTooManyRequests {
+				g.metrics.RecordRateLimit()
+			}
+			g.metrics.RecordFailure(time.Since(started), status)
+			return true
+		}
 		g.tracker.Failure(model.ID, capability, time.Since(started), 0, err.Error(), 0)
 		slog.Warn("provider request failed", "provider", model.Provider, "model", model.UpstreamID, "error", err)
 		decision := g.shouldRetry(model, capability, 0, false, index)
@@ -380,7 +425,19 @@ func (g *Gateway) tryCandidate(w http.ResponseWriter, r *http.Request, model cat
 		return true
 	}
 	providerAdapter := g.adapterReg.Get(model.Provider)
-	decision := g.shouldRetry(model, capability, resp.StatusCode, resp.ContentLength > 0, index)
+	normalizedResp, err := providerAdapter.NormalizeResponse(resp)
+	if err != nil {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, err.Error(), 0)
+		writeError(w, http.StatusBadGateway, err.Error())
+		g.metrics.RecordFailure(time.Since(started), resp.StatusCode)
+		return true
+	}
+	decision := RetryDecision{}
+	if normalizedResp.Error != nil && normalizedResp.Error.Retryable {
+		decision = g.shouldRetry(model, capability, normalizedResp.Error.StatusCode, len(normalizedResp.Body) > 0, index)
+	}
 	if decision.ShouldRetry && index+1 < len(candidates) {
 		retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
 		g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, resp.Status, retryAfter)
@@ -394,15 +451,6 @@ func (g *Gateway) tryCandidate(w http.ResponseWriter, r *http.Request, model cat
 		sleepBackoff(r.Context(), effectiveDelay(decision.Delay, retryAfter))
 		return false
 	}
-	normalizedResp, err := providerAdapter.NormalizeResponse(resp)
-	if err != nil {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-		resp.Body.Close()
-		g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, err.Error(), 0)
-		writeError(w, http.StatusBadGateway, err.Error())
-		g.metrics.RecordFailure(time.Since(started), resp.StatusCode)
-		return true
-	}
 	if normalizedResp.Error != nil {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
@@ -411,19 +459,36 @@ func (g *Gateway) tryCandidate(w http.ResponseWriter, r *http.Request, model cat
 		g.metrics.RecordFailure(time.Since(started), normalizedResp.Error.StatusCode)
 		return true
 	}
-	result := copyResponse(w, resp, model)
+	result := copyResponse(w, resp, model, started)
+	total := time.Since(started)
+	canceled := r.Context().Err() != nil || result.DownstreamError
+	if canceled {
+		g.metrics.RecordTransfer(false, total, result.TTFB, result.BytesWritten, 0, true)
+		return true
+	}
 	if result.Complete && resp.StatusCode < http.StatusBadRequest {
-		g.tracker.Success(model.ID, capability, time.Since(started), resp.StatusCode)
-		g.metrics.RecordSuccess(time.Since(started))
+		g.tracker.Success(model.ID, capability, total, resp.StatusCode)
+		g.metrics.RecordTransfer(true, total, result.TTFB, result.BytesWritten, resp.StatusCode, false)
 	} else {
 		message := resp.Status
 		if result.Error != nil {
 			message = result.Error.Error()
 		}
-		g.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, message, parseRetryAfter(resp.Header.Get("Retry-After")))
-		g.metrics.RecordFailure(time.Since(started), resp.StatusCode)
+		g.tracker.Failure(model.ID, capability, total, resp.StatusCode, message, parseRetryAfter(resp.Header.Get("Retry-After")))
+		g.metrics.RecordTransfer(false, total, result.TTFB, result.BytesWritten, resp.StatusCode, false)
 	}
 	return true
+}
+
+func localLimitError(err error) (int, string, bool) {
+	switch {
+	case errors.Is(err, transport.ErrRateLimited):
+		return http.StatusTooManyRequests, "provider rate limit queue timed out", true
+	case errors.Is(err, transport.ErrOverloaded):
+		return http.StatusServiceUnavailable, "provider request queue is full", true
+	default:
+		return 0, "", false
+	}
 }
 
 // maxFallbackDelay bounds how long a fallback waits before trying the next
@@ -818,9 +883,11 @@ func (g *Gateway) newLimiter(spec provider.Spec) *transport.Limiter {
 }
 
 type StreamResult struct {
-	Complete     bool
-	BytesWritten int64
-	Error        error
+	Complete        bool
+	BytesWritten    int64
+	Error           error
+	DownstreamError bool
+	TTFB            time.Duration
 }
 
 // stallTimeout bounds how long a body read may sit without producing data.
@@ -877,7 +944,7 @@ func (s *stallTimeoutReader) Close() error {
 	return s.r.Close()
 }
 
-func copyResponse(w http.ResponseWriter, resp *http.Response, model catalog.Model) StreamResult {
+func copyResponse(w http.ResponseWriter, resp *http.Response, model catalog.Model, started time.Time) StreamResult {
 	body := newStallTimeoutReader(resp.Body, stallTimeout)
 	defer body.Close()
 	for key, values := range resp.Header {
@@ -891,42 +958,45 @@ func copyResponse(w http.ResponseWriter, resp *http.Response, model catalog.Mode
 	w.Header().Set("X-Free-Router-Provider", model.Provider)
 	w.Header().Set("X-Free-Router-Model", model.UpstreamID)
 	w.WriteHeader(resp.StatusCode)
-	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return copyStream(w, body)
-	}
-	n, err := io.Copy(w, body)
-	return StreamResult{
-		Complete:     err == nil,
-		BytesWritten: n,
-		Error:        err,
-	}
+	return copyBody(w, body, started, strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream"))
 }
 
-func copyStream(w http.ResponseWriter, body io.Reader) StreamResult {
+func copyBody(w http.ResponseWriter, body io.Reader, started time.Time, flush bool) StreamResult {
 	buffer := make([]byte, 32*1024)
 	flusher, canFlush := w.(http.Flusher)
 	var totalWritten int64
+	var ttfb time.Duration
+	headerTTFB := time.Since(started)
 	for {
 		read, err := body.Read(buffer)
 		if read > 0 {
+			if ttfb == 0 {
+				ttfb = time.Since(started)
+			}
 			n, writeErr := w.Write(buffer[:read])
 			totalWritten += int64(n)
 			if writeErr != nil {
 				return StreamResult{
-					Complete:     false,
-					BytesWritten: totalWritten,
-					Error:        writeErr,
+					Complete:        false,
+					BytesWritten:    totalWritten,
+					Error:           writeErr,
+					DownstreamError: true,
+					TTFB:            ttfb,
 				}
 			}
-			if canFlush {
+			if flush && canFlush {
 				flusher.Flush()
 			}
 		}
 		if err != nil {
+			if ttfb == 0 {
+				ttfb = headerTTFB
+			}
 			return StreamResult{
 				Complete:     err == io.EOF,
 				BytesWritten: totalWritten,
 				Error:        err,
+				TTFB:         ttfb,
 			}
 		}
 	}

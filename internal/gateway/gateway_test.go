@@ -21,6 +21,7 @@ import (
 	"github.com/sjzsdu/free-router/internal/health"
 	"github.com/sjzsdu/free-router/internal/provider"
 	"github.com/sjzsdu/free-router/internal/routing"
+	"github.com/sjzsdu/free-router/internal/transport"
 )
 
 func TestAutoRetriesNextFreeModel(t *testing.T) {
@@ -542,6 +543,36 @@ func TestAPITokenRequiredForInferenceEndpoints(t *testing.T) {
 	}
 }
 
+func TestAPITokenDoesNotOverrideControlPlaneAuthentication(t *testing.T) {
+	clearBuiltinKeys(t)
+	registry, _ := provider.NewRegistry("")
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
+	handler := New(store, registry, Config{APIToken: "inference-secret"}, http.DefaultClient)
+	handler.Handle("/admin/", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	tests := []struct {
+		path string
+		want int
+	}{
+		{path: "/admin/", want: http.StatusNoContent},
+		{path: "/healthz", want: http.StatusOK},
+		{path: "/livez", want: http.StatusOK},
+		{path: "/readyz", want: http.StatusServiceUnavailable},
+		{path: "/metrics", want: http.StatusOK},
+	}
+	for _, test := range tests {
+		t.Run(test.path, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, test.path, nil))
+			if recorder.Code != test.want {
+				t.Fatalf("status=%d, want %d; body=%s", recorder.Code, test.want, recorder.Body.String())
+			}
+		})
+	}
+}
+
 func TestAPITokenNotRequiredWhenEmpty(t *testing.T) {
 	clearBuiltinKeys(t)
 	registry, _ := provider.NewRegistry("")
@@ -553,6 +584,23 @@ func TestAPITokenNotRequiredWhenEmpty(t *testing.T) {
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("no token with empty config status=%d, want 200", recorder.Code)
+	}
+}
+
+func TestLocalBackpressureErrorsAreRecognizable(t *testing.T) {
+	tests := []struct {
+		err     error
+		status  int
+		message string
+	}{
+		{err: transport.ErrRateLimited, status: http.StatusTooManyRequests, message: "rate limit"},
+		{err: transport.ErrOverloaded, status: http.StatusServiceUnavailable, message: "queue is full"},
+	}
+	for _, test := range tests {
+		status, message, local := localLimitError(test.err)
+		if !local || status != test.status || !strings.Contains(message, test.message) {
+			t.Fatalf("localLimitError(%v)=(%d, %q, %t)", test.err, status, message, local)
+		}
 	}
 }
 
@@ -793,6 +841,35 @@ func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error)
 	return fn(request)
 }
 
+type interruptedBody struct {
+	sent bool
+}
+
+func (body *interruptedBody) Read(buffer []byte) (int, error) {
+	if !body.sent {
+		body.sent = true
+		return copy(buffer, "data: partial\n\n"), nil
+	}
+	return 0, io.ErrUnexpectedEOF
+}
+
+func (*interruptedBody) Close() error { return nil }
+
+type failingResponseWriter struct {
+	header http.Header
+}
+
+func (writer *failingResponseWriter) Header() http.Header {
+	if writer.header == nil {
+		writer.header = make(http.Header)
+	}
+	return writer.header
+}
+func (*failingResponseWriter) WriteHeader(int) {}
+func (*failingResponseWriter) Write([]byte) (int, error) {
+	return 0, errors.New("client disconnected")
+}
+
 func testResponse(status int, body string) *http.Response {
 	return &http.Response{
 		StatusCode: status,
@@ -827,6 +904,105 @@ func TestAutoFallsBackAcrossProviders(t *testing.T) {
 	}
 	if got := recorder.Header().Get("X-Free-Router-Provider"); got != "b" {
 		t.Fatalf("expected provider b, got %q", got)
+	}
+}
+
+func TestInterruptedStreamRecordsIncompleteFailureAfterHeaders(t *testing.T) {
+	clearBuiltinKeys(t)
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/models" {
+			return testResponse(http.StatusOK, `{"data":[{"id":"chat-a"}]}`), nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       &interruptedBody{},
+		}, nil
+	})}
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"https://test.invalid","no_auth":true}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), client)
+	discoverModelsForTest(t, store)
+	tracker := health.New()
+	handler := New(store, registry, Config{Health: tracker}, client)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test/chat-a","messages":[],"stream":true}`))
+	handler.ServeHTTP(recorder, request)
+
+	metrics := handler.metrics.Snapshot()
+	if metrics.Successes != 0 || metrics.Failures != 1 || metrics.Incomplete != 1 || metrics.OutputBytes == 0 || metrics.Concurrency != 0 {
+		t.Fatalf("metrics=%#v", metrics)
+	}
+	states := tracker.Snapshot()
+	if len(states) != 1 || states[0].Successes != 0 || states[0].Failures != 1 {
+		t.Fatalf("health=%#v", states)
+	}
+}
+
+func TestTransferMetricsSeparateTTFBTotalBytesAndCancellation(t *testing.T) {
+	metrics := NewMetrics()
+	metrics.RecordRequest()
+	metrics.RecordTransfer(true, 100*time.Millisecond, 20*time.Millisecond, 42, http.StatusOK, false)
+	metrics.RecordRequest()
+	metrics.RecordTransfer(false, 200*time.Millisecond, 40*time.Millisecond, 10, 0, true)
+	snapshot := metrics.Snapshot()
+	if snapshot.AverageLatency != 150 || snapshot.AverageTTFB != 30 || snapshot.OutputBytes != 52 || snapshot.Incomplete != 1 || snapshot.Cancellations != 1 || snapshot.ErrorsNetwork != 0 || snapshot.Concurrency != 0 {
+		t.Fatalf("metrics=%#v", snapshot)
+	}
+}
+
+func TestCopyBodyMarksDownstreamWriteFailureAsClientSide(t *testing.T) {
+	result := copyBody(&failingResponseWriter{}, strings.NewReader("data: output\n\n"), time.Now(), true)
+	if result.Complete || !result.DownstreamError || result.Error == nil {
+		t.Fatalf("result=%#v", result)
+	}
+}
+
+func TestNonIdempotentGenerationDoesNotFallbackAfterUpstreamDisconnect(t *testing.T) {
+	clearBuiltinKeys(t)
+	var firstCalls atomic.Int64
+	var secondCalls atomic.Int64
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/models":
+			model := "image-a"
+			if request.URL.Host == "b.invalid" {
+				model = "image-b"
+			}
+			return testResponse(http.StatusOK, `{"data":[{"id":"`+model+`","type":"image"}]}`), nil
+		case "/images/generations":
+			_, _ = io.Copy(io.Discard, request.Body)
+			if request.URL.Host == "a.invalid" {
+				firstCalls.Add(1)
+				return nil, io.ErrUnexpectedEOF
+			}
+			secondCalls.Add(1)
+			return testResponse(http.StatusOK, `{"data":[{"url":"https://example.invalid/image.png"}]}`), nil
+		default:
+			return testResponse(http.StatusNotFound, `{}`), nil
+		}
+	})}
+	registry, err := provider.NewRegistry(`[
+		{"id":"a","base_url":"https://a.invalid","no_auth":true},
+		{"id":"b","base_url":"https://b.invalid","no_auth":true}
+	]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), client)
+	discoverModelsForTest(t, store)
+	handler := New(store, registry, Config{MaxAttempts: 2}, client)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"model":"image-generation","prompt":"one billed image"}`)))
+
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if firstCalls.Load() != 1 || secondCalls.Load() != 0 {
+		t.Fatalf("generation calls: first=%d second=%d", firstCalls.Load(), secondCalls.Load())
 	}
 }
 
@@ -979,5 +1155,44 @@ func TestStallTimeoutReaderResumesOnData(t *testing.T) {
 		if n, err := reader.Read(buffer); err != nil || n == 0 {
 			t.Fatalf("read %d failed after idle: n=%d err=%v", i, n, err)
 		}
+	}
+}
+
+func TestReadyzUsesConfiguredRouteCapabilities(t *testing.T) {
+	clearBuiltinKeys(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"embed-a","type":"embedding","supported_endpoints":["/embeddings"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]}}]}`))
+		default:
+			_, _ = w.Write([]byte(`{}`))
+		}
+	}))
+	defer upstream.Close()
+	registry, _ := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","api_key":"test"}]`)
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	discoverModelsForTest(t, store)
+
+	// No routes configured: readyz falls back to text chat and must report
+	// unready for a pure-embedding catalog.
+	handler := New(store, registry, Config{}, upstream.Client())
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("no-route readyz = %d, want 503", recorder.Code)
+	}
+
+	// An embedding route makes the gateway ready even without chat models.
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	config := routes.Config()
+	config.Routes["embedding"] = routing.Route{Capability: "embedding", Models: []string{"test/embed-a"}}
+	if err := routes.Update(config); err != nil {
+		t.Fatal(err)
+	}
+	handler = New(store, registry, Config{Routes: routes}, upstream.Client())
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("embedding-route readyz = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
 	}
 }

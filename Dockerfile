@@ -16,6 +16,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /free-router .
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=backend-build /free-router /free-router
+ENV FREE_ROUTER_ADDR=0.0.0.0:1314
 EXPOSE 1314
 ENTRYPOINT ["/free-router"]
 CMD ["serve"]

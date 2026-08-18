@@ -14,7 +14,7 @@ endif
 LDFLAGS := -s -w
 
 .DEFAULT_GOAL := help
-.PHONY: help build web-install web-build web-check install uninstall daemon-install daemon-start daemon-stop daemon-restart daemon-status daemon-logs daemon-uninstall run validate-free-models test test-race test-cover vet fmt fmt-check version-check check tidy clean
+.PHONY: help build web-install web-build web-check web-test install uninstall daemon-install daemon-start daemon-stop daemon-restart daemon-status daemon-logs daemon-uninstall run validate-free-models test test-race test-cover vet fmt fmt-check version-check check tidy clean
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -33,6 +33,10 @@ web-build: ## Build React admin into the Go embedded assets
 web-check: ## Type-check the React admin
 	@test -d $(WEB_DIR)/node_modules || $(MAKE) web-install
 	cd $(WEB_DIR) && $(NPM) run typecheck
+
+web-test: ## Run React admin behavior tests
+	@test -d $(WEB_DIR)/node_modules || $(MAKE) web-install
+	cd $(WEB_DIR) && $(NPM) test
 
 install: web-build ## Install free-router into GOBIN (defaults to GOPATH/bin)
 	@mkdir -p $(GOBIN)
@@ -93,7 +97,7 @@ version-check: ## Verify the binary reports the VERSION file value
 	@actual="$$($(GO) run . version)"; \
 	if [ "$$actual" != "$(VERSION)" ]; then echo "version mismatch: VERSION=$(VERSION), binary=$$actual"; exit 1; fi
 
-check: fmt-check version-check vet test web-check ## Run all required checks
+check: fmt-check version-check vet test web-check web-test ## Run all required checks
 
 tidy: ## Update and verify Go module metadata
 	$(GO) mod tidy
