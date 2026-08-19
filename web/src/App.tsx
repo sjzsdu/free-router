@@ -194,6 +194,7 @@ function App() {
   const runtime = runtimeQuery.data || state.runtime
   const models = state.models.map(model => effectiveModel(model, draft))
   const healthMap = new Map(state.health.map(item => [healthKey(item.model, item.capability), item]))
+  const providerHealthMap = new Map((state.provider_health || []).map(item => [item.model, item]))
   const info = pageInfo[page]
 
   return <div className="app-shell">
@@ -221,7 +222,7 @@ function App() {
 
       <div className="page-content">
         {page === 'overview' && <Overview state={state} runtime={runtime} models={models} healthMap={healthMap} navigate={setPage} />}
-        {page === 'routes' && <RoutesPage config={draft} setConfig={setDraft} models={models} healthMap={healthMap} />}
+        {page === 'routes' && <RoutesPage config={draft} setConfig={setDraft} models={models} healthMap={healthMap} providerHealthMap={providerHealthMap} />}
         {page === 'models' && <ModelsPage config={draft} setConfig={setDraft} models={models} healthMap={healthMap} probe={state.health_probe} providers={state.providers} />}
         {page === 'providers' && <ProvidersPage state={state} onToast={setToast} />}
         {page === 'system' && <SystemPage state={state} runtime={runtime} offline={runtimeQuery.isError} />}
@@ -292,7 +293,7 @@ function friendlyError(status?: number, error?: string) {
   return error || '模型当前处于降级状态。'
 }
 
-function RoutesPage({ config, setConfig, models, healthMap }: { config: RouterConfig; setConfig: (config: RouterConfig) => void; models: EffectiveModel[]; healthMap: Map<string, HealthState> }) {
+function RoutesPage({ config, setConfig, models, healthMap, providerHealthMap }: { config: RouterConfig; setConfig: (config: RouterConfig) => void; models: EffectiveModel[]; healthMap: Map<string, HealthState>; providerHealthMap: Map<string, HealthState> }) {
   const [selected, setSelected] = useState(() => config.routes.chat ? 'chat' : Object.keys(config.routes)[0])
   const [search, setSearch] = useState('')
   const [provider, setProvider] = useState('')
@@ -302,7 +303,8 @@ function RoutesPage({ config, setConfig, models, healthMap }: { config: RouterCo
   const eligible = models.filter(model => !model.disabled && model.route_types.includes(route.capability))
   const routable = eligible.filter(model => {
     const health = healthMap.get(healthKey(model.id, route.capability))
-    return health?.verified === true && health.status === 'healthy'
+    const providerHealth = providerHealthMap.get(model.provider)
+    return health?.verified === true && health.status === 'healthy' && (!providerHealth || providerHealth.status === 'healthy')
   })
   const providers = [...new Set(routable.map(model => model.provider))].sort()
   const candidates = routable.filter(model => !route.models.includes(model.id) && (!provider || model.provider === provider) && (!search || `${model.id} ${model.name || ''}`.toLowerCase().includes(search.toLowerCase())))

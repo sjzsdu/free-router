@@ -144,7 +144,7 @@ func (h *Handler) state(w http.ResponseWriter) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"config": h.routes.Config(), "config_path": h.routes.Path(), "models": h.catalog.Models(),
 		"catalog": h.catalog.Status(), "providers": providers, "credentials": entries,
-		"health": h.health.Snapshot(), "summary": h.health.Summary(), "health_probe": h.probes.Snapshot(), "runtime": h.runtimeState(),
+		"health": h.health.Snapshot(), "provider_health": h.health.ProviderSnapshot(), "summary": h.health.Summary(), "health_probe": h.probes.Snapshot(), "runtime": h.runtimeState(),
 	})
 }
 

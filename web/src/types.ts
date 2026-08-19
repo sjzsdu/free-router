@@ -89,7 +89,7 @@ export interface Credential { provider: string; backend?: string }
 
 export interface HealthState {
   model: string
-  capability: RouteType
+  capability: RouteType | 'provider'
   status: 'unknown' | 'healthy' | 'degraded' | 'open' | 'half-open' | 'cooling'
   requests: number
   successes: number
@@ -140,6 +140,7 @@ export interface AppState {
   providers: ProviderStatus[]
   credentials: Credential[]
   health: HealthState[]
+  provider_health?: HealthState[]
   summary: Summary
   health_probe: HealthProbeStatus
   runtime: RuntimeStatus

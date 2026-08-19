@@ -407,6 +407,25 @@ func (t *Tracker) Snapshot() []State {
 	return result
 }
 
+func (t *Tracker) ProviderSnapshot() []State {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	result := make([]State, 0, len(t.providerStates))
+	for _, state := range t.providerStates {
+		state := *state
+		if t.now().After(state.CooldownUntil) && state.Status == StatusCooling {
+			state.Status = StatusHalfOpen
+		}
+		if t.now().After(state.CooldownUntil) && state.Status == StatusOpen {
+			state.Status = StatusHalfOpen
+		}
+		result = append(result, state)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Model < result[j].Model })
+	return result
+}
+
 func (t *Tracker) Summary() Summary {
 	states := t.Snapshot()
 	var summary Summary
