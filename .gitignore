@@ -14,3 +14,5 @@ dist/
 .dolt/
 *.db
 .beads-credential-key
+reasonix.toml
+.reasonix
