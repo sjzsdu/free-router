@@ -3,6 +3,22 @@ import type { EffectiveModel, HealthState } from './types'
 export type ModelDisplayStatus = HealthState['status'] | 'configured' | 'missing' | 'manual'
 
 export const healthKey = (model: string, capability: string) => `${model}\u0000${capability}`
+export const modelIDKey = (id: string) => id.trim().toLowerCase()
+
+export function uniqueModelIDs(items: string[]): string[] {
+  const seen = new Set<string>()
+  return items.filter(item => {
+    const key = modelIDKey(item)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+export function isModelAlreadySelected(id: string, selected: string[]): boolean {
+  const selectedKeys = new Set(selected.map(modelIDKey))
+  return selectedKeys.has(modelIDKey(id))
+}
 
 export function modelHealth(model: EffectiveModel, healthMap: Map<string, HealthState>): HealthState | undefined {
   return mostSevereHealth([...healthMap.values()].filter(item => item.model === model.id))

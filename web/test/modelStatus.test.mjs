@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { healthKey, isRouteModelHealthy, modelDisplayStatus, routeModelHealth } from '../src/modelStatus.ts'
+import { healthKey, isModelAlreadySelected, isRouteModelHealthy, modelDisplayStatus, routeModelHealth, uniqueModelIDs } from '../src/modelStatus.ts'
 
 const model = (provider = 'configured', routeTypes = ['chat']) => ({
   id: `${provider}/model`,
@@ -68,4 +68,19 @@ test('route health follows degraded runtime state even outside route_types', () 
 test('labels missing providers and expensive manual probes explicitly', () => {
   assert.equal(modelDisplayStatus(model('missing'), new Map(), new Set()), 'missing')
   assert.equal(modelDisplayStatus(model('configured', ['image-generation']), new Map(), new Set(['configured'])), 'manual')
+})
+
+test('detects already selected candidate models with normalized ids', () => {
+  const selected = ['gemini/models/gemini-2.5-flash']
+
+  assert.equal(isModelAlreadySelected(' gemini/models/GEMINI-2.5-flash ', selected), true)
+  assert.equal(isModelAlreadySelected('gemini/models/gemini-3-flash-preview', selected), false)
+})
+
+test('deduplicates route model ids before storing config', () => {
+  assert.deepEqual(uniqueModelIDs([
+    'gemini/models/gemini-2.5-flash',
+    ' gemini/models/GEMINI-2.5-flash ',
+    'nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5',
+  ]), ['gemini/models/gemini-2.5-flash', 'nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5'])
 })

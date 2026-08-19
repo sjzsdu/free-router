@@ -15,7 +15,7 @@ import {
   ShieldCheck, Sparkles, Sun, Trash2, Unplug, X,
 } from 'lucide-react'
 import { api } from './api'
-import { healthKey, isRouteModelHealthy, modelDisplayStatus, modelHealth, routeModelHealth, type ModelDisplayStatus } from './modelStatus'
+import { healthKey, isModelAlreadySelected, isRouteModelHealthy, modelDisplayStatus, modelHealth, modelIDKey, routeModelHealth, uniqueModelIDs, type ModelDisplayStatus } from './modelStatus'
 import type {
   AppState, EffectiveModel, HealthProbeStatus, HealthState, Model, ModelOverride, ProviderStatus, RouteType, RouterConfig, RuntimeStatus,
 } from './types'
@@ -304,10 +304,15 @@ function RoutesPage({ config, setConfig, models, healthMap, providerHealthMap }:
   const routeHealth = (model: EffectiveModel): HealthState | undefined => routeModelHealth(model, route.capability, healthMap, providerHealthMap)
   const routable = eligible.filter(model => isRouteModelHealthy(model, route.capability, healthMap, providerHealthMap))
   const providers = [...new Set(routable.map(model => model.provider))].sort()
-  const candidates = routable.filter(model => !route.models.includes(model.id) && (!provider || model.provider === provider) && (!search || `${model.id} ${model.name || ''}`.toLowerCase().includes(search.toLowerCase())))
+  const selectedModelKeys = new Set(route.models.map(modelIDKey))
+  const candidates = routable.filter(model => !selectedModelKeys.has(modelIDKey(model.id)) && (!provider || model.provider === provider) && (!search || `${model.id} ${model.name || ''}`.toLowerCase().includes(search.toLowerCase())))
 
   const updateModels = (items: string[]) => {
-    const next = cloneConfig(config); next.routes[selected].models = items; setConfig(next)
+    const next = cloneConfig(config); next.routes[selected].models = uniqueModelIDs(items); setConfig(next)
+  }
+  const addModel = (id: string) => {
+    if (isModelAlreadySelected(id, route.models)) return
+    updateModels([...route.models, id])
   }
   const updateStrategy = (strategy: 'ordered' | 'round-robin') => {
     const next = cloneConfig(config); next.routes[selected].strategy = strategy; setConfig(next)
@@ -332,7 +337,7 @@ function RoutesPage({ config, setConfig, models, healthMap, providerHealthMap }:
     </section>
 
     <aside className="candidate-panel panel"><div className="candidate-heading"><div><span className="eyebrow">CANDIDATES</span><h2>添加候选模型</h2></div><span>{candidates.length}</span></div><div className="candidate-filters"><label className="search-field"><Search size={15} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索模型" /></label><select value={provider} onChange={event => setProvider(event.target.value)}><option value="">全部 Provider</option>{providers.map(item => <option key={item}>{item}</option>)}</select></div>
-      <div className="candidate-list">{candidates.map(model => <div key={model.id} className="candidate-row"><div><strong title={model.id}>{model.id}</strong><span><StatusBadge status={routeHealth(model)?.status || 'unknown'} /> · {formatNumber(model.context_length)} context</span></div><IconButton label="加入优先级" onClick={() => updateModels([...route.models, model.id])}><Plus size={16} /></IconButton></div>)}{!candidates.length && <div className="small-empty"><Search size={22} /><span>仅显示模型页同样健康的模型；请先在模型页运行能力检测</span></div>}</div>
+      <div className="candidate-list">{candidates.map(model => <div key={model.id} className="candidate-row"><div><strong title={model.id}>{model.id}</strong><span><StatusBadge status={routeHealth(model)?.status || 'unknown'} /> · {formatNumber(model.context_length)} context</span></div><IconButton label="加入优先级" onClick={() => addModel(model.id)}><Plus size={16} /></IconButton></div>)}{!candidates.length && <div className="small-empty"><Search size={22} /><span>没有可添加的健康模型；已在左侧优先级中的模型不会重复显示</span></div>}</div>
     </aside>
   </div>
 }
