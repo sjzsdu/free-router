@@ -89,6 +89,50 @@ func TestAutoRetriesNextFreeModel(t *testing.T) {
 	}
 }
 
+func TestRouteFallbackOnGoneModel(t *testing.T) {
+	clearBuiltinKeys(t)
+	var calls atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/models":
+			return testResponse(http.StatusOK, `{"data":[
+				{"id":"gone-chat","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]},"supported_parameters":["tools"]},
+				{"id":"ok-chat","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]},"supported_parameters":["tools"]}
+			]}`), nil
+		case "/chat/completions":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if calls.Add(1) == 1 {
+				return testResponse(http.StatusGone, `{"error":{"message":"HTTP 410","type":"free_router_error"}}`), nil
+			}
+			response, _ := json.Marshal(map[string]any{"model": body["model"]})
+			return testResponse(http.StatusOK, string(response)), nil
+		default:
+			return testResponse(http.StatusNotFound, "not found"), nil
+		}
+	})}
+	registry, err := provider.NewRegistry(`[{"id":"openai","base_url":"https://openai.invalid","api_key":"test"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), client)
+	discoverModelsForTest(t, store)
+	handler := New(store, registry, Config{MaxAttempts: 2, Health: health.New()}, client)
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat-tools","messages":[],"tools":[{"type":"function","function":{"name":"ping","parameters":{"type":"object"}}}]}`)))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("expected fallback after 410, got %d calls", calls.Load())
+	}
+	if !strings.Contains(recorder.Body.String(), "ok-chat") {
+		t.Fatalf("response did not come from fallback model: %s", recorder.Body.String())
+	}
+}
+
 func TestAliasRouteRequiresPersistedCapabilityVerification(t *testing.T) {
 	clearBuiltinKeys(t)
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {

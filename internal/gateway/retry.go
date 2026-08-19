@@ -87,6 +87,9 @@ func (p RetryPolicy) ShouldRetry(reqType RequestType, statusCode int, hasRespons
 		}
 		return RetryDecision{ShouldRetry: false, Reason: "rate limit not retryable"}
 
+	case statusCode == http.StatusGone:
+		return RetryDecision{ShouldRetry: true, Reason: "upstream model unavailable", Delay: 0}
+
 	case statusCode == http.StatusRequestTimeout || statusCode == http.StatusGatewayTimeout:
 		return RetryDecision{ShouldRetry: true, Reason: "timeout", Delay: backoffDelay(attempt, p.MaxRetryDelay)}
 

@@ -142,6 +142,9 @@ func (a *OpenAICompatibleAdapter) ClassifyError(statusCode int, body []byte) Err
 	case statusCode >= 500:
 		err.Message = "server error"
 		err.Retryable = true
+	case statusCode == http.StatusGone:
+		err.Message = a.parseErrorMessage(statusCode, body)
+		err.Retryable = true
 	case statusCode == http.StatusTooManyRequests:
 		err.Message = "rate limited"
 		err.Retryable = true
