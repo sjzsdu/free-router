@@ -129,6 +129,125 @@ func TestAliasRouteRequiresPersistedCapabilityVerification(t *testing.T) {
 	}
 }
 
+func TestDirectModelWithToolsUsesChatToolsCapability(t *testing.T) {
+	clearBuiltinKeys(t)
+	var sawTools bool
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/models":
+			return testResponse(http.StatusOK, `{"data":[{"id":"tool-chat","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]},"supported_parameters":["tools"]}]}`), nil
+		case "/chat/completions":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			_, sawTools = body["tools"]
+			if body["model"] != "tool-chat" {
+				t.Fatalf("upstream model = %v, want tool-chat", body["model"])
+			}
+			return testResponse(http.StatusOK, `{"choices":[{"message":{"content":"ok"}}]}`), nil
+		default:
+			return testResponse(http.StatusNotFound, "not found"), nil
+		}
+	})}
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"https://test.invalid","api_key":"test"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), client)
+	discoverModelsForTest(t, store)
+	tracker := health.New()
+	handler := New(store, registry, Config{Health: tracker}, client)
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test/tool-chat","messages":[],"tools":[{"type":"function","function":{"name":"ping","parameters":{"type":"object"}}}]}`)))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !sawTools {
+		t.Fatal("tools were not forwarded to upstream")
+	}
+	if !tracker.Healthy("test/tool-chat", catalog.FunctionChatTools) {
+		t.Fatal("direct tool call was not recorded under chat-tools capability")
+	}
+}
+
+func TestChatToolsAliasRoutesToToolCapableUpstream(t *testing.T) {
+	clearBuiltinKeys(t)
+	var upstreamModel string
+	var sawTools bool
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/models":
+			return testResponse(http.StatusOK, `{"data":[{"id":"tool-chat","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]},"supported_parameters":["tools"]}]}`), nil
+		case "/chat/completions":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			upstreamModel, _ = body["model"].(string)
+			_, sawTools = body["tools"]
+			return testResponse(http.StatusOK, `{"choices":[{"message":{"content":"ok"}}]}`), nil
+		default:
+			return testResponse(http.StatusNotFound, "not found"), nil
+		}
+	})}
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"https://test.invalid","api_key":"test"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), client)
+	discoverModelsForTest(t, store)
+	tracker := health.New()
+	handler := New(store, registry, Config{Health: tracker}, client)
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat-tools","messages":[],"tools":[{"type":"function","function":{"name":"ping","parameters":{"type":"object"}}}]}`)))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if upstreamModel != "tool-chat" {
+		t.Fatalf("upstream model = %q, want tool-chat", upstreamModel)
+	}
+	if !sawTools {
+		t.Fatal("chat-tools alias did not forward tools to upstream")
+	}
+	if !tracker.Healthy("test/tool-chat", catalog.FunctionChatTools) {
+		t.Fatal("chat-tools alias was not recorded under chat-tools health")
+	}
+}
+
+func TestDirectModelWithToolsRejectsModelWithoutToolSupport(t *testing.T) {
+	clearBuiltinKeys(t)
+	var chatCalls atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/models":
+			return testResponse(http.StatusOK, `{"data":[{"id":"plain-chat","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]}}]}`), nil
+		case "/chat/completions":
+			chatCalls.Add(1)
+			return testResponse(http.StatusOK, `{"choices":[]}`), nil
+		default:
+			return testResponse(http.StatusNotFound, "not found"), nil
+		}
+	})}
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"https://test.invalid","api_key":"test"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), client)
+	discoverModelsForTest(t, store)
+	handler := New(store, registry, Config{Health: health.New()}, client)
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test/plain-chat","messages":[],"tools":[{"type":"function","function":{"name":"ping","parameters":{"type":"object"}}}]}`)))
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if chatCalls.Load() != 0 {
+		t.Fatal("model without tool support should not receive a tools request")
+	}
+}
+
 func TestNetworkFailureKeepsModelAndIsolatesCapability(t *testing.T) {
 	clearBuiltinKeys(t)
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {

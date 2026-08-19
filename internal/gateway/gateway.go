@@ -292,12 +292,15 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 		requested = defaultAlias
 	}
 	capability := g.requestCapability(requested, defaultAlias)
+	if defaultAlias == catalog.FunctionChat && needsTools {
+		capability = catalog.FunctionChatTools
+	}
 	if !endpointSupports(defaultAlias, capability) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("model capability %q is not compatible with this OpenAI endpoint", capability))
 		g.metrics.RecordFailure(0, http.StatusBadRequest)
 		return
 	}
-	candidates, fallback := g.candidates(requested, needsTools)
+	candidates, fallback := g.candidates(requested, capability, needsTools)
 	if len(candidates) == 0 {
 		if fallback {
 			writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("route %q has no healthy models; inspect failed models in the admin UI", requested))
@@ -359,7 +362,7 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 		g.metrics.RecordFailure(0, http.StatusBadRequest)
 		return
 	}
-	candidates, fallback := g.candidates(requested, false)
+	candidates, fallback := g.candidates(requested, capability, false)
 	if len(candidates) == 0 {
 		if fallback {
 			writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("route %q has no healthy models; inspect failed models in the admin UI", requested))
@@ -595,7 +598,7 @@ func rewriteMultipartModel(body []byte, boundary, model string) ([]byte, string,
 	return output.Bytes(), writer.FormDataContentType(), nil
 }
 
-func (g *Gateway) candidates(requested string, needsTools bool) ([]catalog.Model, bool) {
+func (g *Gateway) candidates(requested, capability string, needsTools bool) ([]catalog.Model, bool) {
 	if g.config.Routes == nil {
 		if route, ok := routing.DefaultConfig().Routes[requested]; ok {
 			return g.dynamicCandidates(route, needsTools), true
@@ -637,6 +640,10 @@ func (g *Gateway) candidates(requested string, needsTools bool) ([]catalog.Model
 			if !ok {
 				return nil, false
 			}
+		}
+		route := routing.Route{Capability: capability, RequireTool: needsTools}
+		if !routing.Accepts(route, model) {
+			return nil, false
 		}
 		return []catalog.Model{model}, false
 	}
