@@ -15,7 +15,7 @@ import {
   ShieldCheck, Sparkles, Sun, Trash2, Unplug, X,
 } from 'lucide-react'
 import { api } from './api'
-import { healthKey, modelDisplayStatus, modelHealth, type ModelDisplayStatus } from './modelStatus'
+import { healthKey, isRouteModelHealthy, modelDisplayStatus, modelHealth, routeModelHealth, type ModelDisplayStatus } from './modelStatus'
 import type {
   AppState, EffectiveModel, HealthProbeStatus, HealthState, Model, ModelOverride, ProviderStatus, RouteType, RouterConfig, RuntimeStatus,
 } from './types'
@@ -301,11 +301,8 @@ function RoutesPage({ config, setConfig, models, healthMap, providerHealthMap }:
   const route = config.routes[selected]
   const modelMap = new Map(models.map(model => [model.id, model]))
   const eligible = models.filter(model => !model.disabled && model.route_types.includes(route.capability))
-  const routable = eligible.filter(model => {
-    const health = healthMap.get(healthKey(model.id, route.capability))
-    const providerHealth = providerHealthMap.get(model.provider)
-    return health?.verified === true && health.status === 'healthy' && (!providerHealth || providerHealth.status === 'healthy')
-  })
+  const routeHealth = (model: EffectiveModel): HealthState | undefined => routeModelHealth(model, route.capability, healthMap, providerHealthMap)
+  const routable = eligible.filter(model => isRouteModelHealthy(model, route.capability, healthMap, providerHealthMap))
   const providers = [...new Set(routable.map(model => model.provider))].sort()
   const candidates = routable.filter(model => !route.models.includes(model.id) && (!provider || model.provider === provider) && (!search || `${model.id} ${model.name || ''}`.toLowerCase().includes(search.toLowerCase())))
 
@@ -328,14 +325,14 @@ function RoutesPage({ config, setConfig, models, healthMap, providerHealthMap }:
       <div className="route-strategy"><button className={(route.strategy || 'ordered') === 'ordered' ? 'active' : ''} onClick={() => updateStrategy('ordered')}><ArrowDownUp size={16} /><span><strong>按顺序</strong><small>从首个健康项开始</small></span></button><button className={route.strategy === 'round-robin' ? 'active' : ''} onClick={() => updateStrategy('round-robin')}><RefreshCw size={16} /><span><strong>雨露均沾</strong><small>健康模型轮流首选</small></span></button></div>
       <div className="chain-explainer"><ArrowDownUp size={16} /><span>{route.strategy === 'round-robin' ? '每次轮换首选模型；失败后继续尝试环中的下一个。' : '严格从上到下尝试。拖动可排序，也支持键盘操作。'}</span></div>
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}><SortableContext items={route.models} strategy={verticalListSortingStrategy}><div className="fallback-chain">
-        {route.models.map((id, index) => <SortableModel key={id} id={id} index={index} model={modelMap.get(id)} health={healthMap.get(healthKey(id, route.capability))} remove={() => updateModels(route.models.filter(item => item !== id))} />)}
+        {route.models.map((id, index) => { const model = modelMap.get(id); return <SortableModel key={id} id={id} index={index} model={model} health={model ? routeHealth(model) : healthMap.get(healthKey(id, route.capability))} remove={() => updateModels(route.models.filter(item => item !== id))} /> })}
         {!route.models.length && <div className="empty-chain"><Sparkles size={24} /><strong>当前使用完全自动路由</strong><p>可以从右侧加入固定优先模型，或继续让系统按能力与健康状态选择。</p></div>}
       </div></SortableContext></DndContext>
       <div className="automatic-fallback"><div className="auto-index">∞</div><div><strong>自动安全兜底</strong><p>固定数组全部失败后，从剩余 {Math.max(0, routable.filter(model => !route.models.includes(model.id)).length)} 个同类型健康模型中轮换选择一个。</p></div><span className="capability-pill accent">始终启用</span></div>
     </section>
 
     <aside className="candidate-panel panel"><div className="candidate-heading"><div><span className="eyebrow">CANDIDATES</span><h2>添加候选模型</h2></div><span>{candidates.length}</span></div><div className="candidate-filters"><label className="search-field"><Search size={15} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索模型" /></label><select value={provider} onChange={event => setProvider(event.target.value)}><option value="">全部 Provider</option>{providers.map(item => <option key={item}>{item}</option>)}</select></div>
-      <div className="candidate-list">{candidates.map(model => <div key={model.id} className="candidate-row"><div><strong title={model.id}>{model.id}</strong><span><StatusBadge status={healthMap.get(healthKey(model.id, route.capability))?.status || 'unknown'} /> · {formatNumber(model.context_length)} context</span></div><IconButton label="加入优先级" onClick={() => updateModels([...route.models, model.id])}><Plus size={16} /></IconButton></div>)}{!candidates.length && <div className="small-empty"><Search size={22} /><span>仅显示已检测健康的模型；请先在模型页运行能力检测</span></div>}</div>
+      <div className="candidate-list">{candidates.map(model => <div key={model.id} className="candidate-row"><div><strong title={model.id}>{model.id}</strong><span><StatusBadge status={routeHealth(model)?.status || 'unknown'} /> · {formatNumber(model.context_length)} context</span></div><IconButton label="加入优先级" onClick={() => updateModels([...route.models, model.id])}><Plus size={16} /></IconButton></div>)}{!candidates.length && <div className="small-empty"><Search size={22} /><span>仅显示模型页同样健康的模型；请先在模型页运行能力检测</span></div>}</div>
     </aside>
   </div>
 }

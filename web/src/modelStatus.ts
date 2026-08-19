@@ -5,13 +5,7 @@ export type ModelDisplayStatus = HealthState['status'] | 'configured' | 'missing
 export const healthKey = (model: string, capability: string) => `${model}\u0000${capability}`
 
 export function modelHealth(model: EffectiveModel, healthMap: Map<string, HealthState>): HealthState | undefined {
-  const states = model.route_types.map(capability => healthMap.get(healthKey(model.id, capability))).filter(Boolean) as HealthState[]
-  const priority: HealthState['status'][] = ['open', 'cooling', 'degraded', 'half-open', 'unknown']
-  for (const status of priority) {
-    const matched = states.find(item => item.status === status)
-    if (matched) return matched
-  }
-  return states.length === model.route_types.length && states.every(item => item.status === 'healthy') ? states[0] : undefined
+  return mostSevereHealth([...healthMap.values()].filter(item => item.model === model.id))
 }
 
 export function modelDisplayStatus(model: EffectiveModel, healthMap: Map<string, HealthState>, configuredProviders: Set<string>): ModelDisplayStatus {
@@ -20,4 +14,33 @@ export function modelDisplayStatus(model: EffectiveModel, healthMap: Map<string,
   if (!configuredProviders.has(model.provider)) return 'missing'
   if (model.route_types.some(item => item === 'image-generation' || item === 'video-generation')) return 'manual'
   return 'unknown'
+}
+
+function mostSevereHealth(states: HealthState[]): HealthState | undefined {
+  const priority: HealthState['status'][] = ['open', 'cooling', 'degraded', 'half-open', 'unknown']
+  for (const status of priority) {
+    const matched = states.find(item => item.status === status)
+    if (matched) return matched
+  }
+  return states.length && states.every(item => item.status === 'healthy') ? states[0] : undefined
+}
+
+export function modelRuntimeHealth(model: EffectiveModel, healthMap: Map<string, HealthState>): HealthState | undefined {
+  return mostSevereHealth([...healthMap.values()].filter(item => item.model === model.id))
+}
+
+export function routeModelHealth(model: EffectiveModel, capability: string, healthMap: Map<string, HealthState>, providerHealthMap: Map<string, HealthState>): HealthState | undefined {
+  const runtimeHealth = modelRuntimeHealth(model, healthMap)
+  if (runtimeHealth && runtimeHealth.status !== 'healthy') return runtimeHealth
+  const aggregateHealth = modelHealth(model, healthMap)
+  const capabilityHealth = healthMap.get(healthKey(model.id, capability))
+  const providerHealth = providerHealthMap.get(model.provider)
+  return providerHealth && providerHealth.status !== 'healthy' ? providerHealth : (runtimeHealth || aggregateHealth || capabilityHealth)
+}
+
+export function isRouteModelHealthy(model: EffectiveModel, capability: string, healthMap: Map<string, HealthState>, providerHealthMap: Map<string, HealthState>): boolean {
+  const runtimeHealth = modelRuntimeHealth(model, healthMap)
+  const capabilityHealth = healthMap.get(healthKey(model.id, capability))
+  const providerHealth = providerHealthMap.get(model.provider)
+  return runtimeHealth?.status === 'healthy' && capabilityHealth?.verified === true && capabilityHealth.status === 'healthy' && (!providerHealth || providerHealth.status === 'healthy')
 }
