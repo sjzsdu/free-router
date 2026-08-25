@@ -1,7 +1,7 @@
 FROM node:20-alpine AS frontend-build
 WORKDIR /src
 COPY go.mod go.sum VERSION ./
-COPY web/package.json web/package-lock.json ./
+COPY web/package.json web/package-lock.json ./web/
 RUN npm ci --prefix web
 COPY web/ web/
 RUN npm run build --prefix web
