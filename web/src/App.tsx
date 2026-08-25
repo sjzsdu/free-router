@@ -17,7 +17,7 @@ import {
 import { api } from './api'
 import { healthKey, isModelAlreadySelected, isRouteModelHealthy, modelDisplayStatus, modelHealth, modelIDKey, routeModelHealth, uniqueModelIDs, type ModelDisplayStatus } from './modelStatus'
 import type {
-  AppState, EffectiveModel, HealthProbeStatus, HealthState, Model, ModelOverride, ProviderStatus, RouteType, RouterConfig, RuntimeStatus,
+  AppState, EffectiveModel, HealthProbeStatus, HealthState, Model, ModelOverride, ProviderDetails, ProviderStatus, RouteType, RouterConfig, RuntimeStatus,
 } from './types'
 
 type Page = 'overview' | 'routes' | 'models' | 'providers' | 'system'
@@ -394,13 +394,14 @@ function OverrideToggle({ label, value, onChange }: { label: string; value?: boo
 
 function ProvidersPage({ state, onToast }: { state: AppState; onToast: (toast: { message: string; error?: boolean }) => void }) {
   const queryClient = useQueryClient()
+  const [selected, setSelected] = useState<ProviderStatus | null>(null)
   const configured = state.providers.filter(provider => provider.configured).length
   const available = state.providers.filter(provider => provider.configured && state.models.some(model => model.provider === provider.id)).length
   const providers = [...state.providers].sort((a, b) => Number(b.configured) - Number(a.configured))
-  return <div className="stack-lg"><section className="provider-intro panel"><div className="provider-intro-icon"><KeyRound size={22} /></div><div><h2>连接状态与凭据配置分开显示</h2><p>运行状态由缓存模型和连接测试决定；凭据状态只表示 Key 已存在，不代表上游一定可用。</p></div><div><strong>{available}</strong><span>可用 · {configured} 已配置</span></div></section><section className="provider-grid">{providers.map(provider => <ProviderCard key={provider.id} provider={provider} modelCount={state.models.filter(model => model.provider === provider.id).length} saved={state.credentials.some(item => item.provider === provider.id)} refresh={() => queryClient.invalidateQueries({ queryKey: ['state'] })} toast={onToast} />)}</section></div>
+  return <div className="stack-lg"><section className="provider-intro panel"><div className="provider-intro-icon"><KeyRound size={22} /></div><div><h2>连接状态与凭据配置分开显示</h2><p>运行状态由缓存模型和连接测试决定；凭据状态只表示 Key 已存在，不代表上游一定可用。</p></div><div><strong>{available}</strong><span>可用 · {configured} 已配置</span></div></section><section className="provider-grid">{providers.map(provider => <ProviderCard key={provider.id} provider={provider} modelCount={state.models.filter(model => model.provider === provider.id).length} saved={state.credentials.some(item => item.provider === provider.id)} refresh={() => queryClient.invalidateQueries({ queryKey: ['state'] })} toast={onToast} openDetails={() => setSelected(provider)} />)}</section><ProviderDetailsDialog provider={selected} close={() => setSelected(null)} /></div>
 }
 
-function ProviderCard({ provider, modelCount, saved, refresh, toast }: { provider: ProviderStatus; modelCount: number; saved: boolean; refresh: () => void; toast: (toast: { message: string; error?: boolean }) => void }) {
+function ProviderCard({ provider, modelCount, saved, refresh, toast, openDetails }: { provider: ProviderStatus; modelCount: number; saved: boolean; refresh: () => void; toast: (toast: { message: string; error?: boolean }) => void; openDetails: () => void }) {
   const [key, setKey] = useState('')
   const [visible, setVisible] = useState(false)
   const [busy, setBusy] = useState('')
@@ -473,7 +474,7 @@ function ProviderCard({ provider, modelCount, saved, refresh, toast }: { provide
   const stateTitle = state === 'available' ? '服务可用' : state === 'pending' ? (formulaModelCount > 0 ? '当前模型已隔离' : discoveryTitle) : state === 'error' ? '连接异常' : '尚未接入'
   const stateDetail = connection?.status === 'healthy' ? `${connection.models} 个清单模型仍在上游目录 · ${connection.latency}ms` : connection?.status === 'error' ? '最近一次连接测试失败' : state === 'available' ? '清单模型已缓存，可参与路由' : state === 'pending' ? (formulaModelCount > 0 ? '清单有模型，但本机调用失败后已从缓存隔离' : discoveryDetail) : formulaModelCount > 0 ? `清单已维护 ${formulaModelCount} 个模型，配置凭据后可调用` : discoveryDetail
   return <article className={cx('provider-card', state)}>
-    <div className="provider-card-head"><div className="provider-logo">{provider.id.slice(0, 2).toUpperCase()}</div><div><h3>{provider.id}</h3><p>{provider.tier}</p></div><StatusBadge status={provider.configured ? 'configured' : 'missing'} /></div>
+    <button className="provider-card-head provider-detail-trigger" disabled={!provider.configured} onClick={openDetails} aria-label={provider.configured ? `查看 ${provider.id} 详情` : `${provider.id} 尚未配置`}><div className="provider-logo">{provider.id.slice(0, 2).toUpperCase()}</div><div><h3>{provider.id}</h3><p>{provider.tier}</p></div><StatusBadge status={provider.configured ? 'configured' : 'missing'} />{provider.configured && <ChevronRight size={16} />}</button>
     <div className={cx('provider-runtime', state)}><div className="provider-runtime-icon">{state === 'available' ? <Check size={17} /> : state === 'error' ? <AlertTriangle size={17} /> : state === 'pending' ? <RefreshCw size={17} /> : <Unplug size={17} />}</div><div><span>运行状态</span><strong>{stateTitle}</strong><small title={connection?.message}>{stateDetail}</small></div><div className="provider-model-count"><strong>{modelCount}</strong><span>缓存模型</span></div></div>
     <div className="provider-discovery"><div><span>免费模型清单</span><strong>{formulaModelCount > 0 ? `${formulaModelCount} 个模型 · ${discoveryTitle}` : discoveryTitle}</strong><small title={discoveryDetail}>{discoveryDetail}</small></div><small title={provider.free_basis}>{provider.manifest_generated_at ? `清单 ${formatDate(provider.manifest_generated_at)}` : '未加载模型清单'}</small></div>
     <div className="provider-credential-head"><div><span>凭据配置</span><strong>{provider.configured ? '已设置' : '未设置'}</strong></div><small title={source}>来源：{source}</small></div>
@@ -484,6 +485,37 @@ function ProviderCard({ provider, modelCount, saved, refresh, toast }: { provide
     {credentialResult && <div className={cx('credential-result', credentialResult.ok ? 'success' : 'error')} role="status">{credentialResult.ok ? <Check size={13} /> : <AlertTriangle size={13} />}<span>{credentialResult.message}</span></div>}
     <div className="provider-actions">{provider.oauth && <button className="button small" disabled={Boolean(busy)} onClick={login}><LogIn size={14} />{busy === 'oauth' ? '跳转中…' : provider.configured ? '重新登录' : 'OAuth 登录'}</button>}<button className={cx('button small', provider.oauth && 'secondary')} disabled={!key || Boolean(busy)} onClick={saveCredential}>{busy === 'save' ? '保存并校验中…' : provider.configured ? '更新 Key' : '保存凭据'}</button>{provider.configured && <button className="button secondary small" disabled={Boolean(busy)} onClick={testConnection}>{busy === 'test' ? '测试中…' : '测试连接'}</button>}{provider.register_url && <a className="button secondary small provider-register" href={provider.register_url} target="_blank" rel="noreferrer">{provider.register_label || '获取 Key'}<ExternalLink size={14} /></a>}{saved && <IconButton label="删除保存的凭据" disabled={Boolean(busy)} onClick={() => run('delete', () => api.deleteCredential(provider.id), `${provider.id} 凭据已删除`)}><Trash2 size={15} /></IconButton>}</div>
   </article>
+}
+
+function freeKindLabel(kind?: string) {
+  const labels: Record<string, string> = { credit: '赠送额度', trial: '限时试用', permanent: '长期免费', quota: '免费配额' }
+  return kind ? labels[kind] || kind : '免费层'
+}
+
+function ProviderDetailsDialog({ provider, close }: { provider: ProviderStatus | null; close: () => void }) {
+  const detailsQuery = useQuery({
+    queryKey: ['provider-details', provider?.id],
+    queryFn: () => api.providerDetails(provider!.id),
+    enabled: Boolean(provider),
+    retry: false,
+  })
+  return <Dialog.Root open={Boolean(provider)} onOpenChange={open => !open && close()}><Dialog.Portal><Dialog.Overlay className="dialog-overlay" /><Dialog.Content className="provider-dialog">{provider && <>
+    <div className="drawer-header"><div><span className="eyebrow">PROVIDER DETAILS</span><Dialog.Title>{provider.id}</Dialog.Title><Dialog.Description>免费模型清单、逐模型免费策略与核实来源</Dialog.Description></div><Dialog.Close asChild><button className="icon-button" aria-label="关闭 Provider 详情"><X size={19} /></button></Dialog.Close></div>
+    {detailsQuery.isLoading && <ProviderDetailsLoading />}
+    {detailsQuery.isError && <div className="provider-detail-state error"><AlertTriangle size={24} /><h3>详情加载失败</h3><p>{(detailsQuery.error as Error).message}</p><button className="button secondary small" onClick={() => detailsQuery.refetch()}><RefreshCw size={14} />重试</button></div>}
+    {detailsQuery.data && <ProviderDetailsContent details={detailsQuery.data} />}
+  </>}</Dialog.Content></Dialog.Portal></Dialog.Root>
+}
+
+function ProviderDetailsLoading() {
+  return <div className="provider-detail-loading" role="status" aria-label="正在加载 Provider 详情"><div /><div /><div /></div>
+}
+
+function ProviderDetailsContent({ details }: { details: ProviderDetails }) {
+  return <div className="provider-detail-content">
+    <section className="provider-policy"><div><span>免费类型</span><strong>{freeKindLabel(details.free_kind)}</strong></div><div><span>清单更新时间</span><strong>{formatDate(details.manifest_generated_at)}</strong></div><p>{details.free_basis || '该 Provider 尚未提供免费策略说明。'}</p>{details.billing_warning && <div className="provider-warning"><AlertTriangle size={14} />{details.billing_warning}</div>}<div className="provider-source-links">{(details.source_urls || []).map(url => <a key={url} href={url} target="_blank" rel="noreferrer">核实来源 <ExternalLink size={12} /></a>)}</div></section>
+    {details.models.length === 0 ? <div className="provider-detail-state empty"><Database size={24} /><h3>暂无可展示的免费模型</h3><p>{details.discovery_message || '清单当前没有经过核实且可路由的免费模型。'}</p></div> : <section className="provider-free-models"><div className="provider-model-list-head"><div><h3>免费模型</h3><p>共 {details.models.length} 个，策略以最近一次清单核实为准。</p></div></div>{details.models.map(model => <article className="provider-free-model" key={model.id}><div className="provider-free-model-head"><div><strong>{model.name || model.id}</strong><code>{model.id}</code></div>{model.verified_at && <span>核实于 {formatDate(model.verified_at)}</span>}</div><div className="pill-row">{(model.functions || []).map(item => <span className="route-pill" key={item}>{item}</span>)}</div><div className="model-free-policy"><span>免费策略</span><p>{model.free_basis || details.free_basis || '该模型沿用 Provider 免费层规则，具体额度以上游实时限制为准。'}</p></div>{model.pricing && (model.pricing.prompt !== undefined || model.pricing.completion !== undefined) && <div className="model-pricing"><span>输入 {model.pricing.prompt ?? '—'}</span><span>输出 {model.pricing.completion ?? '—'}</span></div>}<div className="provider-source-links">{(model.source_urls || []).map(url => <a key={url} href={url} target="_blank" rel="noreferrer">模型依据 <ExternalLink size={12} /></a>)}</div></article>)}</section>}
+  </div>
 }
 
 function SystemPage({ state, runtime, offline }: { state: AppState; runtime: RuntimeStatus; offline: boolean }) {

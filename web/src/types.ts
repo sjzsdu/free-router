@@ -85,6 +85,35 @@ export interface ProviderStatus {
   connection_checked_at?: string
 }
 
+export interface FreeModelPricing { prompt?: string; completion?: string }
+
+export interface ProviderFreeModel {
+  id: string
+  name?: string
+  description?: string
+  type?: string
+  functions?: RouteType[]
+  context_length?: number
+  max_output_tokens?: number
+  free_basis?: string
+  source_urls?: string[]
+  verified_at?: string
+  pricing?: FreeModelPricing
+}
+
+export interface ProviderDetails {
+  id: string
+  tier?: string
+  free_kind?: string
+  billing_warning?: string
+  free_basis?: string
+  source_urls?: string[]
+  discovery_status?: string
+  discovery_message?: string
+  manifest_generated_at?: string
+  models: ProviderFreeModel[]
+}
+
 export interface Credential { provider: string; backend?: string }
 
 export interface HealthState {

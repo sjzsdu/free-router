@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"errors"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -153,6 +154,27 @@ func TestBuiltinStatusWithManifestTreatsVerificationFailedProvidersAsEmptyCatalo
 		}
 	}
 	t.Fatal("gemini status not found")
+}
+
+func TestFreeProviderDetailsWithManifestReturnsModelPolicies(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "free-models.json")
+	manifest := `{"schema_version":2,"generated_at":"2026-08-25T00:00:00Z","providers":{"groq":{"free_basis":"provider quota","source_urls":["https://example.com/provider"],"models":[{"id":"model-a","functions":["chat"],"free_basis":"10 requests per minute","source_urls":["https://example.com/model"],"verified_at":"2026-08-24T00:00:00Z"}]}}}`
+	if err := os.WriteFile(path, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	details, err := FreeProviderDetailsWithManifest("groq", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if details.ID != "groq" || details.FreeBasis != "provider quota" || details.ManifestGeneratedAt == "" {
+		t.Fatalf("details = %#v", details)
+	}
+	if len(details.Models) != 1 || details.Models[0].ID != "model-a" || details.Models[0].FreeBasis != "10 requests per minute" {
+		t.Fatalf("models = %#v", details.Models)
+	}
+	if _, err := FreeProviderDetailsWithManifest("does-not-exist", path); !errors.Is(err, ErrProviderNotFound) {
+		t.Fatalf("unknown provider error = %v", err)
+	}
 }
 
 func TestManifestDiscoveryStatusIsValidatedAndExposed(t *testing.T) {

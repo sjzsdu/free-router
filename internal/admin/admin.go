@@ -113,6 +113,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.finishOpenRouterOAuth(w, r, strings.TrimPrefix(path, "/oauth/openrouter/callback/"))
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/providers/") && strings.HasSuffix(path, "/test"):
 		h.testProvider(w, r, strings.TrimSuffix(strings.TrimPrefix(path, "/api/providers/"), "/test"))
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/providers/"):
+		h.providerDetails(w, strings.TrimPrefix(path, "/api/providers/"))
 	case r.Method == http.MethodPost && path == "/api/credentials":
 		h.saveCredential(w, r)
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/credentials/"):
@@ -125,6 +127,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (h *Handler) providerDetails(w http.ResponseWriter, escapedID string) {
+	providerID, err := url.PathUnescape(escapedID)
+	if err != nil || strings.TrimSpace(providerID) == "" || strings.Contains(providerID, "/") {
+		writeError(w, http.StatusBadRequest, "invalid provider")
+		return
+	}
+	details, err := provider.FreeProviderDetailsWithManifest(providerID, h.config.FreeModels)
+	if errors.Is(err, provider.ErrProviderNotFound) {
+		writeError(w, http.StatusNotFound, "provider not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, details)
 }
 
 func (h *Handler) authorized(r *http.Request) bool {

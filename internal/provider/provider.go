@@ -20,6 +20,8 @@ var embeddedFreeModels []byte
 
 var manifestPrice = regexp.MustCompile(`^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$`)
 
+var ErrProviderNotFound = errors.New("provider not found")
+
 type Spec struct {
 	ID                  string            `json:"id"`
 	BaseURL             string            `json:"base_url"`
@@ -94,6 +96,19 @@ type FreeProviderCatalog struct {
 	DiscoveryMessage string            `json:"discovery_message,omitempty"`
 }
 
+type FreeProviderDetails struct {
+	ID                  string            `json:"id"`
+	Tier                string            `json:"tier,omitempty"`
+	FreeKind            string            `json:"free_kind,omitempty"`
+	BillingWarning      string            `json:"billing_warning,omitempty"`
+	FreeBasis           string            `json:"free_basis,omitempty"`
+	SourceURLs          []string          `json:"source_urls,omitempty"`
+	DiscoveryStatus     string            `json:"discovery_status,omitempty"`
+	DiscoveryMessage    string            `json:"discovery_message,omitempty"`
+	ManifestGeneratedAt string            `json:"manifest_generated_at,omitempty"`
+	Models              []DiscoveredModel `json:"models"`
+}
+
 func loadFreeModelManifest(path string) (FreeModelManifest, error) {
 	content := embeddedFreeModels
 	if strings.TrimSpace(path) != "" {
@@ -124,6 +139,30 @@ func loadFreeModelManifest(path string) (FreeModelManifest, error) {
 
 func LoadFreeModelManifest(path string) (FreeModelManifest, error) {
 	return loadFreeModelManifest(path)
+}
+
+func FreeProviderDetailsWithManifest(providerID, path string) (FreeProviderDetails, error) {
+	manifest, err := loadFreeModelManifest(path)
+	if err != nil {
+		return FreeProviderDetails{}, err
+	}
+	for _, spec := range applyFreeModelManifest(builtins(), manifest) {
+		if spec.ID != providerID {
+			continue
+		}
+		models := append([]DiscoveredModel(nil), spec.DiscoveredModels...)
+		if models == nil {
+			models = []DiscoveredModel{}
+		}
+		return FreeProviderDetails{
+			ID: providerID, Tier: spec.Tier, FreeKind: spec.FreeKind,
+			BillingWarning: spec.BillingWarning, FreeBasis: spec.FreeBasis,
+			SourceURLs:      append([]string(nil), spec.SourceURLs...),
+			DiscoveryStatus: spec.DiscoveryStatus, DiscoveryMessage: spec.DiscoveryMessage,
+			ManifestGeneratedAt: spec.ManifestGeneratedAt, Models: models,
+		}, nil
+	}
+	return FreeProviderDetails{}, ErrProviderNotFound
 }
 
 func ValidateFreeModelManifest(manifest FreeModelManifest) error {

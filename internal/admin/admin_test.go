@@ -221,6 +221,38 @@ func TestAdminServesEmbeddedReactApp(t *testing.T) {
 	}
 }
 
+func TestProviderDetailsEndpoint(t *testing.T) {
+	manifestPath := filepath.Join(t.TempDir(), "free-models.json")
+	manifest := `{"schema_version":2,"providers":{"groq":{"free_basis":"free plan limits","source_urls":["https://example.com"],"models":[{"id":"model-a","functions":["chat"],"free_basis":"30 RPM"}]}}}`
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	registry, _ := provider.NewRegistry("")
+	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
+	handler := New(routes, models, credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json")), health.New(), Config{FreeModels: manifestPath}, nil)
+
+	for _, test := range []struct {
+		path string
+		want int
+	}{
+		{path: "/admin/api/providers/groq", want: http.StatusOK},
+		{path: "/admin/api/providers/unknown", want: http.StatusNotFound},
+		{path: "/admin/api/providers/bad/child", want: http.StatusBadRequest},
+	} {
+		request := httptest.NewRequest(http.MethodGet, test.path, nil)
+		request.RemoteAddr = "127.0.0.1:1234"
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != test.want {
+			t.Fatalf("%s status=%d want=%d body=%s", test.path, recorder.Code, test.want, recorder.Body.String())
+		}
+		if test.want == http.StatusOK && (!strings.Contains(recorder.Body.String(), `"id":"model-a"`) || !strings.Contains(recorder.Body.String(), `"free_basis":"30 RPM"`)) {
+			t.Fatalf("detail response=%s", recorder.Body.String())
+		}
+	}
+}
+
 func TestCredentialSaveEnablesProviderWithoutDiscoveringModels(t *testing.T) {
 	for _, key := range provider.SupportedKeyEnvs() {
 		t.Setenv(key, "")

@@ -340,6 +340,10 @@ select, .field-label select { min-width: 0; height: 34px; padding: 0 25px 0 9px;
 .provider-card.error { border-color: color-mix(in srgb, var(--danger) 42%, var(--border)); box-shadow: inset 0 3px 0 var(--danger), var(--shadow-sm); }
 .provider-card.inactive .provider-logo { color: var(--subtle); background: var(--surface-3); }
 .provider-card-head { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 9px; }
+.provider-detail-trigger { width: 100%; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; }
+.provider-detail-trigger:not(:disabled) { grid-template-columns: 36px minmax(0, 1fr) auto 16px; cursor: pointer; }
+.provider-detail-trigger:not(:disabled):hover h3 { color: var(--accent); }
+.provider-detail-trigger:disabled { cursor: default; }
 .provider-logo { width: 36px; height: 36px; color: var(--accent); background: var(--accent-soft); }
 .provider-card h3 { margin: 0; font-size: 12px; }
 .provider-card p { margin: 3px 0 0; color: var(--muted); font-size: 8px; }
@@ -376,6 +380,33 @@ select, .field-label select { min-width: 0; height: 34px; padding: 0 25px 0 9px;
 .provider-discovery div { display: grid; gap: 2px; }
 .provider-discovery span, .provider-discovery small { color: var(--muted); font-size: 8px; }
 .provider-discovery strong { font-size: 9px; }
+.provider-dialog { position: fixed; z-index: 101; top: 50%; left: 50%; width: min(760px, calc(100vw - 32px)); max-height: min(820px, calc(100vh - 32px)); padding: 21px; border: 1px solid var(--border); border-radius: 14px; overflow-y: auto; transform: translate(-50%, -50%); background: var(--surface); box-shadow: var(--shadow-lg); animation: fadeIn .18s ease; }
+.provider-detail-loading { padding: 22px 0 4px; display: grid; gap: 10px; }
+.provider-detail-loading div { height: 88px; border-radius: 9px; background: linear-gradient(90deg, var(--surface-2), var(--surface-3), var(--surface-2)); background-size: 200%; animation: loading 1.3s infinite linear; }
+.provider-detail-state { min-height: 250px; padding: 35px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: var(--muted); }
+.provider-detail-state.error { color: var(--danger); }
+.provider-detail-state h3 { margin: 11px 0 0; color: var(--text); font-size: 13px; }
+.provider-detail-state p { max-width: 430px; margin: 6px 0 13px; font-size: 9px; line-height: 1.6; }
+.provider-detail-content { padding-top: 18px; display: grid; gap: 17px; }
+.provider-policy { padding: 13px; border-radius: 10px; background: var(--surface-2); display: grid; grid-template-columns: 1fr 1fr; gap: 9px 18px; }
+.provider-policy > div > span, .model-free-policy > span { display: block; color: var(--muted); font-size: 8px; }
+.provider-policy > div > strong { display: block; margin-top: 3px; font-size: 10px; }
+.provider-policy > p { grid-column: 1 / -1; margin: 2px 0; color: var(--muted); font-size: 9px; line-height: 1.6; }
+.provider-policy .provider-warning, .provider-policy .provider-source-links { grid-column: 1 / -1; margin: 0; }
+.provider-free-models { display: grid; gap: 9px; }
+.provider-model-list-head h3 { margin: 0; font-size: 13px; }
+.provider-model-list-head p { margin: 4px 0 0; color: var(--muted); font-size: 8px; }
+.provider-free-model { padding: 12px; border: 1px solid var(--border); border-radius: 9px; display: grid; gap: 9px; }
+.provider-free-model-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.provider-free-model-head strong, .provider-free-model-head code { display: block; }
+.provider-free-model-head strong { font-size: 10px; }
+.provider-free-model-head code { margin-top: 3px; color: var(--muted); font-size: 8px; }
+.provider-free-model-head > span { color: var(--subtle); font-size: 7px; }
+.model-free-policy { padding: 8px; border-radius: 7px; background: var(--surface-2); }
+.model-free-policy p { margin: 3px 0 0; color: var(--text); font-size: 8px; line-height: 1.55; }
+.model-pricing, .provider-source-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.model-pricing span { padding: 4px 7px; border-radius: 5px; background: var(--accent-soft); color: var(--accent); font-size: 7px; }
+.provider-source-links a { display: inline-flex; align-items: center; gap: 3px; color: var(--blue); font-size: 8px; text-decoration: none; }
 
 .system-layout { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(290px, .6fr); gap: 15px; }
 .system-card { padding: 20px; }
