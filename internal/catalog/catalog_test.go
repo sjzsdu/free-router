@@ -404,6 +404,52 @@ func TestPartialCacheWithoutQuarantineIsRebuilt(t *testing.T) {
 	}
 }
 
+func TestDuplicateCacheModelReplacingExpectedModelIsRebuilt(t *testing.T) {
+	clearBuiltinKeys(t)
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "free-models.json")
+	cachePath := filepath.Join(dir, "models.json")
+	manifest := `{"schema_version":2,"generated_at":"test","providers":{"test":{"source_urls":["https://example.com/models"],"models":[{"id":"chat-a","functions":["chat"]},{"id":"chat-b","functions":["chat"]}]}}}`
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	newStore := func() *Store {
+		registry, err := provider.NewRegistryWithManifest(`[{"id":"test","base_url":"https://example.invalid","no_auth":true}]`, provider.DefaultEnvMap(), manifestPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return New(registry, cachePath, http.DefaultClient)
+	}
+	store := newStore()
+	if err := store.Bootstrap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cached cacheFile
+	if err := json.Unmarshal(data, &cached); err != nil {
+		t.Fatal(err)
+	}
+	cached.Models = []Model{cached.Models[0], cached.Models[0]}
+	data, err = json.Marshal(cached)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := newStore()
+	if err := reloaded.Bootstrap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if models := reloaded.Models(); len(models) != 2 || models[0].ID == models[1].ID {
+		t.Fatalf("duplicate cache was accepted: models=%#v", models)
+	}
+}
+
 func TestEmptyFormulaCatalogPrunesCachedProviderModels(t *testing.T) {
 	clearBuiltinKeys(t)
 	t.Setenv("GROQ_API_KEY", "test")

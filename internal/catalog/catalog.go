@@ -1083,7 +1083,12 @@ func (s *Store) cachedModelsMatchManifest(models []Model) bool {
 	if len(models) != len(expected) {
 		return false
 	}
+	seen := make(map[string]bool, len(models))
 	for _, model := range models {
+		if seen[model.ID] {
+			return false
+		}
+		seen[model.ID] = true
 		if fingerprint, ok := expected[model.ID]; !ok || fingerprint != modelFingerprint(model) {
 			return false
 		}

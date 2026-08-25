@@ -78,10 +78,7 @@ func discoverModelData(ctx context.Context, opts options, target string, output 
 		if configured, ok := registry.Get(catalogSpec.ID); ok {
 			catalogSpec = configured
 		} else if !catalogSpec.NoAuth {
-			required := append([]string(nil), catalogSpec.RequiredEnvs...)
-			if catalogSpec.APIKeyEnv != "" {
-				required = append([]string{catalogSpec.APIKeyEnv}, required...)
-			}
+			required := provider.MissingConfiguration(catalogSpec, envMap, vault.Get)
 			skipped = append(skipped, discoverySkip{Provider: catalogSpec.ID, Reason: "missing-credentials", RequiredEnv: required})
 			continue
 		}
