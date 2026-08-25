@@ -32,6 +32,26 @@
 
 这些服务的条款、区域和额度会变化。除 OpenRouter 的零价模型筛选外，provider 通常不会通过 `/models` 告诉路由器账户是否启用了付费；要确保绝不扣费，请使用没有绑定计费方式的 Free Tier 账户。
 
+### 免费源验证与可信度边界
+
+内置 `free-models.json` 是带来源链接和生成时间的维护清单，不等同于当前账户的实时可调用证明。运行时只有同时满足以下条件的模型才进入稳定能力路由：清单仍包含该模型、对应 Provider 已配置、该“模型 + 能力”最近一次探测成功且未被健康检查隔离。
+
+维护者可用隐藏命令生成可复现的目录发现证据：
+
+```bash
+go run . discover-model-data openrouter | jq
+go run . discover-model-data all | jq
+```
+
+输出字段必须按以下语义解读：
+
+- `checked_providers`：本次确实成功读取官方模型目录，不能据此推断真实推理一定成功；
+- `skipped_providers`：未发起请求，并明确区分 `missing-credentials` 与 `agent-maintained`，前者还列出缺少的环境变量；
+- `fetch_failures[].category`：把 `authentication`、`quota`、`rate-limit`、`unavailable`、`network`、`timeout`、`upstream`、`invalid-response` 等限制分开；失败源不会进入 `checked_providers`；
+- `available`：仅表示本次目录发现是否成功，不代表额度充足、区域可用或模型能力已经探测成功。
+
+模型缓存由清单指纹约束，并要求与“当前清单减去有证据的隔离项”完全一致；无隔离记录却缺模型的部分缓存会在启动时重建，避免静默缩短 fallback 池。固定路由严格保留用户排序，`round-robin` 只旋转健康候选的起点；自动路由按 Provider 交错候选，优先跨源分散限流风险。幂等请求遇到网络错误、429、401/402/403、模型 404/410 或上游 5xx 时可切换到下一候选；图片/视频生成、TTS 等非幂等请求不会在可能已被上游接收后自动重放。
+
 ### 中国大陆免费源的筛选原则
 
 内置中国大陆来源目前包括 ModelScope、SiliconFlow、智谱开放平台、百度千帆、Xiaomi MiMo、阿里云百炼、火山方舟和百川智能。免费模型名单和判定证据统一维护在版本化数据清单中，不再写死在 Go 代码里；真实调用结果属于本机运行诊断，不会反向污染官方模型源数据。

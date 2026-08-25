@@ -93,12 +93,15 @@ func TestDiscoverModelDataDoesNotMarkFetchFailureAsChecked(t *testing.T) {
 	if len(result.Checked) != 0 || len(result.FetchFailures) != 1 {
 		t.Fatalf("failed fetch must not be authoritative: %#v", result)
 	}
+	if failure := result.FetchFailures[0]; failure.Category != "authentication" || failure.HTTPStatus != http.StatusUnauthorized {
+		t.Fatalf("failure was not classified: %#v", failure)
+	}
 	if result.Available["test"] {
 		t.Fatalf("failed provider reported available: %#v", result.Available)
 	}
 }
 
-func TestDiscoverModelDataReportsUnconfiguredOfficialCatalogFailure(t *testing.T) {
+func TestDiscoverModelDataReportsUnconfiguredOfficialCatalogAsSkipped(t *testing.T) {
 	for _, key := range provider.SupportedKeyEnvs() {
 		t.Setenv(key, "")
 	}
@@ -123,7 +126,13 @@ func TestDiscoverModelDataReportsUnconfiguredOfficialCatalogFailure(t *testing.T
 	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Checked) != 0 || len(result.FetchFailures) != 1 {
+	if len(result.Checked) != 0 || len(result.FetchFailures) != 0 || len(result.Skipped) != 1 {
 		t.Fatalf("result = %#v", result)
+	}
+	if skipped := result.Skipped[0]; skipped.Provider != "unconfigured" || skipped.Reason != "missing-credentials" || len(skipped.RequiredEnv) != 1 || skipped.RequiredEnv[0] != "UNCONFIGURED_TEST_KEY" {
+		t.Fatalf("skip was not actionable: %#v", skipped)
+	}
+	if result.Available["unconfigured"] {
+		t.Fatalf("skipped provider reported available: %#v", result.Available)
 	}
 }

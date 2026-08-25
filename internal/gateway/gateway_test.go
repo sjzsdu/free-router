@@ -131,6 +131,11 @@ func TestRouteFallbackOnGoneModel(t *testing.T) {
 	if !strings.Contains(recorder.Body.String(), "ok-chat") {
 		t.Fatalf("response did not come from fallback model: %s", recorder.Body.String())
 	}
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat-tools","messages":[],"tools":[{"type":"function","function":{"name":"ping","parameters":{"type":"object"}}}]}`)))
+	if recorder.Code != http.StatusOK || calls.Load() != 3 {
+		t.Fatalf("gone model was retried after fallback: status=%d calls=%d body=%s", recorder.Code, calls.Load(), recorder.Body.String())
+	}
 }
 
 func TestAliasRouteRequiresPersistedCapabilityVerification(t *testing.T) {
@@ -875,6 +880,46 @@ func TestNamedRouteUsesConfiguredFallbackOrder(t *testing.T) {
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat","messages":[]}`)))
 	if recorder.Code != http.StatusOK || strings.Join(calls, ",") != "first,second,second" {
 		t.Fatalf("unexpected call pattern: status=%d calls=%v", recorder.Code, calls)
+	}
+}
+
+func TestIdempotentRouteFallsBackWhenProviderAccountIsUnavailable(t *testing.T) {
+	clearBuiltinKeys(t)
+	var calls []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"unavailable"},{"id":"working"}]}`))
+		case "/chat/completions":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			model, _ := body["model"].(string)
+			calls = append(calls, model)
+			if model == "unavailable" {
+				w.WriteHeader(http.StatusPaymentRequired)
+				_, _ = w.Write([]byte(`{"error":{"message":"free quota exhausted"}}`))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"model": model})
+		}
+	}))
+	defer upstream.Close()
+	registry, _ := provider.NewRegistry(`[{"id":"unavailable-provider","base_url":"` + upstream.URL + `","api_key":"test"},{"id":"working-provider","base_url":"` + upstream.URL + `","api_key":"test"}]`)
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	discoverModelsForTest(t, store)
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	config := routes.Config()
+	route := config.Routes["chat"]
+	route.Models = []string{"unavailable-provider/unavailable", "working-provider/working"}
+	config.Routes["chat"] = route
+	if err := routes.Update(config); err != nil {
+		t.Fatal(err)
+	}
+	handler := New(store, registry, Config{MaxAttempts: 2, Routes: routes}, upstream.Client())
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat","messages":[]}`)))
+	if recorder.Code != http.StatusOK || strings.Join(calls, ",") != "unavailable,working" {
+		t.Fatalf("status=%d calls=%v body=%s", recorder.Code, calls, recorder.Body.String())
 	}
 }
 

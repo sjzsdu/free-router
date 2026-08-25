@@ -25,7 +25,10 @@ func TestClassifyError(t *testing.T) {
 		{"429 rate limit", 429, nil, "rate limited", true, true},
 		{"408 timeout", 408, nil, "request timeout", true, false},
 		{"400 client error", 400, []byte(`{"error":{"message":"bad request"}}`), "bad request", false, false},
-		{"401 auth error", 401, []byte(`{"error":{"message":"unauthorized"}}`), "unauthorized", false, false},
+		{"401 auth error", 401, []byte(`{"error":{"message":"unauthorized"}}`), "unauthorized", true, false},
+		{"402 quota exhausted", 402, []byte(`{"error":{"message":"quota exhausted"}}`), "quota exhausted", true, false},
+		{"403 account disabled", 403, []byte(`{"error":{"message":"forbidden"}}`), "forbidden", true, false},
+		{"404 model removed", 404, []byte(`{"error":{"message":"missing model"}}`), "missing model", true, false},
 		{"400 error without message", 400, []byte(`{}`), "HTTP 400", false, false},
 	}
 

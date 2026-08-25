@@ -152,6 +152,11 @@ func (a *OpenAICompatibleAdapter) ClassifyError(statusCode int, body []byte) Err
 	case statusCode == http.StatusRequestTimeout:
 		err.Message = "request timeout"
 		err.Retryable = true
+	case statusCode == http.StatusUnauthorized || statusCode == http.StatusPaymentRequired || statusCode == http.StatusForbidden || statusCode == http.StatusNotFound:
+		err.Message = a.parseErrorMessage(statusCode, body)
+		// These statuses describe provider/account/model availability. The
+		// gateway's idempotency policy still prevents unsafe generation retries.
+		err.Retryable = true
 	case statusCode >= 400:
 		err.Message = a.parseErrorMessage(statusCode, body)
 		err.Retryable = false

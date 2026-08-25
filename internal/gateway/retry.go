@@ -90,6 +90,12 @@ func (p RetryPolicy) ShouldRetry(reqType RequestType, statusCode int, hasRespons
 	case statusCode == http.StatusGone:
 		return RetryDecision{ShouldRetry: true, Reason: "upstream model unavailable", Delay: 0}
 
+	case statusCode == http.StatusUnauthorized || statusCode == http.StatusPaymentRequired || statusCode == http.StatusForbidden:
+		return RetryDecision{ShouldRetry: true, Reason: "provider account unavailable", Delay: 0}
+
+	case statusCode == http.StatusNotFound:
+		return RetryDecision{ShouldRetry: true, Reason: "upstream model unavailable", Delay: 0}
+
 	case statusCode == http.StatusRequestTimeout || statusCode == http.StatusGatewayTimeout:
 		return RetryDecision{ShouldRetry: true, Reason: "timeout", Delay: backoffDelay(attempt, p.MaxRetryDelay)}
 
