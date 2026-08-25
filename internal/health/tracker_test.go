@@ -29,6 +29,14 @@ func TestAuthErrorQuarantinesProvider(t *testing.T) {
 	}
 }
 
+func TestQuotaErrorQuarantinesProvider(t *testing.T) {
+	tracker := New()
+	tracker.Failure("provider/model", "chat", 0, 402, "quota exhausted", 0)
+	if tracker.Available("provider/other", "chat") {
+		t.Fatal("account quota error should quarantine all models from same provider")
+	}
+}
+
 func TestRateLimitWithRetryAfterEnforcesCooldown(t *testing.T) {
 	tracker := New()
 	now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
@@ -229,7 +237,10 @@ func TestErrorClassification(t *testing.T) {
 		{0, ErrorNetwork},
 		{400, ErrorClient},
 		{401, ErrorAuth},
+		{402, ErrorAuth},
 		{403, ErrorAuth},
+		{404, ErrorServer},
+		{410, ErrorServer},
 		{429, ErrorRateLimit},
 		{500, ErrorServer},
 		{503, ErrorServer},

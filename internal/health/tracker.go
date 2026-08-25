@@ -544,10 +544,12 @@ func classifyError(status int) ErrorType {
 		return ErrorNetwork
 	case status >= 400 && status < 500:
 		switch status {
-		case 401, 403:
+		case 401, 402, 403:
 			return ErrorAuth
 		case 429:
 			return ErrorRateLimit
+		case 404, 410:
+			return ErrorServer
 		default:
 			return ErrorClient
 		}

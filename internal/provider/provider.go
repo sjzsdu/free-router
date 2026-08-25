@@ -666,6 +666,29 @@ func resolveKey(providerID string, resolvers []KeyResolver) (string, bool) {
 	return "", false
 }
 
+// MissingConfiguration reports only configuration requirements that are not
+// currently satisfied. An API key can come from the literal spec, any current
+// environment alias, or a saved-credential resolver; RequiredEnvs are always
+// independent requirements.
+func MissingConfiguration(spec Spec, envMap EnvMap, resolvers ...KeyResolver) []string {
+	missing := make([]string, 0)
+	mergedEnv := MergeEnvMap(envMap)
+	if !spec.NoAuth && spec.APIKey == "" {
+		_, _, fromEnvironment := resolveEnvironment(spec, mergedEnv)
+		if !fromEnvironment {
+			if _, fromResolver := resolveKey(spec.ID, resolvers); !fromResolver {
+				missing = append(missing, effectiveEnvNames(spec, mergedEnv)...)
+			}
+		}
+	}
+	for _, name := range spec.RequiredEnvs {
+		if strings.TrimSpace(os.Getenv(name)) == "" {
+			missing = append(missing, name)
+		}
+	}
+	return mergeEnvNames(missing)
+}
+
 func builtins() []Spec {
 	cloudflareAccount := os.Getenv("CLOUDFLARE_ACCOUNT_ID")
 	return []Spec{

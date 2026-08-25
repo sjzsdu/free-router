@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -103,12 +104,52 @@ type ProviderProbeError struct {
 }
 
 type DiscoveryFailure struct {
-	Provider string `json:"provider"`
-	Error    string `json:"error"`
+	Provider   string `json:"provider"`
+	Category   string `json:"category"`
+	HTTPStatus int    `json:"http_status,omitempty"`
+	Error      string `json:"error"`
 }
 
 func (e *ModelProbeError) Error() string    { return e.Message }
 func (e *ProviderProbeError) Error() string { return e.Message }
+
+func newDiscoveryFailure(providerID string, err error) DiscoveryFailure {
+	failure := DiscoveryFailure{Provider: providerID, Category: "unknown", Error: err.Error()}
+	var providerErr *ProviderProbeError
+	if errors.As(err, &providerErr) {
+		failure.HTTPStatus = providerErr.Status
+		switch providerErr.Status {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			failure.Category = "authentication"
+		case http.StatusPaymentRequired:
+			failure.Category = "quota"
+		case http.StatusTooManyRequests:
+			failure.Category = "rate-limit"
+		case http.StatusNotFound, http.StatusGone:
+			failure.Category = "unavailable"
+		default:
+			if providerErr.Status >= http.StatusInternalServerError {
+				failure.Category = "upstream"
+			} else {
+				failure.Category = "http"
+			}
+		}
+		return failure
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		failure.Category = "timeout"
+		return failure
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) {
+		failure.Category = "network"
+		return failure
+	}
+	if strings.Contains(err.Error(), "decode models") {
+		failure.Category = "invalid-response"
+	}
+	return failure
+}
 
 type upstreamModel struct {
 	ID                  string       `json:"id"`
@@ -504,7 +545,7 @@ func (s *Store) DiscoverFromProviders(ctx context.Context, providerIDs ...string
 	for range providers {
 		result := <-results
 		if result.err != nil {
-			failures = append(failures, DiscoveryFailure{Provider: result.provider, Error: result.err.Error()})
+			failures = append(failures, newDiscoveryFailure(result.provider, result.err))
 			continue
 		}
 		models = append(models, result.models...)
@@ -516,9 +557,8 @@ func (s *Store) DiscoverFromProviders(ctx context.Context, providerIDs ...string
 }
 
 // DiscoverFromSpecs fetches explicit provider catalog specifications. Formula
-// maintenance uses this to try official /models endpoints even when inference
-// credentials are absent; authenticated endpoints then report a normal fetch
-// failure instead of silently falling back to agent discovery.
+// maintenance uses this after callers have explicitly separated missing
+// credentials and agent-maintained sources from providers that can be checked.
 func (s *Store) DiscoverFromSpecs(ctx context.Context, providers []provider.Spec) ([]Model, []DiscoveryFailure) {
 	type result struct {
 		provider string
@@ -537,7 +577,7 @@ func (s *Store) DiscoverFromSpecs(ctx context.Context, providers []provider.Spec
 	for range providers {
 		item := <-results
 		if item.err != nil {
-			failures = append(failures, DiscoveryFailure{Provider: item.provider, Error: item.err.Error()})
+			failures = append(failures, newDiscoveryFailure(item.provider, item.err))
 			continue
 		}
 		models = append(models, item.models...)
@@ -1025,18 +1065,31 @@ func (s *Store) saveCache(models []Model) error {
 	return os.Rename(tmpName, s.cache)
 }
 
-// cachedModelsMatchManifest reports whether every model in the cache exists in
-// the current maintained manifest. It guards against a cache whose fingerprint
-// was computed after a registry hot-reload but whose Models predate it.
+// cachedModelsMatchManifest requires the cache to contain exactly the currently
+// routable manifest models. Quarantined models are intentionally absent, but an
+// unexplained partial cache must be rebuilt instead of silently shrinking the
+// fallback pool.
 func (s *Store) cachedModelsMatchManifest(models []Model) bool {
-	expected := make(map[string]bool)
+	expectedModels := make([]Model, 0)
 	for _, spec := range s.registry.CatalogAll() {
-		for _, model := range modelsFromDiscovery(spec) {
-			expected[model.Provider+"\x00"+model.UpstreamID] = true
-		}
+		expectedModels = append(expectedModels, modelsFromDiscovery(spec)...)
 	}
+	expectedModels = s.applyVerifiedTools(expectedModels)
+	expectedModels = s.applyQuarantine(expectedModels)
+	expected := make(map[string]string, len(expectedModels))
+	for _, model := range expectedModels {
+		expected[model.ID] = modelFingerprint(model)
+	}
+	if len(models) != len(expected) {
+		return false
+	}
+	seen := make(map[string]bool, len(models))
 	for _, model := range models {
-		if !expected[model.Provider+"\x00"+model.UpstreamID] {
+		if seen[model.ID] {
+			return false
+		}
+		seen[model.ID] = true
+		if fingerprint, ok := expected[model.ID]; !ok || fingerprint != modelFingerprint(model) {
 			return false
 		}
 	}

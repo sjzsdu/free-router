@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/sjzsdu/free-router/internal/credentials"
 	"github.com/sjzsdu/free-router/internal/provider"
+	"github.com/sjzsdu/free-router/internal/routing"
 )
 
 func TestDiscoverModelDataUsesOfficialCatalogWithoutInferenceProbes(t *testing.T) {
@@ -93,12 +95,15 @@ func TestDiscoverModelDataDoesNotMarkFetchFailureAsChecked(t *testing.T) {
 	if len(result.Checked) != 0 || len(result.FetchFailures) != 1 {
 		t.Fatalf("failed fetch must not be authoritative: %#v", result)
 	}
+	if failure := result.FetchFailures[0]; failure.Category != "authentication" || failure.HTTPStatus != http.StatusUnauthorized {
+		t.Fatalf("failure was not classified: %#v", failure)
+	}
 	if result.Available["test"] {
 		t.Fatalf("failed provider reported available: %#v", result.Available)
 	}
 }
 
-func TestDiscoverModelDataReportsUnconfiguredOfficialCatalogFailure(t *testing.T) {
+func TestDiscoverModelDataReportsUnconfiguredOfficialCatalogAsSkipped(t *testing.T) {
 	for _, key := range provider.SupportedKeyEnvs() {
 		t.Setenv(key, "")
 	}
@@ -123,7 +128,84 @@ func TestDiscoverModelDataReportsUnconfiguredOfficialCatalogFailure(t *testing.T
 	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Checked) != 0 || len(result.FetchFailures) != 1 {
+	if len(result.Checked) != 0 || len(result.FetchFailures) != 0 || len(result.Skipped) != 1 {
 		t.Fatalf("result = %#v", result)
+	}
+	if skipped := result.Skipped[0]; skipped.Provider != "unconfigured" || skipped.Reason != "missing-credentials" || len(skipped.RequiredEnv) != 1 || skipped.RequiredEnv[0] != "UNCONFIGURED_TEST_KEY" {
+		t.Fatalf("skip was not actionable: %#v", skipped)
+	}
+	if result.Available["unconfigured"] {
+		t.Fatalf("skipped provider reported available: %#v", result.Available)
+	}
+}
+
+func TestDiscoverModelDataReportsOnlyActuallyMissingConfiguration(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*testing.T, options)
+	}{
+		{
+			name: "primary environment key",
+			setup: func(t *testing.T, _ options) {
+				t.Setenv("CLOUDFLARE_API_TOKEN", "present")
+			},
+		},
+		{
+			name: "configured environment alias",
+			setup: func(t *testing.T, opts options) {
+				routes, err := routing.New(opts.config)
+				if err != nil {
+					t.Fatal(err)
+				}
+				config := routes.Config()
+				config.ProviderEnv["cloudflare"] = []string{"CLOUDFLARE_REVIEW_TOKEN"}
+				if err := routes.Update(config); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("CLOUDFLARE_REVIEW_TOKEN", "present")
+			},
+		},
+		{
+			name: "saved credential",
+			setup: func(t *testing.T, opts options) {
+				vault := credentials.NewFileOnly(opts.credentials)
+				if _, err := vault.Set("cloudflare", "present"); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, key := range provider.SupportedKeyEnvs() {
+				t.Setenv(key, "")
+			}
+			t.Setenv("CLOUDFLARE_ACCOUNT_ID", "")
+			dir := t.TempDir()
+			opts := defaultOptions()
+			opts.config = filepath.Join(dir, "config.json")
+			opts.credentials = filepath.Join(dir, "credentials.json")
+			opts.freeModels = filepath.Join(dir, "free-models.json")
+			if err := os.WriteFile(opts.freeModels, []byte(`{"schema_version":2,"generated_at":"test","providers":{}}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			test.setup(t, opts)
+
+			var output bytes.Buffer
+			if err := discoverModelData(context.Background(), opts, "cloudflare", &output); err != nil {
+				t.Fatal(err)
+			}
+			var result modelDiscoveryOutput
+			if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Skipped) != 1 {
+				t.Fatalf("result=%#v", result)
+			}
+			if got := result.Skipped[0].RequiredEnv; len(got) != 1 || got[0] != "CLOUDFLARE_ACCOUNT_ID" {
+				t.Fatalf("reported missing configuration = %#v", got)
+			}
+		})
 	}
 }

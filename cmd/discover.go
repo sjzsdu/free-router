@@ -23,12 +23,19 @@ type modelProbeFailure struct {
 	Error      string `json:"error"`
 }
 
+type discoverySkip struct {
+	Provider    string   `json:"provider"`
+	Reason      string   `json:"reason"`
+	RequiredEnv []string `json:"required_env,omitempty"`
+}
+
 type modelDiscoveryOutput struct {
 	Providers     []discoveredProvider       `json:"providers"`
 	Checked       []string                   `json:"checked_providers"`
 	Available     map[string]bool            `json:"available"`
 	FetchFailures []catalog.DiscoveryFailure `json:"fetch_failures"`
 	ProbeFailures []modelProbeFailure        `json:"probe_failures"`
+	Skipped       []discoverySkip            `json:"skipped_providers"`
 }
 
 func addDiscoveryCommand(root *cobra.Command, opts *options) {
@@ -59,18 +66,25 @@ func discoverModelData(ctx context.Context, opts options, target string, output 
 	}
 	store := catalog.New(registry, "", catalogHTTPClient())
 	specs := make([]provider.Spec, 0)
+	skipped := make([]discoverySkip, 0)
 	for _, catalogSpec := range registry.CatalogAll() {
 		if target != "all" && catalogSpec.ID != target {
 			continue
 		}
 		if catalogSpec.ModelDiscovery == "agent" {
+			skipped = append(skipped, discoverySkip{Provider: catalogSpec.ID, Reason: "agent-maintained"})
 			continue
 		}
 		if configured, ok := registry.Get(catalogSpec.ID); ok {
 			catalogSpec = configured
+		} else if !catalogSpec.NoAuth {
+			required := provider.MissingConfiguration(catalogSpec, envMap, vault.Get)
+			skipped = append(skipped, discoverySkip{Provider: catalogSpec.ID, Reason: "missing-credentials", RequiredEnv: required})
+			continue
 		}
 		specs = append(specs, catalogSpec)
 	}
+	sort.Slice(skipped, func(i, j int) bool { return skipped[i].Provider < skipped[j].Provider })
 	models, fetchFailures := store.DiscoverFromSpecs(ctx, specs)
 	failedProviders := make(map[string]bool, len(fetchFailures))
 	for _, failure := range fetchFailures {
@@ -101,6 +115,9 @@ func discoverModelData(ctx context.Context, opts options, target string, output 
 		providers = append(providers, discoveredProvider{Provider: providerID, Models: discovered})
 	}
 	sort.Slice(providers, func(i, j int) bool { return providers[i].Provider < providers[j].Provider })
-	result := modelDiscoveryOutput{Providers: providers, Checked: checked, Available: available, FetchFailures: fetchFailures, ProbeFailures: []modelProbeFailure{}}
+	for _, item := range skipped {
+		available[item.Provider] = false
+	}
+	result := modelDiscoveryOutput{Providers: providers, Checked: checked, Available: available, FetchFailures: fetchFailures, ProbeFailures: []modelProbeFailure{}, Skipped: skipped}
 	return json.NewEncoder(output).Encode(result)
 }
