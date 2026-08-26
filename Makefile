@@ -1,5 +1,4 @@
 BINARY := free-router
-BINARY := free-router
 GO ?= go
 NPM ?= npm
 WEB_DIR := web
@@ -8,7 +7,7 @@ BUILD_DIR ?= bin
 GOBIN ?= $(shell $(GO) env GOBIN)
 
 ifeq ($(strip $(GOBIN)),)
-GOBIN := /Users/juzhongsun/.local/bin
+GOBIN := $(shell $(GO) env GOPATH)/bin
 endif
 
 LDFLAGS := -s -w
@@ -97,7 +96,7 @@ version-check: ## Verify the binary reports the VERSION file value
 	@actual="$$($(GO) run . version)"; \
 	if [ "$$actual" != "$(VERSION)" ]; then echo "version mismatch: VERSION=$(VERSION), binary=$$actual"; exit 1; fi
 
-check: fmt-check version-check vet test web-check web-test ## Run all required checks
+check: web-build fmt-check version-check vet test web-check web-test ## Run all required checks
 
 tidy: ## Update and verify Go module metadata
 	$(GO) mod tidy
