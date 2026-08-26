@@ -125,9 +125,13 @@ func backoffDelay(attempt int, maxDelay time.Duration) time.Duration {
 func (g *Gateway) shouldRetry(model catalog.Model, capability string, statusCode int, hasResponseBody bool, attempt int) RetryDecision {
 	var isIdempotent bool
 
-	if g.adapterReg != nil {
-		adapter := g.adapterReg.Get(model.Provider)
-		isIdempotent = adapter.IdempotencySupport(capability)
+	if g.adapters != nil {
+		if spec, ok := g.registry.Get(model.Provider); ok {
+			providerAdapter := g.adapters.Resolve(spec)
+			isIdempotent = providerAdapter.IdempotencySupport(capability)
+		} else {
+			isIdempotent = requestTypeForCapability(capability) == RequestIdempotent
+		}
 	} else {
 		isIdempotent = requestTypeForCapability(capability) == RequestIdempotent
 	}

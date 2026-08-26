@@ -7,7 +7,20 @@ import (
 	"testing"
 
 	"github.com/sjzsdu/free-router/internal/catalog"
+	"github.com/sjzsdu/free-router/internal/provider"
 )
+
+func TestRegistryResolvesDeclaredAdapterKind(t *testing.T) {
+	registry := NewRegistry()
+	custom := &CloudflareAdapter{}
+	registry.Register("custom-wire", custom)
+	if got := registry.Resolve(provider.Spec{ID: "new-provider", Adapter: "custom-wire"}); got != custom {
+		t.Fatalf("Resolve returned %T, want registered adapter", got)
+	}
+	if got := registry.Resolve(provider.Spec{ID: "cloudflare"}); got.Name() != "cloudflare-workers-ai" {
+		t.Fatalf("provider-id compatibility fallback returned %q", got.Name())
+	}
+}
 
 func TestClassifyError(t *testing.T) {
 	adapter := &OpenAICompatibleAdapter{}

@@ -34,21 +34,22 @@ type Config struct {
 	Routes      *routing.Store
 	Health      *health.Tracker
 	APIToken    string
+	Adapters    adapter.Resolver
 }
 
 type Gateway struct {
-	catalog    *catalog.Store
-	registry   *provider.Registry
-	adapterReg *adapter.Registry
-	config     Config
-	client     *http.Client
-	next       atomic.Uint64
-	routeNext  sync.Map
-	tracker    *health.Tracker
-	mux        *http.ServeMux
-	apiToken   string
-	limiters   sync.Map
-	metrics    *Metrics
+	catalog   *catalog.Store
+	registry  *provider.Registry
+	adapters  adapter.Resolver
+	config    Config
+	client    *http.Client
+	next      atomic.Uint64
+	routeNext sync.Map
+	tracker   *health.Tracker
+	mux       *http.ServeMux
+	apiToken  string
+	limiters  sync.Map
+	metrics   *Metrics
 	// beforeCandidateAcquire is a deterministic test seam for exercising the
 	// race between candidate snapshots and half-open probe acquisition.
 	beforeCandidateAcquire func()
@@ -66,7 +67,10 @@ func New(store *catalog.Store, registry *provider.Registry, config Config, clien
 			config.Health.RestoreProbeSuccess(verification.Model, verification.Capability, verification.CheckedAt, verification.LatencyMS)
 		}
 	}
-	gateway := &Gateway{catalog: store, registry: registry, adapterReg: adapter.NewRegistry(), config: config, client: client, tracker: config.Health, mux: http.NewServeMux(), apiToken: config.APIToken, metrics: NewMetrics()}
+	if config.Adapters == nil {
+		config.Adapters = adapter.NewRegistry()
+	}
+	gateway := &Gateway{catalog: store, registry: registry, adapters: config.Adapters, config: config, client: client, tracker: config.Health, mux: http.NewServeMux(), apiToken: config.APIToken, metrics: NewMetrics()}
 	gateway.mux.HandleFunc("GET /healthz", gateway.health)
 	gateway.mux.HandleFunc("GET /livez", gateway.livez)
 	gateway.mux.HandleFunc("GET /readyz", gateway.readyz)
@@ -427,7 +431,8 @@ func (g *Gateway) tryCandidate(w http.ResponseWriter, r *http.Request, model cat
 		g.metrics.RecordFailure(time.Since(started), 0)
 		return true
 	}
-	providerAdapter := g.adapterReg.Get(model.Provider)
+	spec, _ := g.registry.Get(model.Provider)
+	providerAdapter := g.adapters.Resolve(spec)
 	normalizedResp, err := providerAdapter.NormalizeResponse(resp)
 	if err != nil {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
@@ -851,7 +856,7 @@ func (g *Gateway) forward(original *http.Request, model catalog.Model, body []by
 	}
 	defer limiter.Release()
 
-	providerAdapter := g.adapterReg.Get(model.Provider)
+	providerAdapter := g.adapters.Resolve(spec)
 	reqHeaders := make(map[string]string)
 	if accept := original.Header.Get("Accept"); accept != "" {
 		reqHeaders["Accept"] = accept

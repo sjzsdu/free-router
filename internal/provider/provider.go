@@ -24,6 +24,7 @@ var ErrProviderNotFound = errors.New("provider not found")
 
 type Spec struct {
 	ID                  string            `json:"id"`
+	Adapter             string            `json:"adapter,omitempty"`
 	BaseURL             string            `json:"base_url"`
 	ModelsURL           string            `json:"models_url,omitempty"`
 	ChatURL             string            `json:"chat_url,omitempty"`
