@@ -398,7 +398,7 @@ free-router serve --addr :9000    # 前台启动服务
 free-router daemon install        # 安装并启动守护进程
 free-router daemon status         # 查看守护进程状态
 free-router providers             # 查看内置源及配置状态
-free-router models                # 输出内置清单已收录的本地模型
+free-router models                # 只输出已配置 Provider 的清单模型
 free-router setup groq             # 交互式保存 API Key
 free-router auth add gemini        # 添加或替换凭据
 free-router auth list              # 只显示 provider 和存储后端
@@ -417,6 +417,8 @@ free-router serve
 浏览器会显示 HTTP Basic 登录框，用户名固定为 `admin`，密码是令牌。管理 API 也接受 `Authorization: Bearer <token>`。服务会拒绝没有令牌的远程管理模式，并对写操作执行同源检查；生产环境仍建议放在 HTTPS 反向代理或 VPN 后面。
 
 凭据回退文件默认为 `~/.free-router/credentials.json`，可用 `--credentials` 或 `FREE_ROUTER_CREDENTIALS` 覆盖。程序不会自动注册第三方账号、读取邮箱验证码或绕过 CAPTCHA；账户申请仍由用户在 provider 官方网站完成一次。
+
+模型可用性检测只会由管理界面的按钮手动触发，不会在打开页面、保存凭据或测试 Provider 连接时自动运行。检测结果和运行时故障状态默认持久化到 `~/.free-router/health.json`，可用 `--health` 或 `FREE_ROUTER_HEALTH` 覆盖；运行中失败的模型会立即退出后续候选，直到手动检测或重置后恢复。
 
 完整参数见 `free-router --help`。
 

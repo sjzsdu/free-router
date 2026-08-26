@@ -34,6 +34,7 @@ func addDaemonCommands(root *cobra.Command, opts *options) {
 		}
 		environment["FREE_ROUTER_CONFIG"] = opts.config
 		environment["FREE_ROUTER_CREDENTIALS"] = opts.credentials
+		environment["FREE_ROUTER_HEALTH"] = opts.health
 		if opts.providers != "" {
 			environment["FREE_ROUTER_PROVIDERS"] = opts.providers
 		}

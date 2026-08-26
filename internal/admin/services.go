@@ -88,11 +88,10 @@ type CredentialValidation struct {
 }
 
 type CredentialSaveResult struct {
-	Saved             bool                 `json:"saved"`
-	Backend           string               `json:"backend"`
-	Models            int                  `json:"models"`
-	Validation        CredentialValidation `json:"validation"`
-	ModelProbeStarted bool                 `json:"model_probe_started,omitempty"`
+	Saved      bool                 `json:"saved"`
+	Backend    string               `json:"backend"`
+	Models     int                  `json:"models"`
+	Validation CredentialValidation `json:"validation"`
 }
 
 type CredentialDeleteResult struct {
@@ -108,7 +107,6 @@ type CredentialService struct {
 	reload             func(map[string][]string) (func(), error)
 	providerProbes     *providerProbeStore
 	markProviderFailed func(string, int, string, time.Duration)
-	startModelProbe    func(string) bool
 	resetProvider      func(string)
 }
 
@@ -138,7 +136,7 @@ func (s *CredentialService) Save(ctx context.Context, providerID, apiKey string)
 	started := time.Now()
 	count, probeErr := s.catalog.Probe(ctx, providerID)
 	latency := time.Since(started)
-	result := CredentialSaveResult{Saved: true, Backend: backend, Models: len(s.catalog.Models()), Validation: CredentialValidation{Provider: providerID, FormulaModels: count, LatencyMS: latency.Milliseconds()}}
+	result := CredentialSaveResult{Saved: true, Backend: backend, Models: len(s.catalog.ConfiguredModels()), Validation: CredentialValidation{Provider: providerID, FormulaModels: count, LatencyMS: latency.Milliseconds()}}
 	if probeErr != nil {
 		status, message := providerProbeFailure(providerID, probeErr)
 		s.providerProbes.failure(providerID, status, message, latency)
@@ -148,7 +146,6 @@ func (s *CredentialService) Save(ctx context.Context, providerID, apiKey string)
 	}
 	result.Validation.OK = true
 	s.providerProbes.success(providerID, count, latency)
-	result.ModelProbeStarted = s.startModelProbe(providerID)
 	return result, nil
 }
 
@@ -175,5 +172,5 @@ func (s *CredentialService) Delete(providerID string) (CredentialDeleteResult, e
 	}
 	s.providerProbes.remove(providerID)
 	s.resetProvider(providerID)
-	return CredentialDeleteResult{Removed: true, Models: len(s.catalog.Models())}, nil
+	return CredentialDeleteResult{Removed: true, Models: len(s.catalog.ConfiguredModels())}, nil
 }
