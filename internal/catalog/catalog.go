@@ -203,6 +203,14 @@ type Store struct {
 	updated              time.Time
 }
 
+type storeState struct {
+	models               []Model
+	quarantine           map[string]string
+	verifiedTools        map[string]bool
+	verifiedCapabilities map[string]CapabilityVerification
+	updated              time.Time
+}
+
 type CapabilityVerification struct {
 	Model                   string    `json:"model"`
 	Capability              string    `json:"capability"`
@@ -250,12 +258,18 @@ func (s *Store) Refresh(ctx context.Context) error {
 	for _, spec := range s.registry.CatalogAll() {
 		merged = append(merged, modelsFromDiscovery(spec)...)
 	}
-	merged = s.applyVerifiedTools(merged)
-	merged = s.applyQuarantine(merged)
+	next := s.snapshot()
+	merged = applyVerifiedTools(merged, next.verifiedTools)
+	merged = applyQuarantine(merged, next.quarantine)
 	sort.Slice(merged, func(i, j int) bool { return merged[i].ID < merged[j].ID })
-	s.pruneCapabilityVerifications(merged)
-	s.set(merged, time.Now())
-	return s.saveCache(merged)
+	next.models = merged
+	next.verifiedCapabilities = pruneCapabilityVerifications(merged, next.verifiedCapabilities)
+	next.updated = time.Now()
+	if err := s.persist(next); err != nil {
+		return err
+	}
+	s.publish(next)
+	return nil
 }
 
 func cacheEligible(spec provider.Spec, model Model) bool {
@@ -277,21 +291,24 @@ func (s *Store) RefreshProvider(ctx context.Context, providerID string) error {
 		return fmt.Errorf("provider %q is not in the maintained model catalog", providerID)
 	}
 	models := modelsFromDiscovery(spec)
-	models = s.applyVerifiedTools(models)
-	models = s.applyQuarantine(models)
-	merged := make([]Model, 0, len(s.Models())+len(models))
-	for _, model := range s.Models() {
+	next := s.snapshot()
+	models = applyVerifiedTools(models, next.verifiedTools)
+	models = applyQuarantine(models, next.quarantine)
+	merged := make([]Model, 0, len(next.models)+len(models))
+	for _, model := range next.models {
 		if model.Provider != providerID {
 			merged = append(merged, model)
 		}
 	}
 	merged = append(merged, models...)
 	sort.Slice(merged, func(i, j int) bool { return merged[i].ID < merged[j].ID })
-	s.pruneCapabilityVerifications(merged)
-	s.set(merged, time.Now())
-	if err := s.saveCache(merged); err != nil {
+	next.models = merged
+	next.verifiedCapabilities = pruneCapabilityVerifications(merged, next.verifiedCapabilities)
+	next.updated = time.Now()
+	if err := s.persist(next); err != nil {
 		return fmt.Errorf("save model cache: %w", err)
 	}
+	s.publish(next)
 	return nil
 }
 
@@ -885,21 +902,41 @@ func (s *Store) set(models []Model, updated time.Time) {
 	s.mu.Unlock()
 }
 
+func (s *Store) snapshot() storeState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return storeState{
+		models:               append([]Model(nil), s.models...),
+		quarantine:           cloneMap(s.quarantine),
+		verifiedTools:        cloneBoolMap(s.verifiedTools),
+		verifiedCapabilities: cloneCapabilityVerifications(s.verifiedCapabilities),
+		updated:              s.updated,
+	}
+}
+
+func (s *Store) publish(next storeState) {
+	s.mu.Lock()
+	s.models = append([]Model(nil), next.models...)
+	s.quarantine = cloneMap(next.quarantine)
+	s.verifiedTools = cloneBoolMap(next.verifiedTools)
+	s.verifiedCapabilities = cloneCapabilityVerifications(next.verifiedCapabilities)
+	s.updated = next.updated
+	s.mu.Unlock()
+}
+
 // RemoveModel removes a failed model and records its metadata fingerprint. Formula
 // updates do not revive the same broken model; changed metadata makes it eligible
 // for retesting.
 func (s *Store) RemoveModel(modelID string) error {
 	s.refreshMu.Lock()
 	defer s.refreshMu.Unlock()
-	current := s.Models()
-	models := make([]Model, 0, len(current))
+	next := s.snapshot()
+	models := make([]Model, 0, len(next.models))
 	removed := false
-	for _, model := range current {
+	for _, model := range next.models {
 		if model.ID == modelID {
 			removed = true
-			s.mu.Lock()
-			s.quarantine[model.ID] = modelFingerprint(model)
-			s.mu.Unlock()
+			next.quarantine[model.ID] = modelFingerprint(model)
 			continue
 		}
 		models = append(models, model)
@@ -907,8 +944,13 @@ func (s *Store) RemoveModel(modelID string) error {
 	if !removed {
 		return nil
 	}
-	s.set(models, time.Now())
-	return s.saveCache(models)
+	next.models = models
+	next.updated = time.Now()
+	if err := s.persist(next); err != nil {
+		return err
+	}
+	s.publish(next)
+	return nil
 }
 
 // RestoreModel clears a model quarantine after an explicit operator reset and
@@ -916,9 +958,8 @@ func (s *Store) RemoveModel(modelID string) error {
 func (s *Store) RestoreModel(modelID string) error {
 	s.refreshMu.Lock()
 	defer s.refreshMu.Unlock()
-	s.mu.RLock()
-	_, quarantined := s.quarantine[modelID]
-	s.mu.RUnlock()
+	next := s.snapshot()
+	_, quarantined := next.quarantine[modelID]
 	if !quarantined {
 		return nil
 	}
@@ -939,19 +980,20 @@ func (s *Store) RestoreModel(modelID string) error {
 	if !found {
 		return fmt.Errorf("model %q is no longer in the maintained model catalog", modelID)
 	}
-	models := s.Models()
-	for _, model := range models {
+	for _, model := range next.models {
 		if model.ID == modelID {
 			return nil
 		}
 	}
-	s.mu.Lock()
-	delete(s.quarantine, modelID)
-	s.mu.Unlock()
-	models = append(models, restored)
-	sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
-	s.set(models, time.Now())
-	return s.saveCache(models)
+	delete(next.quarantine, modelID)
+	next.models = append(next.models, restored)
+	sort.Slice(next.models, func(i, j int) bool { return next.models[i].ID < next.models[j].ID })
+	next.updated = time.Now()
+	if err := s.persist(next); err != nil {
+		return err
+	}
+	s.publish(next)
+	return nil
 }
 
 func (s *Store) loadCache() error {
@@ -1024,18 +1066,13 @@ func (s *Store) loadCache() error {
 	return nil
 }
 
-func (s *Store) saveCache(models []Model) error {
+func (s *Store) persist(state storeState) error {
 	if err := os.MkdirAll(filepath.Dir(s.cache), 0o700); err != nil {
 		return err
 	}
-	s.mu.RLock()
-	quarantined := cloneMap(s.quarantine)
-	verifiedTools := cloneBoolMap(s.verifiedTools)
-	verifiedCapabilities := cloneCapabilityVerifications(s.verifiedCapabilities)
-	s.mu.RUnlock()
 	data, err := json.MarshalIndent(cacheFile{
-		SchemaVersion: 4, CatalogFingerprint: s.catalogFingerprint(), Models: models,
-		Quarantined: quarantined, VerifiedTools: verifiedTools, VerifiedCapabilities: verifiedCapabilities,
+		SchemaVersion: 4, CatalogFingerprint: s.catalogFingerprint(), Models: state.models,
+		Quarantined: state.quarantine, VerifiedTools: state.verifiedTools, VerifiedCapabilities: state.verifiedCapabilities,
 	}, "", "  ")
 	if err != nil {
 		return err
@@ -1102,34 +1139,40 @@ func (s *Store) cachedModelsMatchManifest(models []Model) bool {
 func (s *Store) RecordToolSupport(modelID string) error {
 	s.refreshMu.Lock()
 	defer s.refreshMu.Unlock()
-	models := s.Models()
+	next := s.snapshot()
 	found := false
-	for index := range models {
-		if models[index].ID != modelID {
+	for index := range next.models {
+		if next.models[index].ID != modelID {
 			continue
 		}
 		found = true
-		models[index].Capabilities.ToolCall = true
-		models[index].Capabilities.ToolCallKnown = true
-		if models[index].SupportsFunction(FunctionChat) && !models[index].SupportsFunction(FunctionChatTools) {
-			models[index].Functions = append(models[index].Functions, FunctionChatTools)
+		next.models[index].Capabilities.ToolCall = true
+		next.models[index].Capabilities.ToolCallKnown = true
+		if next.models[index].SupportsFunction(FunctionChat) && !next.models[index].SupportsFunction(FunctionChatTools) {
+			next.models[index].Functions = append(next.models[index].Functions, FunctionChatTools)
 		}
 		break
 	}
 	if !found {
 		return fmt.Errorf("model %q is not in the catalog", modelID)
 	}
-	s.mu.Lock()
-	s.verifiedTools[modelID] = true
-	s.mu.Unlock()
-	s.set(models, time.Now())
-	return s.saveCache(models)
+	next.verifiedTools[modelID] = true
+	next.updated = time.Now()
+	if err := s.persist(next); err != nil {
+		return err
+	}
+	s.publish(next)
+	return nil
 }
 
 func (s *Store) applyVerifiedTools(models []Model) []Model {
 	s.mu.RLock()
 	verified := cloneBoolMap(s.verifiedTools)
 	s.mu.RUnlock()
+	return applyVerifiedTools(models, verified)
+}
+
+func applyVerifiedTools(models []Model, verified map[string]bool) []Model {
 	for index := range models {
 		if !verified[models[index].ID] {
 			continue
@@ -1158,7 +1201,8 @@ func (s *Store) RecordModelCapabilityVerification(model Model, capability string
 	s.refreshMu.Lock()
 	defer s.refreshMu.Unlock()
 
-	catalogModel, ok := findModel(s.Models(), model.ID)
+	next := s.snapshot()
+	catalogModel, ok := findModel(next.models, model.ID)
 	if !ok {
 		return fmt.Errorf("model %q is not in the catalog", model.ID)
 	}
@@ -1173,10 +1217,12 @@ func (s *Store) RecordModelCapabilityVerification(model Model, capability string
 		CatalogModelFingerprint: modelFingerprint(catalogModel), ModelFingerprint: modelFingerprint(model),
 		CheckedAt: checkedAt, LatencyMS: float64(latency.Microseconds()) / 1000,
 	}
-	s.mu.Lock()
-	s.verifiedCapabilities[capabilityVerificationKey(model.ID, capability)] = verification
-	s.mu.Unlock()
-	return s.saveCache(s.Models())
+	next.verifiedCapabilities[capabilityVerificationKey(model.ID, capability)] = verification
+	if err := s.persist(next); err != nil {
+		return err
+	}
+	s.publish(next)
+	return nil
 }
 
 // ResetCapabilityVerification invalidates persisted probe success for one
@@ -1185,18 +1231,21 @@ func (s *Store) ResetCapabilityVerification(modelID, capability string) error {
 	s.refreshMu.Lock()
 	defer s.refreshMu.Unlock()
 
-	s.mu.Lock()
+	next := s.snapshot()
 	if capability != "" {
-		delete(s.verifiedCapabilities, capabilityVerificationKey(modelID, capability))
+		delete(next.verifiedCapabilities, capabilityVerificationKey(modelID, capability))
 	} else {
-		for key, verification := range s.verifiedCapabilities {
+		for key, verification := range next.verifiedCapabilities {
 			if verification.Model == modelID {
-				delete(s.verifiedCapabilities, key)
+				delete(next.verifiedCapabilities, key)
 			}
 		}
 	}
-	s.mu.Unlock()
-	return s.saveCache(s.Models())
+	if err := s.persist(next); err != nil {
+		return err
+	}
+	s.publish(next)
+	return nil
 }
 
 func (s *Store) CapabilityVerified(modelID, capability string) bool {
@@ -1249,18 +1298,24 @@ func (s *Store) CapabilityVerifications() []CapabilityVerification {
 }
 
 func (s *Store) pruneCapabilityVerifications(models []Model) {
+	s.mu.Lock()
+	s.verifiedCapabilities = pruneCapabilityVerifications(models, s.verifiedCapabilities)
+	s.mu.Unlock()
+}
+
+func pruneCapabilityVerifications(models []Model, verifications map[string]CapabilityVerification) map[string]CapabilityVerification {
 	known := make(map[string]Model, len(models))
 	for _, model := range models {
 		known[model.ID] = model
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for key, verification := range s.verifiedCapabilities {
+	result := cloneCapabilityVerifications(verifications)
+	for key, verification := range result {
 		model, ok := known[verification.Model]
 		if !ok || verification.CatalogModelFingerprint != modelFingerprint(model) {
-			delete(s.verifiedCapabilities, key)
+			delete(result, key)
 		}
 	}
+	return result
 }
 
 func capabilityVerificationKey(model, capability string) string {
@@ -1278,10 +1333,15 @@ func findModel(models []Model, id string) (Model, bool) {
 
 func (s *Store) applyQuarantine(models []Model) []Model {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	quarantine := cloneMap(s.quarantine)
+	s.mu.RUnlock()
+	return applyQuarantine(models, quarantine)
+}
+
+func applyQuarantine(models []Model, quarantine map[string]string) []Model {
 	filtered := make([]Model, 0, len(models))
 	for _, model := range models {
-		fingerprint, quarantined := s.quarantine[model.ID]
+		fingerprint, quarantined := quarantine[model.ID]
 		if !quarantined {
 			filtered = append(filtered, model)
 			continue
