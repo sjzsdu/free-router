@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent,
@@ -9,13 +9,15 @@ import * as Dialog from '@radix-ui/react-dialog'
 import * as Popover from '@radix-ui/react-popover'
 import * as Tooltip from '@radix-ui/react-tooltip'
 import {
-  Activity, AlertTriangle, ArrowDownUp, Blocks, Bot, Check, ChevronRight, CircleHelp,
+  Activity, AlertTriangle, ArrowDownUp, Blocks, Bot, Check, ChevronRight,
   Database, ExternalLink, Eye, EyeOff, Gauge, GripVertical, KeyRound, LogIn, Menu, Moon,
   Network, Plus, RefreshCw, Route as RouteIcon, Save, Search, Server, Settings2,
   ShieldCheck, Sparkles, Sun, Trash2, Unplug, X,
 } from 'lucide-react'
 import { api } from './api'
 import { healthKey, isModelAlreadySelected, isRouteModelHealthy, modelDisplayStatus, modelHealth, modelIDKey, routeModelHealth, uniqueModelIDs, type ModelDisplayStatus } from './modelStatus'
+import { useConfigDraft } from './useConfigDraft'
+import { SystemPage } from './pages/SystemPage'
 import type {
   AppState, EffectiveModel, HealthProbeStatus, HealthState, Model, ModelOverride, ProviderDetails, ProviderStatus, RouteType, RouterConfig, RuntimeStatus,
 } from './types'
@@ -129,19 +131,11 @@ function App() {
   const [page, setPage] = useState<Page>('overview')
   const [mobileNav, setMobileNav] = useState(false)
   const [dark, setDark] = useState(() => localStorage.getItem('free-router-theme') === 'dark')
-  const [draft, setDraft] = useState<RouterConfig | null>(null)
-  const [baseline, setBaseline] = useState<RouterConfig | null>(null)
   const [toast, setToast] = useState<{ message: string; error?: boolean } | null>(null)
 
   const stateQuery = useQuery({ queryKey: ['state'], queryFn: api.state, refetchInterval: 5000 })
   const runtimeQuery = useQuery({ queryKey: ['runtime'], queryFn: api.runtime, refetchInterval: 5000, retry: false })
-
-  useEffect(() => {
-    if (stateQuery.data && !draft) {
-      setDraft(cloneConfig(stateQuery.data.config))
-      setBaseline(cloneConfig(stateQuery.data.config))
-    }
-  }, [stateQuery.data, draft])
+  const { draft, setDraft, dirty, acceptSaved, reset } = useConfigDraft(stateQuery.data?.config)
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark)
@@ -165,18 +159,10 @@ function App() {
     window.history.replaceState({}, '', window.location.pathname)
   }, [])
 
-  const dirty = useMemo(() => Boolean(draft && baseline && JSON.stringify(draft) !== JSON.stringify(baseline)), [draft, baseline])
-
-  useEffect(() => {
-    const beforeUnload = (event: BeforeUnloadEvent) => { if (dirty) event.preventDefault() }
-    window.addEventListener('beforeunload', beforeUnload)
-    return () => window.removeEventListener('beforeunload', beforeUnload)
-  }, [dirty])
-
   const saveMutation = useMutation({
     mutationFn: () => api.saveConfig(draft!),
     onSuccess: ({ config }) => {
-      setDraft(cloneConfig(config)); setBaseline(cloneConfig(config)); setToast({ message: '路由配置已保存并即时生效' })
+      acceptSaved(config); setToast({ message: '路由配置已保存并即时生效' })
       queryClient.invalidateQueries({ queryKey: ['state'] })
     },
     onError: (error: Error) => setToast({ message: error.message, error: true }),
@@ -228,7 +214,7 @@ function App() {
         {page === 'system' && <SystemPage state={state} runtime={runtime} offline={runtimeQuery.isError} />}
       </div>
 
-      {dirty && <div className="save-bar"><div><span className="unsaved-dot" /><div><strong>有未保存的路由修改</strong><small>保存后立即对新请求生效</small></div></div><div><button className="button ghost" onClick={() => setDraft(cloneConfig(baseline!))}>放弃修改</button><button className="button" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}><Save size={16} />{saveMutation.isPending ? '保存中…' : '保存配置'}</button></div></div>}
+      {dirty && <div className="save-bar"><div><span className="unsaved-dot" /><div><strong>有未保存的路由修改</strong><small>保存后立即对新请求生效</small></div></div><div><button className="button ghost" onClick={reset}>放弃修改</button><button className="button" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}><Save size={16} />{saveMutation.isPending ? '保存中…' : '保存配置'}</button></div></div>}
     </main>
     {toast && <div className={cx('toast', toast.error && 'error')}><span>{toast.error ? <AlertTriangle size={17} /> : <Check size={17} />}</span>{toast.message}</div>}
   </div>
@@ -518,11 +504,5 @@ function ProviderDetailsContent({ details }: { details: ProviderDetails }) {
   </div>
 }
 
-function SystemPage({ state, runtime, offline }: { state: AppState; runtime: RuntimeStatus; offline: boolean }) {
-  const rows = [
-    ['服务状态', offline ? '连接已断开' : '运行中'], ['启动方式', runtime.service_manager], ['版本', runtime.version], ['PID', String(runtime.pid)], ['运行时间', formatUptime(runtime.uptime_seconds)], ['监听地址', 'http://localhost:1314'], ['路由配置', state.config_path], ['模型缓存', state.catalog.cache_path], ['缓存更新时间', formatDate(state.catalog.updated_at)],
-  ]
-  return <div className="system-layout"><section className="panel system-card"><div className="system-hero"><div className={cx('system-service-icon', offline && 'offline')}><Server size={28} /></div><div><span className="eyebrow">FREE ROUTER DAEMON</span><h2>{offline ? '服务连接已断开' : '本地服务运行正常'}</h2><p>用户级守护进程，无需 root 权限。</p></div><StatusBadge status={offline ? 'failed' : 'healthy'} /></div><div className="system-rows">{rows.map(([label, value]) => <div key={label}><span>{label}</span><code>{value}</code></div>)}</div></section><aside className="stack-md"><section className="panel command-card"><div className="command-card-icon"><Activity size={19} /></div><h3>守护进程管理</h3><p>页面随服务一起运行，停止后需从终端重新启动。</p>{['free-router daemon status', 'free-router daemon restart', 'free-router daemon logs --follow'].map(command => <code key={command}>{command}</code>)}</section><section className="panel command-card"><div className="command-card-icon blue"><CircleHelp size={19} /></div><h3>API 接入</h3><p>所有 OpenAI 兼容客户端只需设置一个本地地址。</p><code>OPENAI_BASE_URL=http://localhost:1314/v1</code></section></aside></div>
-}
 
 export default App
