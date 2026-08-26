@@ -52,18 +52,71 @@ bd close <id>         # Complete work
 
 ## Build & Test
 
-_Add your build and test commands here_
-
 ```bash
-# Example:
-# npm install
-# npm test
+# Full clean-clone gate. It installs/builds the embedded admin assets first.
+make check
+
+# Concurrency-sensitive backend validation.
+make test-race
+
+# Production and complete dependency audits.
+cd web && npm audit --omit=dev && npm audit
 ```
+
+`make check` is the canonical gate. Do not run `go test ./...` as the first
+command in a clean checkout because `internal/admin` embeds `dist`, which is
+created by `web-build`.
 
 ## Architecture Overview
 
-_Add a brief overview of your project architecture_
+Free Router is a modular monolith. Keep it a single process unless deployment
+requirements materially change. The composition root is `cmd/root.go`.
+
+```text
+cmd (composition)
+├── gateway -> adapter / eligibility / routing / catalog / health / provider / transport
+└── admin   -> eligibility / routing / catalog / health / provider / credentials
+                  catalog -> provider
+```
+
+Important boundaries:
+
+- `gateway.CandidatePlanner` owns candidate ordering and reads one immutable
+  `eligibility.Snapshot` per planning pass.
+- `gateway.AttemptExecutor` owns one upstream attempt, including adapter
+  normalization, fallback classification, response streaming, health, and
+  metrics.
+- `catalog.ProbeRunner` builds and executes capability probes. `catalog.Store`
+  remains the compatibility facade for inventory and evidence.
+- Catalog mutations follow persist-before-publish. Build the next state, atomically
+  replace the cache file, then expose the new in-memory snapshot.
+- `admin.ConfigService` and `admin.CredentialService` coordinate management
+  transactions. HTTP handlers only decode input and map service errors.
+- Provider wire protocols are selected through `adapter.Resolver`. A provider
+  may declare `adapter` in its spec. The default remains OpenAI-compatible.
+
+### State authority
+
+| State | Authority | Projection/consumer |
+| --- | --- | --- |
+| Maintained model inventory | embedded/custom free-model manifest | `catalog.Snapshot` |
+| Quarantine and capability evidence | atomic catalog cache | `catalog.Store` |
+| Route aliases and model overrides | routing config with revision CAS | `eligibility.Snapshot` |
+| Runtime circuit/latency state | `health.Tracker` | eligibility, Gateway, Admin |
+| Effective routability and reason | `eligibility.Snapshot` | `/v1/models`, candidate planner, `/admin/api/state` |
+| Provider credentials | OS/file vault | provider registry reload |
+
+Do not duplicate effective-routability rules in handlers or UI code. Add new
+conditions to `eligibility.Snapshot` and cover Gateway/Admin consistency.
 
 ## Conventions & Patterns
 
-_Add your project-specific conventions here_
+- Preserve OpenAI endpoint behavior, routing JSON, cache schema, and Admin JSON
+  fields when refactoring. New response fields should be additive.
+- Prefer immutable snapshots and narrow interfaces over framework-style DI.
+- Keep provider-specific wire behavior in adapters. Do not create provider class
+  hierarchies for OpenAI-compatible services.
+- Every persistent mutation must have a failure-path test proving runtime state
+  remains unchanged when disk publication fails.
+- Frontend polling must not overwrite an unsaved route draft. Keep that policy in
+  `web/src/useConfigDraft.ts`.
