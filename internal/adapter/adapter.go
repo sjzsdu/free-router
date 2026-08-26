@@ -50,6 +50,13 @@ type ProviderAdapter interface {
 	Name() string
 }
 
+// Resolver selects the wire adapter for a provider. Gateway accepts this narrow
+// interface so applications can add non-OpenAI protocols without changing the
+// routing or HTTP handler code.
+type Resolver interface {
+	Resolve(provider.Spec) ProviderAdapter
+}
+
 type Registry struct {
 	adapters map[string]ProviderAdapter
 	defaults ProviderAdapter
@@ -73,6 +80,15 @@ func (r *Registry) Get(providerID string) ProviderAdapter {
 		return adapter
 	}
 	return r.defaults
+}
+
+func (r *Registry) Resolve(spec provider.Spec) ProviderAdapter {
+	if spec.Adapter != "" {
+		if resolved, ok := r.adapters[spec.Adapter]; ok {
+			return resolved
+		}
+	}
+	return r.Get(spec.ID)
 }
 
 type OpenAICompatibleAdapter struct{}

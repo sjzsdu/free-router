@@ -196,6 +196,49 @@ func TestResetCapabilityVerificationRequiresAProbeAgain(t *testing.T) {
 	}
 }
 
+func TestCatalogMutationsPublishOnlyAfterPersistence(t *testing.T) {
+	clearBuiltinKeys(t)
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "free-models.json")
+	if err := os.WriteFile(manifestPath, []byte(`{"schema_version":2,"providers":{"test":{"source_urls":["https://example.com/models"],"models":[{"id":"chat-a","functions":["chat"]}]}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := provider.NewRegistryWithManifest(
+		`[{"id":"test","base_url":"https://example.invalid","no_auth":true}]`,
+		provider.DefaultEnvMap(), manifestPath,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := New(registry, filepath.Join(dir, "models.json"), http.DefaultClient)
+	if err := store.Bootstrap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	blockedParent := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(blockedParent, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store.cache = filepath.Join(blockedParent, "models.json")
+
+	if err := store.RemoveModel("test/chat-a"); err == nil {
+		t.Fatal("RemoveModel succeeded despite an unwritable cache path")
+	}
+	if models := store.Models(); len(models) != 1 || models[0].ID != "test/chat-a" {
+		t.Fatalf("failed removal leaked into runtime models: %#v", models)
+	}
+	if _, quarantined := store.snapshot().quarantine["test/chat-a"]; quarantined {
+		t.Fatal("failed removal leaked into runtime quarantine")
+	}
+
+	if err := store.RecordCapabilityVerification("test/chat-a", FunctionChat, time.Now(), time.Millisecond); err == nil {
+		t.Fatal("RecordCapabilityVerification succeeded despite an unwritable cache path")
+	}
+	if store.CapabilityVerified("test/chat-a", FunctionChat) {
+		t.Fatal("failed verification leaked into runtime eligibility")
+	}
+}
+
 func TestApplyQuarantineDoesNotMutateQuarantineState(t *testing.T) {
 	old := Model{ID: "test/model", Type: "normal", Functions: []string{"chat"}, ContextLength: 8192}
 	changed := old

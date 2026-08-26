@@ -13,13 +13,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/sjzsdu/free-router/internal/catalog"
 	"github.com/sjzsdu/free-router/internal/credentials"
+	"github.com/sjzsdu/free-router/internal/eligibility"
 	"github.com/sjzsdu/free-router/internal/health"
 	"github.com/sjzsdu/free-router/internal/provider"
 	"github.com/sjzsdu/free-router/internal/routing"
@@ -44,6 +44,8 @@ type Handler struct {
 	oauthHTTPClient    *http.Client
 	openRouterAuthURL  string
 	openRouterTokenURL string
+	configService      *ConfigService
+	credentialService  *CredentialService
 }
 
 type Config struct {
@@ -71,6 +73,12 @@ func New(routes *routing.Store, models *catalog.Store, vault *credentials.Vault,
 		tokenURL = "https://openrouter.ai/api/v1/auth/keys"
 	}
 	handler := &Handler{routes: routes, catalog: models, vault: vault, health: tracker, probes: newProbeManager(filepath.Dir(routes.Path())), providerProbes: newProviderProbeStore(), config: config, reload: reload, static: http.FileServer(http.FS(staticFS)), started: time.Now(), oauthFlows: newOAuthFlows(), oauthHTTPClient: client, openRouterAuthURL: authURL, openRouterTokenURL: tokenURL}
+	handler.configService = &ConfigService{mu: &handler.updateMu, routes: routes, catalog: models, health: tracker, reload: handler.reloadProviders, refreshAsync: handler.refreshAllAsync}
+	handler.credentialService = &CredentialService{
+		mu: &handler.updateMu, vault: vault, routes: routes, catalog: models, reload: handler.reloadProviders,
+		providerProbes: handler.providerProbes, markProviderFailed: handler.markProviderModelsFailed,
+		startModelProbe: handler.startProviderModelProbe, resetProvider: handler.resetProviderModelHealth,
+	}
 	handler.syncVerifiedHealth()
 	return handler
 }
@@ -161,10 +169,19 @@ func (h *Handler) state(w http.ResponseWriter) {
 	entries, _ := h.vault.List()
 	providers := provider.BuiltinStatusWithManifest(provider.EnvMap(h.routes.Config().ProviderEnv), h.config.FreeModels, h.vault.Get)
 	h.providerProbes.decorate(providers)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"config": h.routes.Config(), "config_path": h.routes.Path(), "models": h.catalog.Models(),
-		"catalog": h.catalog.Status(), "providers": providers, "credentials": entries,
-		"health": h.health.Snapshot(), "provider_health": h.health.ProviderSnapshot(), "summary": h.health.Summary(), "health_probe": h.probes.Snapshot(), "runtime": h.runtimeState(),
+	view := eligibility.New(h.catalog, h.routes, h.health)
+	statuses := make([]ModelEligibility, 0)
+	for _, model := range view.Models() {
+		for _, capability := range model.Functions {
+			_, reason := view.Eligible(model, routing.Route{Capability: capability, RequireTool: capability == catalog.FunctionChatTools}, true, true)
+			statuses = append(statuses, ModelEligibility{Model: model.ID, Capability: capability, Eligible: reason == "", Reason: reason})
+		}
+	}
+	writeJSON(w, http.StatusOK, StateResponse{
+		Config: h.routes.Config(), ConfigPath: h.routes.Path(), Models: h.catalog.Models(),
+		Catalog: h.catalog.Status(), Providers: providers, Credentials: entries,
+		Health: h.health.Snapshot(), ProviderHealth: h.health.ProviderSnapshot(), Summary: h.health.Summary(),
+		HealthProbe: h.probes.Snapshot(), Runtime: h.runtimeState(), Eligibility: statuses,
 	})
 }
 
@@ -172,77 +189,42 @@ func (h *Handler) runtime(w http.ResponseWriter) {
 	writeJSON(w, http.StatusOK, h.runtimeState())
 }
 
-func (h *Handler) runtimeState() map[string]any {
+func (h *Handler) runtimeState() RuntimeState {
 	manager := strings.TrimSpace(os.Getenv("FREE_ROUTER_SERVICE_MANAGER"))
 	if manager == "" {
 		manager = "manual"
 	}
-	return map[string]any{
-		"status": "running", "pid": os.Getpid(), "version": h.config.Version,
-		"started_at": h.started, "uptime_seconds": int64(time.Since(h.started).Seconds()),
-		"service_manager": manager, "models": len(h.catalog.Models()),
-		"requests": h.health.Summary().Requests, "failed": h.health.Summary().Failed,
+	summary := h.health.Summary()
+	return RuntimeState{
+		Status: "running", PID: os.Getpid(), Version: h.config.Version,
+		StartedAt: h.started, UptimeSeconds: int64(time.Since(h.started).Seconds()),
+		ServiceManager: manager, Models: len(h.catalog.Models()),
+		Requests: summary.Requests, Failed: summary.Failed,
 	}
 }
 
 func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
-	h.updateMu.Lock()
-	defer h.updateMu.Unlock()
 	var config routing.Config
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&config); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid configuration")
 		return
 	}
 
-	var previousConfig routing.Config
-
-	var rollback func()
-	validateFunc := func(currentConfig, newConfig routing.Config) error {
-		previousConfig = currentConfig
-		if !reflect.DeepEqual(previousConfig.ProviderEnv, newConfig.ProviderEnv) {
-			var err error
-			rollback, err = h.reloadProviders(newConfig.ProviderEnv)
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	if err := h.routes.UpdateTransactional(config, validateFunc); err != nil {
-		if rollback != nil {
-			rollback()
-		}
+	result, err := h.configService.Update(config)
+	if err != nil {
 		status := http.StatusBadGateway
 		if errors.Is(err, routing.ErrConfigConflict) {
 			status = http.StatusConflict
+		} else {
+			var serviceErr *ServiceError
+			if errors.As(err, &serviceErr) && serviceErr.Stage == "reset-model-verification" {
+				status = http.StatusInternalServerError
+			}
 		}
 		writeError(w, status, err.Error())
 		return
 	}
-
-	if !reflect.DeepEqual(previousConfig.ProviderEnv, h.routes.Config().ProviderEnv) {
-		h.refreshAllAsync()
-	}
-	changedModels := make(map[string]bool)
-	for modelID, previous := range previousConfig.Models {
-		if current, ok := h.routes.Config().Models[modelID]; !ok || !reflect.DeepEqual(previous, current) {
-			changedModels[modelID] = true
-		}
-	}
-	for modelID, current := range h.routes.Config().Models {
-		if previous, ok := previousConfig.Models[modelID]; !ok || !reflect.DeepEqual(previous, current) {
-			changedModels[modelID] = true
-		}
-	}
-	for modelID := range changedModels {
-		if err := h.catalog.ResetCapabilityVerification(modelID, ""); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		h.health.Reset(modelID, "")
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"saved": true, "config": h.routes.Config()})
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
@@ -297,8 +279,6 @@ func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request, escapedID
 }
 
 func (h *Handler) saveCredential(w http.ResponseWriter, r *http.Request) {
-	h.updateMu.Lock()
-	defer h.updateMu.Unlock()
 	var input struct {
 		Provider string `json:"provider"`
 		APIKey   string `json:"api_key"`
@@ -307,73 +287,35 @@ func (h *Handler) saveCredential(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid credential")
 		return
 	}
-	oldKey, _ := h.vault.Get(input.Provider)
-	backend, err := h.vault.Set(input.Provider, input.APIKey)
+	result, err := h.credentialService.Save(r.Context(), input.Provider, input.APIKey)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	rollback, err := h.reloadProviders(h.routes.Config().ProviderEnv)
-	if err != nil {
-		if oldKey != "" {
-			_, _ = h.vault.Set(input.Provider, oldKey)
-		} else {
-			_ = h.vault.Delete(input.Provider)
+		status := http.StatusInternalServerError
+		var serviceErr *ServiceError
+		if errors.As(err, &serviceErr) && serviceErr.Stage == "save-credential" {
+			status = http.StatusBadRequest
 		}
-		if rollback != nil {
-			rollback()
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, status, err.Error())
 		return
 	}
-	started := time.Now()
-	count, probeErr := h.catalog.Probe(r.Context(), input.Provider)
-	latency := time.Since(started)
-	if probeErr != nil {
-		status, message := providerProbeFailure(input.Provider, probeErr)
-		h.providerProbes.failure(input.Provider, status, message, latency)
-		h.markProviderModelsFailed(input.Provider, status, message, latency)
-		writeJSON(w, http.StatusOK, map[string]any{
-			"saved": true, "backend": backend, "models": len(h.catalog.Models()),
-			"validation": map[string]any{"ok": false, "provider": input.Provider, "error": message, "latency_ms": latency.Milliseconds()},
-		})
-		return
-	}
-	h.providerProbes.success(input.Provider, count, latency)
-	probeStarted := h.startProviderModelProbe(input.Provider)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"saved": true, "backend": backend, "models": len(h.catalog.Models()),
-		"validation":          map[string]any{"ok": true, "provider": input.Provider, "formula_models": count, "latency_ms": latency.Milliseconds()},
-		"model_probe_started": probeStarted,
-	})
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) deleteCredential(w http.ResponseWriter, r *http.Request, providerID string) {
-	h.updateMu.Lock()
-	defer h.updateMu.Unlock()
 	if providerID == "" {
 		writeError(w, http.StatusBadRequest, "provider is required")
 		return
 	}
-	oldKey, _ := h.vault.Get(providerID)
-	if err := h.vault.Delete(providerID); err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
-		return
-	}
-	rollback, err := h.reloadProviders(h.routes.Config().ProviderEnv)
+	result, err := h.credentialService.Delete(providerID)
 	if err != nil {
-		if oldKey != "" {
-			_, _ = h.vault.Set(providerID, oldKey)
+		status := http.StatusInternalServerError
+		var serviceErr *ServiceError
+		if errors.As(err, &serviceErr) && serviceErr.Stage == "delete-credential" {
+			status = http.StatusNotFound
 		}
-		if rollback != nil {
-			rollback()
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, status, err.Error())
 		return
 	}
-	h.providerProbes.remove(providerID)
-	h.resetProviderModelHealth(providerID)
-	writeJSON(w, http.StatusOK, map[string]any{"removed": true, "models": len(h.catalog.Models())})
+	writeJSON(w, http.StatusOK, result)
 }
 
 func providerProbeFailure(providerID string, err error) (int, string) {

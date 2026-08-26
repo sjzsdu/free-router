@@ -173,6 +173,7 @@ export interface AppState {
   summary: Summary
   health_probe: HealthProbeStatus
   runtime: RuntimeStatus
+  eligibility: Array<{ model: string; capability: RouteType; eligible: boolean; reason?: string }>
 }
 
 export interface EffectiveModel extends Model {
