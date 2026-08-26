@@ -1,8 +1,10 @@
 package health
 
 import (
+	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -70,6 +72,56 @@ func TestPersistentTrackerRestoresProviderFailureAndReset(t *testing.T) {
 	}
 	if !reset.Available("provider/other", "chat") || len(reset.Snapshot()) != 0 || len(reset.ProviderSnapshot()) != 0 {
 		t.Fatalf("reset was not persisted: models=%#v providers=%#v", reset.Snapshot(), reset.ProviderSnapshot())
+	}
+}
+
+func TestCorruptedHealthFileAutoResets(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "malformed JSON", content: `{not-json`},
+		{name: "incompatible schema", content: `{"schema_version":2,"models":[]}`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "health.json")
+			if err := os.WriteFile(path, []byte(test.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			tracker, err := NewPersistent(path)
+			if err != nil {
+				t.Fatalf("invalid health state should not prevent startup: %v", err)
+			}
+			if len(tracker.Snapshot()) != 0 || len(tracker.ProviderSnapshot()) != 0 {
+				t.Fatalf("tracker did not start fresh: models=%#v providers=%#v", tracker.Snapshot(), tracker.ProviderSnapshot())
+			}
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatalf("invalid health state was not moved away: %v", err)
+			}
+			backups, err := filepath.Glob(path + ".corrupted.*")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(backups) != 1 {
+				t.Fatalf("backups=%v, want exactly one", backups)
+			}
+			preserved, err := os.ReadFile(backups[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(preserved) != test.content {
+				t.Fatalf("backup content=%q, want %q", preserved, test.content)
+			}
+
+			tracker.ProbeSuccess("provider/model", "chat", time.Millisecond)
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("fresh tracker could not persist replacement state: %v", err)
+			}
+		})
 	}
 }
 
@@ -405,20 +457,20 @@ func TestTryAcquireConcurrentCooldownProtection(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	successCount := 0
+	var successCount atomic.Int32
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			if tracker.TryAcquire("provider/model", "chat") {
-				successCount++
+				successCount.Add(1)
 			}
 		}()
 	}
 	wg.Wait()
 
-	if successCount != 0 {
-		t.Fatalf("TryAcquire should reject all requests during cooldown, got %d successes", successCount)
+	if got := successCount.Load(); got != 0 {
+		t.Fatalf("TryAcquire should reject all requests during cooldown, got %d successes", got)
 	}
 }
 

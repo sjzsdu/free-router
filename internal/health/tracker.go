@@ -256,6 +256,8 @@ func (t *Tracker) Success(model, capability string, latency time.Duration, statu
 		pState.CooldownUntil = time.Time{}
 		atomic.StoreInt32(&pState.InFlight, 0)
 	}
+	// Failures are persisted eagerly, so a successful request only needs to
+	// write when it clears a previously persisted model or provider failure.
 	if persistRecovery {
 		t.persistLocked()
 	}
@@ -511,10 +513,10 @@ func (t *Tracker) load() error {
 	}
 	var persisted persistedState
 	if err := json.Unmarshal(content, &persisted); err != nil {
-		return fmt.Errorf("decode health state: %w", err)
+		return t.backupInvalidState(fmt.Errorf("decode health state: %w", err))
 	}
 	if persisted.SchemaVersion != 1 {
-		return fmt.Errorf("unsupported health state schema version %d", persisted.SchemaVersion)
+		return t.backupInvalidState(fmt.Errorf("unsupported health state schema version %d", persisted.SchemaVersion))
 	}
 	for _, saved := range persisted.Models {
 		state := saved
@@ -532,6 +534,19 @@ func (t *Tracker) load() error {
 		}
 		t.providerStates[state.Model] = &state
 	}
+	return nil
+}
+
+func (t *Tracker) backupInvalidState(cause error) error {
+	backup := fmt.Sprintf("%s.corrupted.%s", t.path, t.now().UTC().Format("20060102T150405.000000000Z"))
+	if err := os.Rename(t.path, backup); err != nil {
+		return fmt.Errorf("backup invalid health state after %v: %w", cause, err)
+	}
+	slog.Error("health state is invalid; backed it up and starting fresh",
+		"path", t.path,
+		"backup", backup,
+		"error", cause,
+	)
 	return nil
 }
 
