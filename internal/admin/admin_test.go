@@ -484,6 +484,30 @@ func TestRuntimeStatus(t *testing.T) {
 	}
 }
 
+func TestAdminStateJSONContract(t *testing.T) {
+	dir := t.TempDir()
+	routes, _ := routing.New(filepath.Join(dir, "config.json"))
+	registry, _ := provider.NewRegistry("")
+	models := catalog.New(registry, filepath.Join(dir, "models.json"), http.DefaultClient)
+	handler := New(routes, models, credentials.NewFileOnly(filepath.Join(dir, "credentials.json")), health.New(), Config{Version: "test"}, nil)
+	request := httptest.NewRequest(http.MethodGet, "/admin/api/state", nil)
+	request.RemoteAddr = "127.0.0.1:1234"
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response map[string]json.RawMessage
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"config", "config_path", "models", "catalog", "providers", "credentials", "health", "provider_health", "summary", "health_probe", "runtime", "eligibility"} {
+		if _, ok := response[field]; !ok {
+			t.Errorf("state response omitted contract field %q", field)
+		}
+	}
+}
+
 func TestProviderConnectionProbe(t *testing.T) {
 	for _, key := range provider.SupportedKeyEnvs() {
 		t.Setenv(key, "")

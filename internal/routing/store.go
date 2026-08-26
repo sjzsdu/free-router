@@ -76,7 +76,12 @@ func DefaultConfig() Config {
 func (s *Store) Apply(model catalog.Model) (catalog.Model, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	override, ok := s.config.Models[model.ID]
+	return Apply(s.config, model)
+}
+
+// Apply projects one model through an immutable configuration snapshot.
+func Apply(config Config, model catalog.Model) (catalog.Model, bool) {
+	override, ok := config.Models[model.ID]
 	if !ok {
 		return model, true
 	}

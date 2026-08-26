@@ -194,6 +194,7 @@ type Store struct {
 	registry             *provider.Registry
 	cache                string
 	client               *http.Client
+	probeRunner          *ProbeRunner
 	refreshMu            sync.Mutex
 	mu                   sync.RWMutex
 	models               []Model
@@ -231,7 +232,7 @@ type cacheFile struct {
 
 func New(registry *provider.Registry, cache string, client *http.Client) *Store {
 	return &Store{
-		registry: registry, cache: cache, client: client,
+		registry: registry, cache: cache, client: client, probeRunner: NewProbeRunner(client),
 		quarantine: make(map[string]string), verifiedTools: make(map[string]bool),
 		verifiedCapabilities: make(map[string]CapabilityVerification),
 	}
@@ -614,105 +615,11 @@ func (s *Store) ProbeModel(ctx context.Context, modelID, function string) (Model
 	if !ok {
 		return ModelProbeResult{}, fmt.Errorf("provider %q is not configured", model.Provider)
 	}
-	var endpoint string
-	var payload []byte
-	contentType := "application/json"
-	var input map[string]any
-	switch function {
-	case FunctionChat:
-		endpoint = "/chat/completions"
-		input = map[string]any{"model": model.UpstreamID, "messages": []map[string]string{{"role": "user", "content": "ping"}}, "max_tokens": 1, "stream": false}
-	case FunctionChatTools:
-		endpoint = "/chat/completions"
-		input = map[string]any{"model": model.UpstreamID, "messages": []map[string]string{{"role": "user", "content": "Call the ping tool. Do not answer directly."}}, "max_tokens": 16, "stream": false, "tools": []map[string]any{{"type": "function", "function": map[string]any{"name": "ping", "description": "return ping", "parameters": map[string]any{"type": "object", "properties": map[string]any{}}}}}}
-	case FunctionImageUnderstanding:
-		endpoint = "/chat/completions"
-		input = multimodalProbeInput(model.UpstreamID, "image_url", "data:image/png;base64,"+strings.TrimSpace(probePNGBase64))
-	case FunctionVideoUnderstanding:
-		endpoint = "/chat/completions"
-		input = multimodalProbeInput(model.UpstreamID, "video_url", "data:video/mp4;base64,"+strings.TrimSpace(probeMP4Base64))
-	case FunctionAudioUnderstanding:
-		endpoint = "/chat/completions"
-		input = map[string]any{"model": model.UpstreamID, "messages": []map[string]any{{"role": "user", "content": []map[string]any{{"type": "text", "text": "Reply with one word."}, {"type": "input_audio", "input_audio": map[string]any{"data": strings.TrimSpace(probeWAVBase64), "format": "wav"}}}}}, "max_tokens": 1, "stream": false}
-	case FunctionEmbedding:
-		endpoint = "/embeddings"
-		input = map[string]any{"model": model.UpstreamID, "input": "ping"}
-	case FunctionRerank:
-		endpoint = "/rerank"
-		input = map[string]any{"model": model.UpstreamID, "query": "ping", "documents": []string{"ping"}, "top_n": 1}
-	case FunctionSpeechToText:
-		endpoint = "/audio/transcriptions"
-		var err error
-		payload, contentType, err = audioProbePayload(model.UpstreamID)
-		if err != nil {
-			return ModelProbeResult{}, err
-		}
-	case FunctionTextToSpeech:
-		endpoint = "/audio/speech"
-		input = map[string]any{"model": model.UpstreamID, "input": "ping", "voice": "alloy", "response_format": "mp3"}
-	case FunctionImageGeneration:
-		if imageUsesEdit(model) {
-			endpoint = "/images/edits"
-			var err error
-			payload, contentType, err = imageProbePayload(model.UpstreamID)
-			if err != nil {
-				return ModelProbeResult{}, err
-			}
-		} else {
-			endpoint = "/images/generations"
-			input = map[string]any{"model": model.UpstreamID, "prompt": "a dot", "n": 1}
-		}
-	case FunctionVideoGeneration:
-		endpoint = "/videos/generations"
-		input = map[string]any{"model": model.UpstreamID, "prompt": "a still black dot", "duration": 1}
-		if videoUsesImage(model) {
-			input["image"] = "data:image/png;base64," + strings.TrimSpace(probePNGBase64)
-		}
-	case FunctionModeration:
-		endpoint = "/moderations"
-		input = map[string]any{"model": model.UpstreamID, "input": "ping"}
-	default:
-		return ModelProbeResult{}, fmt.Errorf("automatic probing is disabled for function %q", function)
+	runner := s.probeRunner
+	if runner == nil {
+		runner = NewProbeRunner(s.client)
 	}
-	if payload == nil {
-		var err error
-		payload, err = json.Marshal(input)
-		if err != nil {
-			return ModelProbeResult{}, err
-		}
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, spec.APIEndpoint(endpoint), bytes.NewReader(payload))
-	if err != nil {
-		return ModelProbeResult{}, err
-	}
-	req.Header.Set("Content-Type", contentType)
-	headers := cloneMap(spec.Headers)
-	spec.ApplyAuth(headers)
-	for key, value := range headers {
-		req.Header.Set(key, value)
-	}
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return ModelProbeResult{}, err
-	}
-	defer resp.Body.Close()
-	result := ModelProbeResult{Status: resp.StatusCode}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		detail := upstreamErrorDetail(resp.Body)
-		message := resp.Status
-		if detail != "" {
-			message += ": " + detail
-		}
-		return result, &ModelProbeError{Status: resp.StatusCode, Message: message}
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return result, err
-	}
-	if function == FunctionChatTools && !containsToolCall(body) {
-		return result, &ModelProbeError{Status: resp.StatusCode, Message: "successful response did not contain a tool call"}
-	}
-	return result, nil
+	return runner.Run(ctx, model, spec, function)
 }
 
 func containsToolCall(body []byte) bool {
@@ -864,6 +771,45 @@ type Status struct {
 	Count     int        `json:"count"`
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 	CachePath string     `json:"cache_path"`
+}
+
+// Snapshot is an immutable view of the routing-relevant catalog state.
+// Callers can perform a complete planning pass without mixing revisions from
+// separate Store reads.
+type Snapshot struct {
+	models               []Model
+	verifiedCapabilities map[string]CapabilityVerification
+}
+
+func (s *Store) Snapshot() Snapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return Snapshot{
+		models:               append([]Model(nil), s.models...),
+		verifiedCapabilities: cloneCapabilityVerifications(s.verifiedCapabilities),
+	}
+}
+
+func (s Snapshot) Models() []Model { return append([]Model(nil), s.models...) }
+
+func (s Snapshot) Find(id string) (Model, bool) {
+	for _, model := range s.models {
+		if model.ID == id || model.UpstreamID == id {
+			return model, true
+		}
+	}
+	return Model{}, false
+}
+
+func (s Snapshot) CapabilityVerified(model Model, capability string) bool {
+	catalogModel, ok := findModel(s.models, model.ID)
+	if !ok {
+		return false
+	}
+	verification, ok := s.verifiedCapabilities[capabilityVerificationKey(model.ID, capability)]
+	return ok &&
+		verification.CatalogModelFingerprint == modelFingerprint(catalogModel) &&
+		verification.ModelFingerprint == modelFingerprint(model)
 }
 
 func (s *Store) Status() Status {
