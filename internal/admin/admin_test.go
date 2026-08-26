@@ -349,27 +349,18 @@ func TestCredentialSaveValidatesProviderAndUpdatesModelHealth(t *testing.T) {
 			OK            bool `json:"ok"`
 			FormulaModels int  `json:"formula_models"`
 		} `json:"validation"`
-		ModelProbeStarted bool `json:"model_probe_started"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if !result.Validation.OK || result.Validation.FormulaModels != 1 || !result.ModelProbeStarted {
+	if !result.Validation.OK || result.Validation.FormulaModels != 1 {
 		t.Fatalf("save result=%#v body=%s", result, recorder.Body.String())
 	}
-	deadline := time.Now().Add(time.Second)
-	for handler.probes.Snapshot().Status == "running" && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
+	if strings.Contains(recorder.Body.String(), "model_probe_started") {
+		t.Fatalf("credential save exposed automatic model probing: %s", recorder.Body.String())
 	}
-	states := tracker.Snapshot()
-	model, ok := models.Find("groq/chat-a")
-	if modelCalls.Load() != 2 || len(states) != 2 || !ok || !model.Capabilities.ToolCallKnown || !model.Capabilities.ToolCall || !model.SupportsFunction(catalog.FunctionChatTools) {
-		t.Fatalf("model_calls=%d health=%#v", modelCalls.Load(), states)
-	}
-	for _, state := range states {
-		if state.Status != "healthy" {
-			t.Fatalf("each capability probe must update only its own health: %#v", states)
-		}
+	if modelCalls.Load() != 0 || len(tracker.Snapshot()) != 0 {
+		t.Fatalf("credential save automatically probed models: calls=%d health=%#v", modelCalls.Load(), tracker.Snapshot())
 	}
 
 	stateRequest := httptest.NewRequest(http.MethodGet, "/admin/api/state", nil)
@@ -378,6 +369,47 @@ func TestCredentialSaveValidatesProviderAndUpdatesModelHealth(t *testing.T) {
 	handler.ServeHTTP(stateRecorder, stateRequest)
 	if stateRecorder.Code != http.StatusOK || !strings.Contains(stateRecorder.Body.String(), `"connection_status":"healthy"`) {
 		t.Fatalf("provider state was not updated: status=%d body=%s", stateRecorder.Code, stateRecorder.Body.String())
+	}
+}
+
+func TestAdminStateOnlyListsConfiguredProviderModels(t *testing.T) {
+	for _, key := range provider.SupportedKeyEnvs() {
+		t.Setenv(key, "")
+	}
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "free-models.json")
+	manifest := `{"schema_version":2,"generated_at":"test","providers":{"configured":{"source_urls":["https://example.com/configured"],"models":[{"id":"ready","functions":["chat"]}]},"missing":{"source_urls":["https://example.com/missing"],"models":[{"id":"hidden","functions":["chat"]}]}}}`
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := provider.NewRegistryWithManifest(`[{"id":"configured","base_url":"https://example.invalid","no_auth":true},{"id":"missing","base_url":"https://example.invalid","api_key_env":"MISSING_TEST_KEY"}]`, provider.DefaultEnvMap(), manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := catalog.New(registry, filepath.Join(dir, "models.json"), http.DefaultClient)
+	if err := models.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	routes, _ := routing.New(filepath.Join(dir, "config.json"))
+	handler := New(routes, models, credentials.NewFileOnly(filepath.Join(dir, "credentials.json")), health.New(), Config{FreeModels: manifestPath}, nil)
+	request := httptest.NewRequest(http.MethodGet, "/admin/api/state", nil)
+	request.RemoteAddr = "127.0.0.1:1234"
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Models  []catalog.Model `json:"models"`
+		Catalog struct {
+			Count int `json:"count"`
+		} `json:"catalog"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Models) != 1 || response.Models[0].ID != "configured/ready" || response.Catalog.Count != 1 {
+		t.Fatalf("configured catalog projection=%#v count=%d", response.Models, response.Catalog.Count)
 	}
 }
 

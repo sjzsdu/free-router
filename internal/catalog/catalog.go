@@ -749,6 +749,20 @@ func (s *Store) Models() []Model {
 	return append([]Model{}, s.models...)
 }
 
+// ConfiguredModels returns the catalog projection that can be used on this
+// installation. The maintained inventory remains complete on disk so models
+// appear immediately when a provider is configured.
+func (s *Store) ConfiguredModels() []Model {
+	models := s.Models()
+	configured := models[:0]
+	for _, model := range models {
+		if s.ProviderConfigured(model.Provider) {
+			configured = append(configured, model)
+		}
+	}
+	return configured
+}
+
 func (s *Store) Find(id string) (Model, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

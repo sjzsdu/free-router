@@ -77,7 +77,7 @@ func New(routes *routing.Store, models *catalog.Store, vault *credentials.Vault,
 	handler.credentialService = &CredentialService{
 		mu: &handler.updateMu, vault: vault, routes: routes, catalog: models, reload: handler.reloadProviders,
 		providerProbes: handler.providerProbes, markProviderFailed: handler.markProviderModelsFailed,
-		startModelProbe: handler.startProviderModelProbe, resetProvider: handler.resetProviderModelHealth,
+		resetProvider: handler.resetProviderModelHealth,
 	}
 	handler.syncVerifiedHealth()
 	return handler
@@ -171,15 +171,18 @@ func (h *Handler) state(w http.ResponseWriter) {
 	h.providerProbes.decorate(providers)
 	view := eligibility.New(h.catalog, h.routes, h.health)
 	statuses := make([]ModelEligibility, 0)
-	for _, model := range view.Models() {
+	models := h.catalog.ConfiguredModels()
+	for _, model := range models {
 		for _, capability := range model.Functions {
 			_, reason := view.Eligible(model, routing.Route{Capability: capability, RequireTool: capability == catalog.FunctionChatTools}, true, true)
 			statuses = append(statuses, ModelEligibility{Model: model.ID, Capability: capability, Eligible: reason == "", Reason: reason})
 		}
 	}
+	catalogStatus := h.catalog.Status()
+	catalogStatus.Count = len(models)
 	writeJSON(w, http.StatusOK, StateResponse{
-		Config: h.routes.Config(), ConfigPath: h.routes.Path(), Models: h.catalog.Models(),
-		Catalog: h.catalog.Status(), Providers: providers, Credentials: entries,
+		Config: h.routes.Config(), ConfigPath: h.routes.Path(), Models: models,
+		Catalog: catalogStatus, Providers: providers, Credentials: entries,
 		Health: h.health.Snapshot(), ProviderHealth: h.health.ProviderSnapshot(), Summary: h.health.Summary(),
 		HealthProbe: h.probes.Snapshot(), Runtime: h.runtimeState(), Eligibility: statuses,
 	})
@@ -198,7 +201,7 @@ func (h *Handler) runtimeState() RuntimeState {
 	return RuntimeState{
 		Status: "running", PID: os.Getpid(), Version: h.config.Version,
 		StartedAt: h.started, UptimeSeconds: int64(time.Since(h.started).Seconds()),
-		ServiceManager: manager, Models: len(h.catalog.Models()),
+		ServiceManager: manager, Models: len(h.catalog.ConfiguredModels()),
 		Requests: summary.Requests, Failed: summary.Failed,
 	}
 }
@@ -233,7 +236,7 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.syncVerifiedHealth()
-	writeJSON(w, http.StatusOK, map[string]any{"refreshed": true, "models": len(h.catalog.Models())})
+	writeJSON(w, http.StatusOK, map[string]any{"refreshed": true, "models": len(h.catalog.ConfiguredModels())})
 }
 
 func (h *Handler) resetHealth(w http.ResponseWriter, r *http.Request) {
@@ -274,7 +277,6 @@ func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request, escapedID
 		return
 	}
 	h.providerProbes.success(providerID, count, latency)
-	h.startProviderModelProbe(providerID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "provider": providerID, "formula_models": count, "latency_ms": latency.Milliseconds()})
 }
 

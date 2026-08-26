@@ -42,6 +42,7 @@ type options struct {
 	cache            string
 	config           string
 	credentials      string
+	health           string
 	freeModels       string
 	adminAllowRemote bool
 	adminToken       string
@@ -81,7 +82,7 @@ func Execute() error {
 
 	root.AddCommand(&cobra.Command{
 		Use:   "models",
-		Short: "Print models admitted by the Formula inventory",
+		Short: "Print catalog models from configured providers",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			registry, err := newRegistry(opts)
 			if err != nil {
@@ -91,7 +92,7 @@ func Execute() error {
 			if err := store.Refresh(cmd.Context()); err != nil {
 				return err
 			}
-			return json.NewEncoder(os.Stdout).Encode(store.Models())
+			return json.NewEncoder(os.Stdout).Encode(store.ConfiguredModels())
 		},
 	})
 	root.AddCommand(&cobra.Command{
@@ -152,6 +153,7 @@ func defaultOptions() options {
 		cache:            envOr("FREE_ROUTER_CACHE", filepath.Join(dataDir, "models.json")),
 		config:           envOr("FREE_ROUTER_CONFIG", filepath.Join(dataDir, "config.json")),
 		credentials:      envOr("FREE_ROUTER_CREDENTIALS", filepath.Join(dataDir, "credentials.json")),
+		health:           envOr("FREE_ROUTER_HEALTH", filepath.Join(dataDir, "health.json")),
 		freeModels:       os.Getenv("FREE_ROUTER_FREE_MODELS"),
 		adminAllowRemote: envBool("FREE_ROUTER_ADMIN_ALLOW_REMOTE"),
 		adminToken:       os.Getenv("FREE_ROUTER_ADMIN_TOKEN"),
@@ -166,6 +168,7 @@ func bindFlags(command *cobra.Command, opts *options) {
 	command.PersistentFlags().StringVar(&opts.cache, "cache", opts.cache, "model catalog cache file")
 	command.PersistentFlags().StringVar(&opts.config, "config", opts.config, "route configuration file")
 	command.PersistentFlags().StringVar(&opts.credentials, "credentials", opts.credentials, "saved provider credentials file")
+	command.PersistentFlags().StringVar(&opts.health, "health", opts.health, "persistent model health state file")
 	command.PersistentFlags().StringVar(&opts.freeModels, "free-models", opts.freeModels, "external free model manifest (embedded data is used by default)")
 	command.PersistentFlags().BoolVar(&opts.adminAllowRemote, "admin-allow-remote", opts.adminAllowRemote, "allow the admin UI outside localhost")
 	command.PersistentFlags().StringVar(&opts.apiToken, "api-token", opts.apiToken, "API token for inference endpoints (required for remote access)")
@@ -196,7 +199,10 @@ func runServer(ctx context.Context, opts options) error {
 		return fmt.Errorf("load free model catalog: %w", err)
 	}
 
-	tracker := health.New()
+	tracker, err := health.NewPersistent(opts.health)
+	if err != nil {
+		return fmt.Errorf("load model health state: %w", err)
+	}
 	httpClient := transport.NewClient(transport.NewConfig())
 	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts, Routes: routes, Health: tracker, APIToken: opts.apiToken}, httpClient)
 	reloadProviders := func(providerEnv map[string][]string) (func(), error) {

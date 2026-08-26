@@ -381,6 +381,31 @@ func TestFormulaModelsLoadWithoutProviderCredentials(t *testing.T) {
 	}
 }
 
+func TestConfiguredModelsExcludesProvidersWithoutCredentials(t *testing.T) {
+	clearBuiltinKeys(t)
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "free-models.json")
+	manifest := `{"schema_version":2,"generated_at":"test","providers":{"ready":{"source_urls":["https://example.com/ready"],"models":[{"id":"chat-a","functions":["chat"]}]},"missing":{"source_urls":["https://example.com/missing"],"models":[{"id":"chat-b","functions":["chat"]}]}}}`
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := provider.NewRegistryWithManifest(`[{"id":"ready","base_url":"https://example.invalid","no_auth":true},{"id":"missing","base_url":"https://example.invalid","api_key_env":"MISSING_TEST_KEY"}]`, provider.DefaultEnvMap(), manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := New(registry, filepath.Join(dir, "models.json"), http.DefaultClient)
+	if err := store.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	configured := store.ConfiguredModels()
+	if len(configured) != 1 || configured[0].ID != "ready/chat-a" {
+		t.Fatalf("configured models=%#v", configured)
+	}
+	if len(store.Models()) != 2 {
+		t.Fatalf("maintained catalog should remain complete: %#v", store.Models())
+	}
+}
+
 func TestLegacyCacheIsRejected(t *testing.T) {
 	clearBuiltinKeys(t)
 	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"https://example.invalid/v1","no_auth":true}]`)

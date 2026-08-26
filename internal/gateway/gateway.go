@@ -147,7 +147,7 @@ func (g *Gateway) Handle(pattern string, handler http.Handler) { g.mux.Handle(pa
 func (g *Gateway) health(w http.ResponseWriter, _ *http.Request) {
 	status := g.catalog.Status()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "ok", "free_models": len(g.catalog.Models()), "providers": len(g.registry.All()),
+		"status": "ok", "free_models": len(g.catalog.ConfiguredModels()), "providers": len(g.registry.All()),
 		"catalog_count": status.Count, "requests": g.tracker.Summary(),
 	})
 }
@@ -169,7 +169,7 @@ func (g *Gateway) readyz(w http.ResponseWriter, _ *http.Request) {
 
 	capabilities := g.readyCapabilities()
 	hasHealthyModel := false
-	for _, model := range g.catalog.Models() {
+	for _, model := range g.catalog.ConfiguredModels() {
 		for _, capability := range capabilities {
 			if model.SupportsFunction(capability) && g.tracker.Available(model.ID, capability) {
 				hasHealthyModel = true

@@ -49,6 +49,7 @@ func TestDefaultOptionsUseUnifiedDataDirectory(t *testing.T) {
 	t.Setenv("FREE_ROUTER_CACHE", "")
 	t.Setenv("FREE_ROUTER_CONFIG", "")
 	t.Setenv("FREE_ROUTER_CREDENTIALS", "")
+	t.Setenv("FREE_ROUTER_HEALTH", "")
 
 	opts := defaultOptions()
 	dataDir := filepath.Join(home, ".free-router")
@@ -60,6 +61,9 @@ func TestDefaultOptionsUseUnifiedDataDirectory(t *testing.T) {
 	}
 	if got, want := opts.credentials, filepath.Join(dataDir, "credentials.json"); got != want {
 		t.Fatalf("credentials path = %s, want %s", got, want)
+	}
+	if got, want := opts.health, filepath.Join(dataDir, "health.json"); got != want {
+		t.Fatalf("health path = %s, want %s", got, want)
 	}
 }
 

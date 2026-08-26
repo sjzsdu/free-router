@@ -1,7 +1,13 @@
 package health
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -58,6 +64,13 @@ type Tracker struct {
 	failureThreshold int
 	cooldownBase     time.Duration
 	cooldownMax      time.Duration
+	path             string
+}
+
+type persistedState struct {
+	SchemaVersion int     `json:"schema_version"`
+	Models        []State `json:"models"`
+	Providers     []State `json:"providers,omitempty"`
 }
 
 func New() *Tracker {
@@ -69,6 +82,17 @@ func New() *Tracker {
 		cooldownBase:     DefaultCoolDownBase,
 		cooldownMax:      DefaultCoolDownMax,
 	}
+}
+
+// NewPersistent loads a tracker whose validation and runtime health state is
+// atomically saved after every meaningful state change.
+func NewPersistent(path string) (*Tracker, error) {
+	tracker := New()
+	tracker.path = path
+	if err := tracker.load(); err != nil {
+		return nil, err
+	}
+	return tracker, nil
 }
 
 func (t *Tracker) Available(model, capability string) bool {
@@ -204,6 +228,14 @@ func (t *Tracker) Success(model, capability string, latency time.Duration, statu
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	existing := t.states[stateKey(model, capability)]
+	persistRecovery := existing != nil && (existing.Status != StatusHealthy || existing.LastError != "")
+	provider := providerFromModel(model)
+	if provider != "" {
+		pState := t.providerStates[provider]
+		persistRecovery = persistRecovery || pState != nil && (pState.Status != StatusHealthy || pState.LastError != "")
+	}
+
 	state := t.state(model, capability)
 	state.Requests++
 	state.Successes++
@@ -216,19 +248,25 @@ func (t *Tracker) Success(model, capability string, latency time.Duration, statu
 	atomic.StoreInt32(&state.InFlight, 0)
 	state.AverageLatencyMS = rollingAverage(state.AverageLatencyMS, state.Requests, float64(latency.Microseconds())/1000)
 
-	provider := providerFromModel(model)
 	if provider != "" {
 		pState := t.providerState(provider)
 		pState.ConsecutiveFailures = 0
 		pState.Status = StatusHealthy
+		pState.LastError = ""
 		pState.CooldownUntil = time.Time{}
 		atomic.StoreInt32(&pState.InFlight, 0)
+	}
+	// Failures are persisted eagerly, so a successful request only needs to
+	// write when it clears a previously persisted model or provider failure.
+	if persistRecovery {
+		t.persistLocked()
 	}
 }
 
 func (t *Tracker) Failure(model, capability string, latency time.Duration, status int, message string, retryAfter time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	defer t.persistLocked()
 
 	errType := classifyError(status)
 	if errType == ErrorClient {
@@ -302,6 +340,7 @@ func (t *Tracker) Failure(model, capability string, latency time.Duration, statu
 func (t *Tracker) ProbeSuccess(model, capability string, latency time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	defer t.persistLocked()
 
 	state := t.state(model, capability)
 	state.Checks++
@@ -344,6 +383,7 @@ func (t *Tracker) RestoreProbeSuccess(model, capability string, checkedAt time.T
 func (t *Tracker) ProbeFailure(model, capability string, latency time.Duration, status int, message string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	defer t.persistLocked()
 
 	state := t.state(model, capability)
 	state.Checks++
@@ -443,6 +483,7 @@ func (t *Tracker) Summary() Summary {
 func (t *Tracker) Reset(model, capability string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	defer t.persistLocked()
 
 	if capability != "" {
 		delete(t.states, stateKey(model, capability))
@@ -456,6 +497,108 @@ func (t *Tracker) Reset(model, capability string) {
 	provider := providerFromModel(model)
 	if provider != "" {
 		delete(t.providerStates, provider)
+	}
+}
+
+func (t *Tracker) load() error {
+	if t.path == "" {
+		return nil
+	}
+	content, err := os.ReadFile(t.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read health state: %w", err)
+	}
+	var persisted persistedState
+	if err := json.Unmarshal(content, &persisted); err != nil {
+		return t.backupInvalidState(fmt.Errorf("decode health state: %w", err))
+	}
+	if persisted.SchemaVersion != 1 {
+		return t.backupInvalidState(fmt.Errorf("unsupported health state schema version %d", persisted.SchemaVersion))
+	}
+	for _, saved := range persisted.Models {
+		state := saved
+		state.InFlight = 0
+		if state.FailureThreshold <= 0 {
+			state.FailureThreshold = t.failureThreshold
+		}
+		t.states[stateKey(state.Model, state.Capability)] = &state
+	}
+	for _, saved := range persisted.Providers {
+		state := saved
+		state.InFlight = 0
+		if state.FailureThreshold <= 0 {
+			state.FailureThreshold = t.failureThreshold
+		}
+		t.providerStates[state.Model] = &state
+	}
+	return nil
+}
+
+func (t *Tracker) backupInvalidState(cause error) error {
+	backup := fmt.Sprintf("%s.corrupted.%s", t.path, t.now().UTC().Format("20060102T150405.000000000Z"))
+	if err := os.Rename(t.path, backup); err != nil {
+		return fmt.Errorf("backup invalid health state after %v: %w", cause, err)
+	}
+	slog.Error("health state is invalid; backed it up and starting fresh",
+		"path", t.path,
+		"backup", backup,
+		"error", cause,
+	)
+	return nil
+}
+
+func (t *Tracker) persistLocked() {
+	if t.path == "" {
+		return
+	}
+	persisted := persistedState{SchemaVersion: 1}
+	for _, state := range t.states {
+		copy := *state
+		copy.InFlight = 0
+		persisted.Models = append(persisted.Models, copy)
+	}
+	for _, state := range t.providerStates {
+		copy := *state
+		copy.InFlight = 0
+		persisted.Providers = append(persisted.Providers, copy)
+	}
+	sort.Slice(persisted.Models, func(i, j int) bool {
+		if persisted.Models[i].Model == persisted.Models[j].Model {
+			return persisted.Models[i].Capability < persisted.Models[j].Capability
+		}
+		return persisted.Models[i].Model < persisted.Models[j].Model
+	})
+	sort.Slice(persisted.Providers, func(i, j int) bool { return persisted.Providers[i].Model < persisted.Providers[j].Model })
+	content, err := json.MarshalIndent(persisted, "", "  ")
+	if err != nil {
+		slog.Error("encode health state", "path", t.path, "error", err)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(t.path), 0o700); err != nil {
+		slog.Error("create health state directory", "path", t.path, "error", err)
+		return
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(t.path), ".health-*.json")
+	if err != nil {
+		slog.Error("create temporary health state", "path", t.path, "error", err)
+		return
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err == nil {
+		_, err = temporary.Write(content)
+	}
+	if closeErr := temporary.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(temporaryPath, t.path)
+	}
+	if err != nil {
+		slog.Error("persist health state", "path", t.path, "error", err)
 	}
 }
 
