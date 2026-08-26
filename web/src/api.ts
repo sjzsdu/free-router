@@ -29,7 +29,7 @@ export const api = {
   saveConfig: (config: RouterConfig) => request<{ saved: boolean; config: RouterConfig }>('config', { method: 'PUT', body: JSON.stringify(config) }),
   refresh: () => request<{ refreshed: boolean; models: number }>('refresh', { method: 'POST' }),
   resetHealth: (model: string) => request<{ reset: boolean; model: string }>('health/reset', { method: 'POST', body: JSON.stringify({ model }) }),
-  probeHealth: (force = false) => request<HealthProbeStatus>('health/probe', { method: 'POST', body: JSON.stringify({ force }) }),
+  probeHealth: (force = false, models?: string[]) => request<HealthProbeStatus>('health/probe', { method: 'POST', body: JSON.stringify({ force, ...(models === undefined ? {} : { models }) }) }),
   probeModelHealth: (model: string, allowExpensive = false, dryRun = false) => request<HealthProbeStatus>('health/probe/model', { method: 'POST', body: JSON.stringify({ model, allow_expensive: allowExpensive, dry_run: dryRun }) }),
   testProvider: (provider: string) => request<{ ok: boolean; provider: string; formula_models: number; latency_ms: number }>(`providers/${encodeURIComponent(provider)}/test`, { method: 'POST' }),
   providerDetails: (provider: string) => request<ProviderDetails>(`providers/${encodeURIComponent(provider)}`),

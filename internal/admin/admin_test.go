@@ -10,8 +10,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -706,6 +709,80 @@ func TestModelHealthProbeUsesPersistentCacheAndSupportsForce(t *testing.T) {
 	probe(true)
 	if chatCalls.Load() != 2 {
 		t.Fatalf("forced probe did not run: calls=%d", chatCalls.Load())
+	}
+}
+
+func TestHealthProbeRestrictsRequestsToSelectedModels(t *testing.T) {
+	for _, key := range provider.SupportedKeyEnvs() {
+		t.Setenv(key, "")
+	}
+	var mu sync.Mutex
+	probed := make([]string, 0)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"chat-a"},{"id":"chat-b"}]}`))
+		case "/chat/completions":
+			var input struct {
+				Model string `json:"model"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Errorf("decode probe request: %v", err)
+			}
+			mu.Lock()
+			probed = append(probed, input.Model)
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","no_auth":true}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), upstream.Client())
+	discoverModelsForTest(t, models)
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	handler := New(routes, models, credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json")), health.New(), Config{}, nil)
+
+	probe := func(body string) {
+		request := httptest.NewRequest(http.MethodPost, "/admin/api/health/probe", strings.NewReader(body))
+		request.RemoteAddr = "127.0.0.1:1234"
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusAccepted && recorder.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		deadline := time.Now().Add(time.Second)
+		for handler.probes.Snapshot().Status == "running" && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		if handler.probes.Snapshot().Status != "completed" {
+			t.Fatal("health probe did not complete")
+		}
+	}
+	requests := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), probed...)
+	}
+
+	probe(`{"force":true,"models":["test/chat-a"]}`)
+	if got := requests(); !reflect.DeepEqual(got, []string{"chat-a"}) {
+		t.Fatalf("filtered probe requests=%v, want only chat-a", got)
+	}
+	probe(`{"force":true,"models":[]}`)
+	if got := requests(); !reflect.DeepEqual(got, []string{"chat-a"}) {
+		t.Fatalf("empty filtered probe sent requests: %v", got)
+	}
+	probe(`{"force":true}`)
+	got := requests()
+	sort.Strings(got)
+	if !reflect.DeepEqual(got, []string{"chat-a", "chat-a", "chat-b"}) {
+		t.Fatalf("unfiltered probe requests=%v, want all configured models", got)
 	}
 }
 

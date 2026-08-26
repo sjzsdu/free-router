@@ -68,7 +68,8 @@ func (manager *probeManager) Snapshot() ProbeStatus {
 
 func (h *Handler) startHealthProbe(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Force bool `json:"force"`
+		Force  bool      `json:"force"`
+		Models *[]string `json:"models"`
 	}
 	if r.Body != nil {
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&input); err != nil {
@@ -76,7 +77,13 @@ func (h *Handler) startHealthProbe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	status, started := h.probes.Start(h, input.Force)
+	var status ProbeStatus
+	var started bool
+	if input.Models == nil {
+		status, started = h.probes.Start(h, input.Force)
+	} else {
+		status, started = h.probes.StartModels(h, *input.Models, input.Force)
+	}
 	code := http.StatusOK
 	if started {
 		code = http.StatusAccepted
@@ -107,12 +114,26 @@ func (h *Handler) startModelHealthProbe(w http.ResponseWriter, r *http.Request) 
 }
 
 func (manager *probeManager) Start(h *Handler, force bool) (ProbeStatus, bool) {
+	return manager.start(h, force, nil)
+}
+
+func (manager *probeManager) StartModels(h *Handler, modelIDs []string, force bool) (ProbeStatus, bool) {
+	selected := make(map[string]struct{}, len(modelIDs))
+	for _, modelID := range modelIDs {
+		if modelID != "" {
+			selected[modelID] = struct{}{}
+		}
+	}
+	return manager.start(h, force, selected)
+}
+
+func (manager *probeManager) start(h *Handler, force bool, selected map[string]struct{}) (ProbeStatus, bool) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	if manager.status.Status == "running" {
 		return manager.status, false
 	}
-	jobs, skipped := probeCandidates(h, force)
+	jobs, skipped := probeCandidates(h, force, selected)
 	if len(jobs) == 0 && !force && manager.status.Status == "completed" {
 		return manager.status, false
 	}
@@ -257,10 +278,15 @@ func (manager *probeManager) audit(model string, expensive int, action string) {
 	_ = json.NewEncoder(file).Encode(map[string]any{"at": time.Now().UTC(), "model": model, "expensive_probes": expensive, "action": action})
 }
 
-func probeCandidates(h *Handler, force bool) ([]probeJob, int) {
+func probeCandidates(h *Handler, force bool, selected map[string]struct{}) ([]probeJob, int) {
 	jobs := make([]probeJob, 0)
 	skipped := 0
 	for _, model := range h.catalog.Models() {
+		if selected != nil {
+			if _, ok := selected[model.ID]; !ok {
+				continue
+			}
+		}
 		if !h.catalog.ProviderConfigured(model.Provider) {
 			skipped++
 			continue
