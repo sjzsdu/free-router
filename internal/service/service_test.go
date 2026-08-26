@@ -88,6 +88,8 @@ func TestParseLaunchdPID(t *testing.T) {
 }
 
 func TestInstallBinaryCopiesToStableUserPath(t *testing.T) {
+	t.Setenv("GOBIN", "")
+	t.Setenv("GOPATH", "")
 	temporary := t.TempDir()
 	source := filepath.Join(temporary, "downloaded-free-router")
 	if err := os.WriteFile(source, []byte("test-binary"), 0o700); err != nil {
@@ -107,6 +109,61 @@ func TestInstallBinaryCopiesToStableUserPath(t *testing.T) {
 	}
 	if string(content) != "test-binary" {
 		t.Fatalf("installed content = %q", content)
+	}
+	info, err := os.Stat(installed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("installed permissions = %o", info.Mode().Perm())
+	}
+}
+
+func TestBinaryPathUsesDefaultGoInstallPath(t *testing.T) {
+	t.Setenv("GOBIN", "")
+	t.Setenv("GOPATH", "")
+	home := filepath.Join(t.TempDir(), "home")
+	installed := filepath.Join(home, "go", "bin", "free-router")
+	manager := &Manager{home: home, executable: installed}
+
+	if got := manager.BinaryPath(); got != installed {
+		t.Fatalf("BinaryPath() = %s, want %s", got, installed)
+	}
+}
+
+func TestBinaryPathUsesExplicitGoBin(t *testing.T) {
+	t.Setenv("GOBIN", filepath.Join(t.TempDir(), "custom-bin"))
+	t.Setenv("GOPATH", "")
+	installed := filepath.Join(os.Getenv("GOBIN"), "free-router")
+	manager := &Manager{home: filepath.Join(t.TempDir(), "home"), executable: installed}
+
+	if got := manager.BinaryPath(); got != installed {
+		t.Fatalf("BinaryPath() = %s, want %s", got, installed)
+	}
+}
+
+func TestInstallBinaryKeepsMakeInstalledExecutable(t *testing.T) {
+	t.Setenv("GOBIN", "")
+	t.Setenv("GOPATH", "")
+	home := filepath.Join(t.TempDir(), "home")
+	installed := filepath.Join(home, "go", "bin", "free-router")
+	if err := os.MkdirAll(filepath.Dir(installed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(installed, []byte("make-installed"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{goos: "darwin", executable: installed, home: home, uid: "501"}
+
+	got, err := manager.installBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != installed {
+		t.Fatalf("installBinary() = %s, want %s", got, installed)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local", "bin", "free-router")); !os.IsNotExist(err) {
+		t.Fatalf("installBinary should not copy make-installed binary to ~/.local/bin, stat err = %v", err)
 	}
 	info, err := os.Stat(installed)
 	if err != nil {
