@@ -24,6 +24,7 @@ import (
 	"github.com/sjzsdu/free-router/internal/health"
 	"github.com/sjzsdu/free-router/internal/provider"
 	"github.com/sjzsdu/free-router/internal/routing"
+	"github.com/sjzsdu/free-router/internal/statistics"
 	"github.com/sjzsdu/free-router/internal/transport"
 )
 
@@ -33,6 +34,7 @@ type Config struct {
 	Health      *health.Tracker
 	APIToken    string
 	Adapters    adapter.Resolver
+	Statistics  *statistics.Store
 }
 
 type Gateway struct {
@@ -48,6 +50,7 @@ type Gateway struct {
 	apiToken string
 	limiters sync.Map
 	metrics  *Metrics
+	stats    *statistics.Store
 	// beforeCandidateAcquire is a deterministic test seam for exercising the
 	// race between candidate snapshots and half-open probe acquisition.
 	beforeCandidateAcquire func()
@@ -68,7 +71,10 @@ func New(store *catalog.Store, registry *provider.Registry, config Config, clien
 	if config.Adapters == nil {
 		config.Adapters = adapter.NewRegistry()
 	}
-	gateway := &Gateway{catalog: store, registry: registry, adapters: config.Adapters, config: config, client: client, tracker: config.Health, mux: http.NewServeMux(), apiToken: config.APIToken, metrics: NewMetrics()}
+	if config.Statistics == nil {
+		config.Statistics = statistics.NewMemory()
+	}
+	gateway := &Gateway{catalog: store, registry: registry, adapters: config.Adapters, config: config, client: client, tracker: config.Health, mux: http.NewServeMux(), apiToken: config.APIToken, metrics: NewMetrics(), stats: config.Statistics}
 	gateway.planner = NewCandidatePlanner(store, registry, config.Routes, config.Health, config.MaxAttempts)
 	gateway.executor = NewAttemptExecutor(gateway)
 	gateway.mux.HandleFunc("GET /healthz", gateway.health)
@@ -626,6 +632,8 @@ type StreamResult struct {
 	Error           error
 	DownstreamError bool
 	TTFB            time.Duration
+	Usage           *statistics.Usage
+	UsageExpected   bool
 }
 
 // stallTimeout bounds how long a body read may sit without producing data.
@@ -696,7 +704,11 @@ func copyResponse(w http.ResponseWriter, resp *http.Response, model catalog.Mode
 	w.Header().Set("X-Free-Router-Provider", model.Provider)
 	w.Header().Set("X-Free-Router-Model", model.UpstreamID)
 	w.WriteHeader(resp.StatusCode)
-	return copyBody(w, body, started, strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream"))
+	contentType := resp.Header.Get("Content-Type")
+	eventStream := strings.Contains(contentType, "text/event-stream")
+	result := copyBody(w, body, started, eventStream)
+	result.UsageExpected = responseMayReportUsage(contentType)
+	return result
 }
 
 func copyBody(w http.ResponseWriter, body io.Reader, started time.Time, flush bool) StreamResult {
@@ -704,10 +716,12 @@ func copyBody(w http.ResponseWriter, body io.Reader, started time.Time, flush bo
 	flusher, canFlush := w.(http.Flusher)
 	var totalWritten int64
 	var ttfb time.Duration
+	collector := &usageCollector{}
 	headerTTFB := time.Since(started)
 	for {
 		read, err := body.Read(buffer)
 		if read > 0 {
+			collector.Write(buffer[:read])
 			if ttfb == 0 {
 				ttfb = time.Since(started)
 			}
@@ -720,6 +734,7 @@ func copyBody(w http.ResponseWriter, body io.Reader, started time.Time, flush bo
 					Error:           writeErr,
 					DownstreamError: true,
 					TTFB:            ttfb,
+					Usage:           collector.Usage(flush),
 				}
 			}
 			if flush && canFlush {
@@ -735,6 +750,7 @@ func copyBody(w http.ResponseWriter, body io.Reader, started time.Time, flush bo
 				BytesWritten: totalWritten,
 				Error:        err,
 				TTFB:         ttfb,
+				Usage:        collector.Usage(flush),
 			}
 		}
 	}

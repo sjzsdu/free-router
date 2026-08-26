@@ -21,6 +21,7 @@ import (
 	"github.com/sjzsdu/free-router/internal/health"
 	"github.com/sjzsdu/free-router/internal/provider"
 	"github.com/sjzsdu/free-router/internal/routing"
+	"github.com/sjzsdu/free-router/internal/statistics"
 	"github.com/sjzsdu/free-router/internal/transport"
 )
 
@@ -86,6 +87,51 @@ func TestAutoRetriesNextFreeModel(t *testing.T) {
 	}
 	if len(list.Data) != 1 || list.Data[0]["id"] != catalog.FunctionChat || list.Data[0]["owned_by"] != "free-router" {
 		t.Fatalf("stable capability models are missing: %#v", list.Data)
+	}
+}
+
+func TestGatewayRecordsModelUsageAndMissingUsage(t *testing.T) {
+	clearBuiltinKeys(t)
+	var calls atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/models":
+			return testResponse(http.StatusOK, `{"data":[{"id":"chat-a","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]}}]}`), nil
+		case "/chat/completions":
+			body := `{"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":6,"total_tokens":17}}`
+			if calls.Add(1) == 2 {
+				body = `{"choices":[]}`
+			}
+			resp := testResponse(http.StatusOK, body)
+			resp.Header.Set("Content-Type", "application/json")
+			return resp, nil
+		default:
+			return testResponse(http.StatusNotFound, "not found"), nil
+		}
+	})}
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"https://test.invalid","api_key":"test"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), client)
+	discoverModelsForTest(t, store)
+	stats := statistics.NewMemory()
+	handler := New(store, registry, Config{Health: health.New(), Statistics: stats}, client)
+	for i := 0; i < 2; i++ {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"auto","messages":[]}`)))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("request %d status=%d body=%s", i, recorder.Code, recorder.Body.String())
+		}
+	}
+
+	models := stats.Snapshot().Models
+	if len(models) != 1 {
+		t.Fatalf("statistics=%+v", models)
+	}
+	got := models[0]
+	if got.Model != "test/chat-a" || got.Requests != 2 || got.Successes != 2 || got.InputTokens != 11 || got.OutputTokens != 6 || got.TotalTokens != 17 || got.UsageReported != 1 || got.UsageMissing != 1 {
+		t.Fatalf("statistics=%+v", got)
 	}
 }
 

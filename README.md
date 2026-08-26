@@ -420,6 +420,8 @@ free-router serve
 
 模型可用性检测只会由管理界面的按钮手动触发，不会在打开页面、保存凭据或测试 Provider 连接时自动运行。检测结果和运行时故障状态默认持久化到 `~/.free-router/health.json`，可用 `--health` 或 `FREE_ROUTER_HEALTH` 覆盖；运行中失败的模型会立即退出后续候选，直到手动检测或重置后恢复。
 
+每次实际发往上游模型的调用都会按“模型 + 能力”聚合调用数、成功率、输入/输出 Token、usage 覆盖率和平均延迟。失败后触发 fallback 的尝试也计入对应模型的调用质量；上游成功但未返回 `usage` 时只增加缺失计数，不会估算 Token。统计默认原子持久化到 `~/.free-router/statistics.json`，可用 `--statistics` 或 `FREE_ROUTER_STATISTICS` 覆盖，并可在管理界面的“统计”页面或 `GET /admin/api/statistics` 查询。
+
 完整参数见 `free-router --help`。
 
 ## 开发与测试

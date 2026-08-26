@@ -24,6 +24,7 @@ import (
 	"github.com/sjzsdu/free-router/internal/health"
 	"github.com/sjzsdu/free-router/internal/provider"
 	"github.com/sjzsdu/free-router/internal/routing"
+	"github.com/sjzsdu/free-router/internal/statistics"
 )
 
 func TestAdminUpdatesRouteConfiguration(t *testing.T) {
@@ -76,6 +77,31 @@ func TestAdminUpdatesRouteConfiguration(t *testing.T) {
 	}
 	if models.CapabilityVerified("test/chat-a", catalog.FunctionChat) {
 		t.Fatal("model override change retained stale capability verification")
+	}
+}
+
+func TestAdminReturnsStatisticsSnapshot(t *testing.T) {
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	registry, _ := provider.NewRegistry("")
+	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
+	stats := statistics.NewMemory()
+	if err := stats.Record(statistics.Attempt{Model: "test/chat", Provider: "test", Capability: "chat", Success: true, Usage: &statistics.Usage{InputTokens: 8, OutputTokens: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	handler := New(routes, models, credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json")), health.New(), Config{Statistics: stats}, nil)
+	request := httptest.NewRequest(http.MethodGet, "/admin/api/statistics", nil)
+	request.RemoteAddr = "127.0.0.1:1234"
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var snapshot statistics.Snapshot
+	if err := json.NewDecoder(recorder.Body).Decode(&snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Models) != 1 || snapshot.Models[0].TotalTokens != 10 {
+		t.Fatalf("snapshot=%+v", snapshot)
 	}
 }
 

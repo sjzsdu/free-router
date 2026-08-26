@@ -23,6 +23,7 @@ import (
 	"github.com/sjzsdu/free-router/internal/health"
 	"github.com/sjzsdu/free-router/internal/provider"
 	"github.com/sjzsdu/free-router/internal/routing"
+	"github.com/sjzsdu/free-router/internal/statistics"
 )
 
 //go:embed dist
@@ -46,6 +47,7 @@ type Handler struct {
 	openRouterTokenURL string
 	configService      *ConfigService
 	credentialService  *CredentialService
+	statistics         *statistics.Store
 }
 
 type Config struct {
@@ -56,6 +58,7 @@ type Config struct {
 	OAuthHTTPClient    *http.Client
 	OpenRouterAuthURL  string
 	OpenRouterTokenURL string
+	Statistics         *statistics.Store
 }
 
 func New(routes *routing.Store, models *catalog.Store, vault *credentials.Vault, tracker *health.Tracker, config Config, reload func(map[string][]string) (func(), error)) *Handler {
@@ -72,7 +75,10 @@ func New(routes *routing.Store, models *catalog.Store, vault *credentials.Vault,
 	if tokenURL == "" {
 		tokenURL = "https://openrouter.ai/api/v1/auth/keys"
 	}
-	handler := &Handler{routes: routes, catalog: models, vault: vault, health: tracker, probes: newProbeManager(filepath.Dir(routes.Path())), providerProbes: newProviderProbeStore(), config: config, reload: reload, static: http.FileServer(http.FS(staticFS)), started: time.Now(), oauthFlows: newOAuthFlows(), oauthHTTPClient: client, openRouterAuthURL: authURL, openRouterTokenURL: tokenURL}
+	if config.Statistics == nil {
+		config.Statistics = statistics.NewMemory()
+	}
+	handler := &Handler{routes: routes, catalog: models, vault: vault, health: tracker, probes: newProbeManager(filepath.Dir(routes.Path())), providerProbes: newProviderProbeStore(), config: config, reload: reload, static: http.FileServer(http.FS(staticFS)), started: time.Now(), oauthFlows: newOAuthFlows(), oauthHTTPClient: client, openRouterAuthURL: authURL, openRouterTokenURL: tokenURL, statistics: config.Statistics}
 	handler.configService = &ConfigService{mu: &handler.updateMu, routes: routes, catalog: models, health: tracker, reload: handler.reloadProviders, refreshAsync: handler.refreshAllAsync}
 	handler.credentialService = &CredentialService{
 		mu: &handler.updateMu, vault: vault, routes: routes, catalog: models, reload: handler.reloadProviders,
@@ -105,6 +111,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.state(w)
 	case r.Method == http.MethodGet && path == "/api/runtime":
 		h.runtime(w)
+	case r.Method == http.MethodGet && path == "/api/statistics":
+		writeJSON(w, http.StatusOK, h.statistics.Snapshot())
 	case r.Method == http.MethodPut && path == "/api/config":
 		h.updateConfig(w, r)
 	case r.Method == http.MethodPost && path == "/api/refresh":

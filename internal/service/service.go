@@ -85,7 +85,38 @@ func (m *Manager) Install(ctx context.Context, environment map[string]string) er
 	return nil
 }
 
-func (m *Manager) BinaryPath() string { return filepath.Join(m.home, ".local", "bin", "free-router") }
+func (m *Manager) BinaryPath() string {
+	if stable := m.stableExecutablePath(); stable != "" {
+		return stable
+	}
+	return filepath.Join(m.home, ".local", "bin", "free-router")
+}
+
+func (m *Manager) stableExecutablePath() string {
+	executable := filepath.Clean(m.executable)
+	if executable == "." || filepath.Base(executable) != "free-router" || strings.Contains(executable, string(filepath.Separator)+"go-build") {
+		return ""
+	}
+	for _, candidate := range m.stableBinaryCandidates() {
+		if filepath.Clean(candidate) == executable {
+			return executable
+		}
+	}
+	return ""
+}
+
+func (m *Manager) stableBinaryCandidates() []string {
+	candidates := []string{filepath.Join(m.home, ".local", "bin", "free-router")}
+	if gobin := strings.TrimSpace(os.Getenv("GOBIN")); gobin != "" {
+		candidates = append(candidates, filepath.Join(gobin, "free-router"))
+	}
+	if gopath := strings.TrimSpace(os.Getenv("GOPATH")); gopath != "" {
+		candidates = append(candidates, filepath.Join(gopath, "bin", "free-router"))
+	} else if m.home != "" {
+		candidates = append(candidates, filepath.Join(m.home, "go", "bin", "free-router"))
+	}
+	return candidates
+}
 
 func (m *Manager) Start(ctx context.Context) error {
 	switch m.goos {
