@@ -176,6 +176,29 @@ export interface AppState {
   eligibility: Array<{ model: string; capability: RouteType; eligible: boolean; reason?: string }>
 }
 
+export interface ModelStatistics {
+  model: string
+  provider: string
+  capability: string
+  requests: number
+  successes: number
+  failures: number
+  success_rate: number
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  usage_reported: number
+  usage_missing: number
+  average_latency_ms: number
+  last_status?: number
+  last_used_at: string
+}
+
+export interface StatisticsSnapshot {
+  updated_at?: string
+  models: ModelStatistics[]
+}
+
 export interface EffectiveModel extends Model {
   disabled: boolean
   route_types: RouteType[]
