@@ -120,6 +120,27 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .panel-heading h2, .candidate-heading h2 { margin: 2px 0 0; font-size: 16px; letter-spacing: -.02em; }
 .eyebrow { color: var(--accent); font-size: 9px; font-weight: 800; letter-spacing: .16em; }
 
+.statistics-panel { overflow: hidden; }
+.statistics-updated { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 10px; }
+.statistics-table-wrap { overflow-x: auto; }
+.statistics-table { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; }
+.statistics-table th { padding: 11px 16px; border-bottom: 1px solid var(--border); background: var(--surface-2); color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .06em; text-align: right; text-transform: uppercase; }
+.statistics-table th:first-child, .statistics-table th:nth-child(2), .statistics-table td:first-child, .statistics-table td:nth-child(2) { text-align: left; }
+.statistics-table td { padding: 14px 16px; border-bottom: 1px solid var(--border); text-align: right; vertical-align: middle; }
+.statistics-table tbody tr:last-child td { border-bottom: 0; }
+.statistics-table tbody tr:hover { background: var(--surface-2); }
+.statistics-table td strong, .statistics-table td small { display: block; }
+.statistics-table td strong { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+.statistics-table td small { margin-top: 4px; color: var(--muted); font-size: 9px; }
+.statistics-table td code { padding: 3px 6px; border-radius: 5px; background: var(--surface-3); color: var(--muted); font-size: 10px; }
+.rate-good, .rate-warn, .rate-bad { display: inline-block; min-width: 48px; padding: 4px 7px; border-radius: 999px; text-align: center; font-weight: 800; }
+.rate-good { color: var(--accent); background: var(--accent-soft); }
+.rate-warn { color: var(--amber); background: var(--amber-soft); }
+.rate-bad { color: var(--danger); background: var(--danger-soft); }
+.statistics-empty { min-height: 260px; padding: 40px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; color: var(--muted); text-align: center; }
+.statistics-empty strong { color: var(--text); font-size: 14px; }
+.statistics-empty p { max-width: 520px; margin: 0; font-size: 11px; line-height: 1.7; }
+
 .runtime-trigger { height: 36px; padding: 0 11px; border: 1px solid var(--border); border-radius: 999px; display: flex; align-items: center; gap: 7px; background: var(--surface); cursor: pointer; font-size: 11px; font-weight: 700; }
 .runtime-trigger > span { width: 7px; height: 7px; border-radius: 50%; background: #42bd74; box-shadow: 0 0 0 3px rgba(66,189,116,.11); }
 .runtime-trigger svg { transform: rotate(90deg); color: var(--subtle); }

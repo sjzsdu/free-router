@@ -1,4 +1,4 @@
-import type { AppState, HealthProbeStatus, ProviderDetails, RouterConfig, RuntimeStatus } from './types'
+import type { AppState, HealthProbeStatus, ProviderDetails, RouterConfig, RuntimeStatus, StatisticsSnapshot } from './types'
 
 const base = '/admin/api/'
 
@@ -25,6 +25,7 @@ async function request<T>(path: string, init: RequestInit = {}, timeoutMs = 0): 
 export const api = {
   state: () => request<AppState>('state'),
   runtime: () => request<RuntimeStatus>('runtime'),
+  statistics: () => request<StatisticsSnapshot>('statistics'),
   saveConfig: (config: RouterConfig) => request<{ saved: boolean; config: RouterConfig }>('config', { method: 'PUT', body: JSON.stringify(config) }),
   refresh: () => request<{ refreshed: boolean; models: number }>('refresh', { method: 'POST' }),
   resetHealth: (model: string) => request<{ reset: boolean; model: string }>('health/reset', { method: 'POST', body: JSON.stringify({ model }) }),

@@ -24,6 +24,7 @@ import (
 	"github.com/sjzsdu/free-router/internal/health"
 	"github.com/sjzsdu/free-router/internal/provider"
 	"github.com/sjzsdu/free-router/internal/routing"
+	"github.com/sjzsdu/free-router/internal/statistics"
 	"github.com/sjzsdu/free-router/internal/transport"
 	"github.com/spf13/cobra"
 )
@@ -43,6 +44,7 @@ type options struct {
 	config           string
 	credentials      string
 	health           string
+	statistics       string
 	freeModels       string
 	adminAllowRemote bool
 	adminToken       string
@@ -154,6 +156,7 @@ func defaultOptions() options {
 		config:           envOr("FREE_ROUTER_CONFIG", filepath.Join(dataDir, "config.json")),
 		credentials:      envOr("FREE_ROUTER_CREDENTIALS", filepath.Join(dataDir, "credentials.json")),
 		health:           envOr("FREE_ROUTER_HEALTH", filepath.Join(dataDir, "health.json")),
+		statistics:       envOr("FREE_ROUTER_STATISTICS", filepath.Join(dataDir, "statistics.json")),
 		freeModels:       os.Getenv("FREE_ROUTER_FREE_MODELS"),
 		adminAllowRemote: envBool("FREE_ROUTER_ADMIN_ALLOW_REMOTE"),
 		adminToken:       os.Getenv("FREE_ROUTER_ADMIN_TOKEN"),
@@ -169,6 +172,7 @@ func bindFlags(command *cobra.Command, opts *options) {
 	command.PersistentFlags().StringVar(&opts.config, "config", opts.config, "route configuration file")
 	command.PersistentFlags().StringVar(&opts.credentials, "credentials", opts.credentials, "saved provider credentials file")
 	command.PersistentFlags().StringVar(&opts.health, "health", opts.health, "persistent model health state file")
+	command.PersistentFlags().StringVar(&opts.statistics, "statistics", opts.statistics, "persistent model usage statistics file")
 	command.PersistentFlags().StringVar(&opts.freeModels, "free-models", opts.freeModels, "external free model manifest (embedded data is used by default)")
 	command.PersistentFlags().BoolVar(&opts.adminAllowRemote, "admin-allow-remote", opts.adminAllowRemote, "allow the admin UI outside localhost")
 	command.PersistentFlags().StringVar(&opts.apiToken, "api-token", opts.apiToken, "API token for inference endpoints (required for remote access)")
@@ -203,8 +207,12 @@ func runServer(ctx context.Context, opts options) error {
 	if err != nil {
 		return fmt.Errorf("load model health state: %w", err)
 	}
+	stats, err := statistics.New(opts.statistics)
+	if err != nil {
+		return fmt.Errorf("load model statistics: %w", err)
+	}
 	httpClient := transport.NewClient(transport.NewConfig())
-	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts, Routes: routes, Health: tracker, APIToken: opts.apiToken}, httpClient)
+	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts, Routes: routes, Health: tracker, APIToken: opts.apiToken, Statistics: stats}, httpClient)
 	reloadProviders := func(providerEnv map[string][]string) (func(), error) {
 		rollback := registry.Backup()
 		if err := registry.ReloadWithManifest(opts.providers, provider.EnvMap(providerEnv), opts.freeModels, vault.Get); err != nil {
@@ -214,7 +222,7 @@ func runServer(ctx context.Context, opts options) error {
 		return rollback, nil
 	}
 	handler.Handle("GET /admin", http.RedirectHandler("/admin/", http.StatusTemporaryRedirect))
-	handler.Handle("/admin/", admin.New(routes, store, vault, tracker, admin.Config{AllowRemote: opts.adminAllowRemote, Token: opts.adminToken, Version: version, FreeModels: opts.freeModels}, reloadProviders))
+	handler.Handle("/admin/", admin.New(routes, store, vault, tracker, admin.Config{AllowRemote: opts.adminAllowRemote, Token: opts.adminToken, Version: version, FreeModels: opts.freeModels, Statistics: stats}, reloadProviders))
 	server := &http.Server{
 		Addr:              opts.addr,
 		Handler:           handler,

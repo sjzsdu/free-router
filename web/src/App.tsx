@@ -9,7 +9,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import * as Popover from '@radix-ui/react-popover'
 import * as Tooltip from '@radix-ui/react-tooltip'
 import {
-  Activity, AlertTriangle, ArrowDownUp, Blocks, Bot, Check, ChevronRight,
+  Activity, AlertTriangle, ArrowDownUp, BarChart3, Blocks, Bot, Check, ChevronRight,
   Database, ExternalLink, Eye, EyeOff, Gauge, GripVertical, KeyRound, LogIn, Menu, Moon,
   Network, Plus, RefreshCw, Route as RouteIcon, Save, Search, Server, Settings2,
   ShieldCheck, Sparkles, Sun, Trash2, Unplug, X,
@@ -18,11 +18,12 @@ import { api } from './api'
 import { healthKey, isModelAlreadySelected, isRouteModelHealthy, modelDisplayStatus, modelHealth, modelIDKey, routeModelHealth, uniqueModelIDs, type ModelDisplayStatus } from './modelStatus'
 import { useConfigDraft } from './useConfigDraft'
 import { SystemPage } from './pages/SystemPage'
+import { StatisticsPage } from './pages/StatisticsPage'
 import type {
   AppState, EffectiveModel, HealthProbeStatus, HealthState, Model, ModelOverride, ProviderDetails, ProviderStatus, RouteType, RouterConfig, RuntimeStatus,
 } from './types'
 
-type Page = 'overview' | 'routes' | 'models' | 'providers' | 'system'
+type Page = 'overview' | 'routes' | 'models' | 'providers' | 'statistics' | 'system'
 
 const routeLabels: Record<string, { title: string; description: string }> = {
   chat: { title: '通用对话', description: '标准文本聊天与流式输出' },
@@ -44,6 +45,7 @@ const pageInfo: Record<Page, { title: string; subtitle: string }> = {
   routes: { title: '路由策略', subtitle: '配置固定能力名称的 fallback 优先级' },
   models: { title: '模型目录', subtitle: '浏览缓存模型、能力元数据和健康状态' },
   providers: { title: '免费源', subtitle: '分别查看免费模型清单、凭据和连接状态' },
+  statistics: { title: '用量统计', subtitle: '按实际调用模型查看 Token 用量和调用质量' },
   system: { title: '系统状态', subtitle: '查看守护进程、缓存和本地配置位置' },
 }
 
@@ -54,6 +56,7 @@ const navigation: { id: Page; label: string; icon: typeof Gauge }[] = [
   { id: 'routes', label: '路由', icon: RouteIcon },
   { id: 'models', label: '模型', icon: Database },
   { id: 'providers', label: '免费源', icon: Network },
+  { id: 'statistics', label: '统计', icon: BarChart3 },
   { id: 'system', label: '系统', icon: Settings2 },
 ]
 
@@ -135,6 +138,7 @@ function App() {
 
   const stateQuery = useQuery({ queryKey: ['state'], queryFn: api.state, refetchInterval: 5000 })
   const runtimeQuery = useQuery({ queryKey: ['runtime'], queryFn: api.runtime, refetchInterval: 5000, retry: false })
+  const statisticsQuery = useQuery({ queryKey: ['statistics'], queryFn: api.statistics, refetchInterval: 5000 })
   const { draft, setDraft, dirty, acceptSaved, reset } = useConfigDraft(stateQuery.data?.config)
 
   useEffect(() => {
@@ -211,6 +215,7 @@ function App() {
         {page === 'routes' && <RoutesPage config={draft} setConfig={setDraft} models={models} healthMap={healthMap} providerHealthMap={providerHealthMap} />}
         {page === 'models' && <ModelsPage config={draft} setConfig={setDraft} models={models} healthMap={healthMap} probe={state.health_probe} providers={state.providers} />}
         {page === 'providers' && <ProvidersPage state={state} onToast={setToast} />}
+        {page === 'statistics' && <StatisticsPage snapshot={statisticsQuery.data} loading={statisticsQuery.isLoading} error={statisticsQuery.error as Error | null} />}
         {page === 'system' && <SystemPage state={state} runtime={runtime} offline={runtimeQuery.isError} />}
       </div>
 
