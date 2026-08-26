@@ -295,6 +295,8 @@ func TestUninstallRemovesLaunchAgentsAndEnv(t *testing.T) {
 }
 
 func TestInstallRunsFullSequenceAndCopiesBinary(t *testing.T) {
+	t.Setenv("GOBIN", "")
+	t.Setenv("GOPATH", "")
 	var calls []string
 	executable := filepath.Join(t.TempDir(), "free-router")
 	if err := os.WriteFile(executable, []byte("#!/bin/sh\necho ok"), 0o755); err != nil {
@@ -320,5 +322,44 @@ func TestInstallRunsFullSequenceAndCopiesBinary(t *testing.T) {
 	env, err := os.ReadFile(manager.daemonEnvPath())
 	if err != nil || !strings.Contains(string(env), "GEMINI_KEY") {
 		t.Fatalf("daemon env not written: %v %s", err, env)
+	}
+}
+
+func TestInstallWritesMakeInstalledExecutableToLaunchdPlist(t *testing.T) {
+	t.Setenv("GOBIN", "")
+	t.Setenv("GOPATH", "")
+	var calls []string
+	home := filepath.Join(t.TempDir(), "home")
+	executable := filepath.Join(home, "go", "bin", "free-router")
+	if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(executable, []byte("make-installed"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{goos: "darwin", executable: executable, home: home, uid: "501", command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		return []byte("state = running"), nil
+	}}
+
+	if err := manager.Install(context.Background(), map[string]string{"GEMINI_KEY": "secret"}); err != nil {
+		t.Fatal(err)
+	}
+	plist, err := os.ReadFile(manager.launchdPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(plist), "<key>ProgramArguments</key><array><string>"+executable+"</string><string>serve</string></array>") {
+		t.Fatalf("LaunchAgent should use make-installed executable %s, got: %s", executable, plist)
+	}
+	trayPlist, err := os.ReadFile(manager.trayLaunchdPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(trayPlist), "<key>ProgramArguments</key><array><string>"+executable+"</string><string>tray</string></array>") {
+		t.Fatalf("tray LaunchAgent should use make-installed executable %s, got: %s", executable, trayPlist)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local", "bin", "free-router")); !os.IsNotExist(err) {
+		t.Fatalf("Install should not copy make-installed binary to ~/.local/bin, stat err = %v", err)
 	}
 }
