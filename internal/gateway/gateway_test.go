@@ -929,6 +929,86 @@ func TestNamedRouteUsesConfiguredFallbackOrder(t *testing.T) {
 	}
 }
 
+func TestChatToolsRouteFallsBackToPlainChatWhenToolPoolExhausted(t *testing.T) {
+	clearBuiltinKeys(t)
+	var calls []string
+	var sawTools []bool
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/models":
+			return testResponse(http.StatusOK, `{"data":[
+				{"id":"tool-chat","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]},"supported_parameters":["tools"]},
+				{"id":"plain-chat","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]}}
+			]}`), nil
+		case "/chat/completions":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			model, _ := body["model"].(string)
+			calls = append(calls, model)
+			_, hasTools := body["tools"]
+			sawTools = append(sawTools, hasTools)
+			if model == "tool-chat" {
+				return testResponse(http.StatusBadGateway, `{"error":{"message":"upstream broken"}}`), nil
+			}
+			return testResponse(http.StatusOK, `{"choices":[{"message":{"content":"ok"}}]}`), nil
+		default:
+			return testResponse(http.StatusNotFound, "not found"), nil
+		}
+	})}
+
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"https://test.invalid","api_key":"test"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), client)
+	discoverModelsForTest(t, store)
+	routes, err := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := routes.Config()
+	chatToolsRoute := config.Routes[catalog.FunctionChatTools]
+	chatToolsRoute.Models = []string{"test/tool-chat"}
+	config.Routes[catalog.FunctionChatTools] = chatToolsRoute
+	if err := routes.Update(config); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := New(store, registry, Config{MaxAttempts: 2, Routes: routes, Health: health.New()}, client)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"chat-tools","messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"ping","parameters":{"type":"object"}}}]}`)))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	// The main loop must attempt tool-chat (the only configured chat-tools
+	// model) with the tools field intact. After it fails, the loose fallback
+	// strips tools and retries against the plain chat pool. The exact call
+	// sequence depends on how the session seed rotates the single-provider
+	// candidate group (plain-chat sorts before tool-chat, so plain-chat may
+	// be tried first and succeed without revisiting tool-chat), so we assert
+	// the invariants instead of a fixed call list:
+	//   1. tool-chat was attempted at least once with tools.
+	//   2. plain-chat eventually succeeded without tools.
+	//   3. No fallback attempt carried the tools field.
+	if calls[0] != "tool-chat" || !sawTools[0] {
+		t.Fatalf("first call must be tool-chat with tools: calls=%v sawTools=%v", calls, sawTools)
+	}
+	succeeded := false
+	for i := 1; i < len(calls); i++ {
+		if sawTools[i] {
+			t.Fatalf("loose fallback must strip tools: calls=%v sawTools=%v", calls, sawTools)
+		}
+		if calls[i] == "plain-chat" {
+			succeeded = true
+		}
+	}
+	if !succeeded {
+		t.Fatalf("plain-chat must be reached on the loose fallback: calls=%v", calls)
+	}
+}
+
 func TestIdempotentRouteFallsBackWhenProviderAccountIsUnavailable(t *testing.T) {
 	clearBuiltinKeys(t)
 	var calls []string

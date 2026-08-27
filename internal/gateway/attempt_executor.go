@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/sjzsdu/free-router/internal/adapter"
 	"github.com/sjzsdu/free-router/internal/catalog"
 	"github.com/sjzsdu/free-router/internal/statistics"
 )
@@ -14,6 +15,10 @@ import (
 // downstream response or whether fallback should continue.
 type AttemptResult struct {
 	Terminal bool
+	// LastError is the adapter-classified error from the final attempt when
+	// Terminal is false and the caller asked to defer writing it (so a higher
+	// layer can run a loose fallback before giving up).
+	LastError *adapter.Error
 }
 
 // AttemptExecutor owns one normalized provider attempt: transport execution,
@@ -27,7 +32,12 @@ func NewAttemptExecutor(gateway *Gateway) *AttemptExecutor {
 	return &AttemptExecutor{gateway: gateway}
 }
 
-func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model catalog.Model, capability, endpoint string, payload []byte, contentType string, index int, candidates []catalog.Model) AttemptResult {
+// Execute runs one upstream attempt. When deferErrorWrite is true the executor
+// does not write a final 4xx/5xx response itself; instead it returns
+// AttemptResult{Terminal:false, LastError:...} so the caller can run a
+// higher-level fallback (e.g. chat-tools -> plain chat with tools stripped)
+// before deciding what to send downstream.
+func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model catalog.Model, capability, endpoint string, payload []byte, contentType string, index int, candidates []catalog.Model, deferErrorWrite bool) AttemptResult {
 
 	started := time.Now()
 	resp, err := e.gateway.forward(r, model, payload, endpoint, contentType)
@@ -54,6 +64,12 @@ func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model 
 			// No backoff sleep on connection errors: fallback moves to a
 			// different provider, and waiting would only delay recovery.
 			return AttemptResult{Terminal: false}
+		}
+		if deferErrorWrite {
+			err := adapter.Error{StatusCode: http.StatusBadGateway, Message: "all configured free providers failed", Retryable: true}
+			e.gateway.metrics.RecordFailure(time.Since(started), 0)
+			e.record(model, capability, false, 0, time.Since(started), nil, false)
+			return AttemptResult{Terminal: false, LastError: &err}
 		}
 		writeError(w, http.StatusBadGateway, "all configured free providers failed")
 		e.gateway.metrics.RecordFailure(time.Since(started), 0)
@@ -94,9 +110,13 @@ func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model 
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
 		e.gateway.tracker.Failure(model.ID, capability, time.Since(started), normalizedResp.Error.StatusCode, normalizedResp.Error.Message, 0)
-		writeError(w, normalizedResp.Error.StatusCode, normalizedResp.Error.Message)
 		e.gateway.metrics.RecordFailure(time.Since(started), normalizedResp.Error.StatusCode)
 		e.record(model, capability, false, normalizedResp.Error.StatusCode, time.Since(started), nil, false)
+		if deferErrorWrite {
+			err := *normalizedResp.Error
+			return AttemptResult{Terminal: false, LastError: &err}
+		}
+		writeError(w, normalizedResp.Error.StatusCode, normalizedResp.Error.Message)
 		return AttemptResult{Terminal: true}
 	}
 	result := copyResponse(w, resp, model, started)

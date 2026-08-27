@@ -159,7 +159,10 @@ func (a *OpenAICompatibleAdapter) ClassifyError(statusCode int, body []byte) Err
 		err.Message = "server error"
 		err.Retryable = true
 	case statusCode == http.StatusGone:
-		err.Message = a.parseErrorMessage(statusCode, body)
+		// Upstream signalled the model is gone; surface a stable message
+		// rather than the provider's wording (e.g. "HTTP 410") so callers
+		// do not mistake it for a quota/account problem.
+		err.Message = "upstream model gone"
 		err.Retryable = true
 	case statusCode == http.StatusTooManyRequests:
 		err.Message = "rate limited"
@@ -168,10 +171,16 @@ func (a *OpenAICompatibleAdapter) ClassifyError(statusCode int, body []byte) Err
 	case statusCode == http.StatusRequestTimeout:
 		err.Message = "request timeout"
 		err.Retryable = true
-	case statusCode == http.StatusUnauthorized || statusCode == http.StatusPaymentRequired || statusCode == http.StatusForbidden || statusCode == http.StatusNotFound:
-		err.Message = a.parseErrorMessage(statusCode, body)
-		// These statuses describe provider/account/model availability. The
-		// gateway's idempotency policy still prevents unsafe generation retries.
+	case statusCode == http.StatusUnauthorized || statusCode == http.StatusPaymentRequired || statusCode == http.StatusForbidden:
+		// Provider/account availability problems (401/402/403) used to leak the
+		// upstream message verbatim — e.g. "The usage limit has been reached" —
+		// which downstream callers mistook for a quota event of their own.
+		// Surface a generic free-router message; retry/fallback is still driven
+		// by Retryable=true and the gateway's idempotency policy.
+		err.Message = "provider account unavailable"
+		err.Retryable = true
+	case statusCode == http.StatusNotFound:
+		err.Message = "upstream model unavailable"
 		err.Retryable = true
 	case statusCode >= 400:
 		err.Message = a.parseErrorMessage(statusCode, body)

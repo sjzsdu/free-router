@@ -1,6 +1,8 @@
 package eligibility
 
 import (
+	"time"
+
 	"github.com/sjzsdu/free-router/internal/catalog"
 	"github.com/sjzsdu/free-router/internal/health"
 	"github.com/sjzsdu/free-router/internal/routing"
@@ -85,6 +87,41 @@ func (s Snapshot) Healthy(modelID, capability string) bool {
 	}
 	state, ok := s.health[key(modelID, capability)]
 	return ok && state.Verified && state.Status == health.StatusHealthy
+}
+
+// Available mirrors health.Tracker.Available for the snapshot's cached state.
+// Unlike Healthy, it treats degraded/unknown/half-open as selectable so the
+// tool-capable chat pool does not collapse to zero on a single 429. Open and
+// cooling states remain unavailable until their cooldown elapses. The
+// in-flight half-open probe is still gated by TryAcquire at request time.
+func (s Snapshot) Available(modelID, capability string) bool {
+	providerID := ""
+	if model, ok := s.catalog.Find(modelID); ok {
+		providerID = model.Provider
+	}
+	if state, ok := s.providerHealth[providerID]; ok && !stateAvailable(state.Status, state.CooldownUntil) {
+		return false
+	}
+	state, ok := s.health[key(modelID, capability)]
+	if !ok || !state.Verified {
+		return false
+	}
+	if !stateAvailable(state.Status, state.CooldownUntil) {
+		return false
+	}
+	if state.Status == health.StatusHalfOpen && state.InFlight > 0 {
+		return false
+	}
+	return true
+}
+
+func stateAvailable(status string, cooldownUntil time.Time) bool {
+	switch status {
+	case health.StatusUnknown, health.StatusHealthy, health.StatusDegraded, health.StatusHalfOpen, health.StatusOpen, health.StatusCooling:
+		return time.Now().After(cooldownUntil)
+	default:
+		return false
+	}
 }
 
 // Eligible applies all effective routing rules in one place. The empty reason

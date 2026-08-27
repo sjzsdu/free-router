@@ -51,6 +51,16 @@ func (p *CandidatePlanner) routeAvailable(view eligibility.Snapshot, route routi
 }
 
 func (p *CandidatePlanner) Candidates(requested, capability string, needsTools bool) ([]catalog.Model, bool) {
+	return p.CandidatesSeeded(requested, capability, needsTools, 0)
+}
+
+// CandidatesSeeded behaves like Candidates but rotates round-robin groups
+// starting from seed instead of the global counter. A non-zero seed keeps
+// all requests in the same conversation on the same primary model, which is
+// essential for multi-turn tool-call sessions: OpenAI tool_calls/tool_results
+// must be interpreted by the same model across the dialog, otherwise schema
+// mismatches and 4xx errors multiply and collapse the chat-tools pool.
+func (p *CandidatePlanner) CandidatesSeeded(requested, capability string, needsTools bool, seed uint64) ([]catalog.Model, bool) {
 	view := p.snapshot()
 	if route, ok := view.Route(requested); ok {
 		effectiveRoute := route
@@ -70,14 +80,18 @@ func (p *CandidatePlanner) Candidates(requested, capability string, needsTools b
 			}
 			result := p.strictlyAvailable(view, priority, effectiveRoute.Capability)
 			if route.Strategy == routing.StrategyRoundRobin {
-				result = rotateCandidates(result, p.nextForRoute(requested))
+				if seed != 0 {
+					result = rotateCandidates(result, seed)
+				} else {
+					result = rotateCandidates(result, p.nextForRoute(requested))
+				}
 			}
 			if remaining, ok := p.pickRemaining(view, effectiveRoute, configured, true); ok {
-				result = append(result, remaining)
+				result = append(result, remaining...)
 			}
 			return result, true
 		}
-		return p.dynamicCandidates(view, effectiveRoute, false), true
+		return p.dynamicCandidatesSeeded(view, effectiveRoute, false, seed), true
 	}
 	if model, ok := view.Find(requested); ok {
 		route := routing.Route{Capability: capability, RequireTool: needsTools}
@@ -101,6 +115,14 @@ func (p *CandidatePlanner) nextForRoute(alias string) uint64 {
 }
 
 func (p *CandidatePlanner) dynamicCandidates(view eligibility.Snapshot, route routing.Route, needsTools bool) []catalog.Model {
+	return p.dynamicCandidatesSeeded(view, route, needsTools, 0)
+}
+
+// dynamicCandidatesSeeded picks providers in round-robin order starting from
+// seed. A non-zero seed ties all requests sharing that seed to the same
+// starting provider/model so a multi-turn tool conversation keeps using the
+// same upstream model instead of bouncing between providers.
+func (p *CandidatePlanner) dynamicCandidatesSeeded(view eligibility.Snapshot, route routing.Route, needsTools bool, seed uint64) []catalog.Model {
 	route.RequireTool = route.RequireTool || needsTools
 	groups := make(map[string][]catalog.Model)
 	var preferred *catalog.Model
@@ -131,16 +153,22 @@ func (p *CandidatePlanner) dynamicCandidates(view eligibility.Snapshot, route ro
 	if len(providerIDs) == 0 || len(result) == p.maxAttempts {
 		return p.limitCandidates(p.availableCandidates(view, result, route.Capability))
 	}
-	seed := int(p.next.Add(1) - 1)
+	if seed == 0 {
+		seed = p.next.Add(1) - 1
+	}
+	// Keep the rotation arithmetic in uint64: a session seed is an FNV-64
+	// hash and can exceed MaxInt64, which would make int(seed) negative and
+	// produce negative modulo indices (panic: index out of range [-1]).
+	numProviders := uint64(len(providerIDs))
 	for round := 0; ; round++ {
 		added := false
 		for offset := range providerIDs {
-			providerID := providerIDs[(seed+offset)%len(providerIDs)]
+			providerID := providerIDs[(seed+uint64(offset))%numProviders]
 			models := groups[providerID]
 			if round >= len(models) {
 				continue
 			}
-			result = append(result, models[(seed+round)%len(models)])
+			result = append(result, models[(seed+uint64(round))%uint64(len(models))])
 			added = true
 		}
 		if !added {
@@ -150,17 +178,37 @@ func (p *CandidatePlanner) dynamicCandidates(view eligibility.Snapshot, route ro
 	return p.limitCandidates(p.availableCandidates(view, result, route.Capability))
 }
 
+// selectable gates a model on its health state. For chat-tools the gate is
+// Availability (degraded/half-open still selectable) instead of strict
+// health, so a single 429 does not collapse the entire tool candidate pool
+// to zero and force a 503/transparent passthrough on the next request.
+func (p *CandidatePlanner) selectable(view eligibility.Snapshot, model catalog.Model, capability string) bool {
+	if !view.Verified(model, capability) {
+		return false
+	}
+	if capability == catalog.FunctionChatTools {
+		return view.Available(model.ID, capability)
+	}
+	return view.Healthy(model.ID, capability)
+}
+
 func (p *CandidatePlanner) strictlyAvailable(view eligibility.Snapshot, models []catalog.Model, capability string) []catalog.Model {
 	result := make([]catalog.Model, 0, len(models))
 	for _, model := range models {
-		if view.Verified(model, capability) && view.Healthy(model.ID, capability) {
+		if p.selectable(view, model, capability) {
 			result = append(result, model)
 		}
 	}
 	return result
 }
 
-func (p *CandidatePlanner) pickRemaining(view eligibility.Snapshot, route routing.Route, excluded map[string]bool, healthyOnly bool) (catalog.Model, bool) {
+// pickRemaining now returns the full set of eligible non-excluded models
+// instead of a single round-robin pick. The priority array alone is too
+// short for chat-tools (often one or two models); padding it with every
+// remaining available model gives the gateway enough fallback depth to
+// absorb a 429 without bouncing straight to writeCandidateUnavailable and
+// leaking the upstream message.
+func (p *CandidatePlanner) pickRemaining(view eligibility.Snapshot, route routing.Route, excluded map[string]bool, healthyOnly bool) ([]catalog.Model, bool) {
 	models := make([]catalog.Model, 0)
 	for _, model := range view.Models() {
 		if excluded[model.ID] {
@@ -172,16 +220,16 @@ func (p *CandidatePlanner) pickRemaining(view eligibility.Snapshot, route routin
 		}
 	}
 	if len(models) == 0 {
-		return catalog.Model{}, false
+		return nil, false
 	}
-	index := int(p.next.Add(1)-1) % len(models)
-	return models[index], true
+	seed := p.next.Add(1) - 1
+	return rotateCandidates(models, seed), true
 }
 
 func (p *CandidatePlanner) availableCandidates(view eligibility.Snapshot, models []catalog.Model, capability string) []catalog.Model {
 	available := make([]catalog.Model, 0, len(models))
 	for _, model := range models {
-		if view.Verified(model, capability) && view.Healthy(model.ID, capability) {
+		if p.selectable(view, model, capability) {
 			available = append(available, model)
 		}
 	}

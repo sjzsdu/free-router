@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"mime"
@@ -299,17 +300,19 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 		g.metrics.RecordFailure(0, http.StatusBadRequest)
 		return
 	}
-	candidates, fallback := g.candidates(requested, capability, needsTools)
-	if len(candidates) == 0 {
-		if fallback {
-			writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("route %q has no healthy models; inspect failed models in the admin UI", requested))
-		} else {
-			writeError(w, http.StatusNotFound, fmt.Sprintf("free model %q was not found", requested))
-		}
-		g.metrics.RecordFailure(0, http.StatusServiceUnavailable)
-		return
-	}
+	// A stable conversation seed keeps all requests in the same multi-turn
+	// dialog on the same primary model. Tool calls/results must be interpreted
+	// by the same upstream model across the dialog or schema mismatches and
+	// 4xx errors multiply and collapse the chat-tools pool.
+	sessionSeed := sessionSeedFromRequest(request)
+	candidates, fallback := g.candidates(requested, capability, needsTools, sessionSeed)
 	g.runBeforeCandidateAcquire()
+
+	// lastError accumulates the most recent deferred upstream error so the
+	// gateway can surface it after every fallback path has been exhausted
+	// (instead of a generic 503). It is only populated when deferErrorWrite
+	// asked Execute to skip writing the response itself.
+	var lastError *adapter.Error
 
 	for index, model := range candidates {
 		if !g.tracker.TryAcquire(model.ID, capability) {
@@ -325,11 +328,128 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 			g.metrics.RecordFailure(0, http.StatusBadRequest)
 			return
 		}
-		if g.tryCandidate(w, r, model, capability, endpoint, payload, "application/json", index, candidates) {
+		// Defer the final 4xx/5xx write only on the tool-aliased route: a
+		// plain chat request has no higher-level fallback and should keep
+		// the original behaviour of writing the upstream error immediately.
+		result := g.tryCandidate(w, r, model, capability, endpoint, payload, "application/json", index, candidates, needsTools && fallback)
+		if result.Terminal {
 			return
 		}
+		if result.LastError != nil {
+			lastError = result.LastError
+		}
+	}
+
+	// Loose fallback: when a route-aliased tool request has exhausted the
+	// chat-tools pool, retry against plain chat candidates with the tools
+	// field stripped. Returning a normal chat completion is preferable to
+	// leaking the upstream 4xx ("usage_limit_reached" etc.) to the caller,
+	// which downstream agents misread as their own quota event.
+	if needsTools && fallback {
+		looseCandidates, _ := g.candidates(catalog.FunctionChat, catalog.FunctionChat, false, sessionSeed)
+		if len(looseCandidates) > 0 {
+			looseRequest := stripTools(request)
+			looseCapability := catalog.FunctionChat
+			for index, model := range looseCandidates {
+				if !g.tracker.TryAcquire(model.ID, looseCapability) {
+					continue
+				}
+				defer g.tracker.Release(model.ID, looseCapability)
+				looseRequest["model"] = model.UpstreamID
+				payload, err := json.Marshal(looseRequest)
+				if err != nil {
+					writeError(w, http.StatusBadRequest, "could not encode request")
+					g.metrics.RecordFailure(0, http.StatusBadRequest)
+					return
+				}
+				// Continue deferring so the loose loop can try every plain
+				// chat candidate; the final error (if any) is written below.
+				result := g.tryCandidate(w, r, model, looseCapability, endpoint, payload, "application/json", index, looseCandidates, true)
+				if result.Terminal {
+					return
+				}
+				if result.LastError != nil {
+					lastError = result.LastError
+				}
+			}
+		}
+	}
+
+	// Surface the last deferred upstream error verbatim now that every
+	// fallback path has been tried. Without this the caller would see a
+	// generic "no acquirable models" 503 even though an upstream did speak
+	// (e.g. "provider account unavailable"), which hides the real reason.
+	if lastError != nil {
+		writeError(w, lastError.StatusCode, lastError.Message)
+		return
+	}
+
+	if len(candidates) == 0 {
+		if fallback {
+			writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("route %q has no healthy models; inspect failed models in the admin UI", requested))
+		} else {
+			writeError(w, http.StatusNotFound, fmt.Sprintf("free model %q was not found", requested))
+		}
+		g.metrics.RecordFailure(0, http.StatusServiceUnavailable)
+		return
 	}
 	g.writeCandidateUnavailable(w, requested)
+}
+
+// sessionSeedFromRequest derives a stable 64-bit seed from the conversation's
+// first few system/user messages. All requests in the same multi-turn dialog
+// hash to the same seed, so the planner rotates them to the same starting
+// model. We restrict to system/user content because assistant and tool turns
+// vary across requests while the conversation identity must stay stable.
+// Returns 0 when no system/user content is present, which falls back to the
+// global round-robin counter.
+func sessionSeedFromRequest(request map[string]any) uint64 {
+	messages, _ := request["messages"].([]any)
+	if len(messages) == 0 {
+		return 0
+	}
+	hasher := fnv.New64a()
+	var wrote bool
+	for i, message := range messages {
+		if i >= 6 {
+			break
+		}
+		entry, ok := message.(map[string]any)
+		if !ok {
+			continue
+		}
+		role, _ := entry["role"].(string)
+		if role != "system" && role != "user" {
+			continue
+		}
+		content, _ := entry["content"].(string)
+		if content == "" {
+			continue
+		}
+		_, _ = io.WriteString(hasher, role)
+		hasher.Write([]byte{0})
+		_, _ = io.WriteString(hasher, content)
+		hasher.Write([]byte{0})
+		wrote = true
+	}
+	if !wrote {
+		return 0
+	}
+	return hasher.Sum64()
+}
+
+// stripTools returns a shallow copy of request with the tools and tool_choice
+// fields removed. It is used by the loose fallback path so plain chat models
+// can answer when no chat-tools candidate remains.
+func stripTools(request map[string]any) map[string]any {
+	stripped := make(map[string]any, len(request))
+	for key, value := range request {
+		if key == "tools" || key == "tool_choice" {
+			continue
+		}
+		stripped[key] = value
+	}
+	return stripped
 }
 
 func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoint, defaultAlias string) {
@@ -361,7 +481,7 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 		g.metrics.RecordFailure(0, http.StatusBadRequest)
 		return
 	}
-	candidates, fallback := g.candidates(requested, capability, false)
+	candidates, fallback := g.candidates(requested, capability, false, 0)
 	if len(candidates) == 0 {
 		if fallback {
 			writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("route %q has no healthy models; inspect failed models in the admin UI", requested))
@@ -385,7 +505,9 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 			g.metrics.RecordFailure(0, http.StatusBadRequest)
 			return
 		}
-		if g.tryCandidate(w, r, model, capability, endpoint, payload, contentType, index, candidates) {
+		// Multipart endpoints (images/audio/etc.) have no higher-level
+		// fallback, so the executor writes the upstream error itself.
+		if g.tryCandidate(w, r, model, capability, endpoint, payload, contentType, index, candidates, false).Terminal {
 			return
 		}
 	}
@@ -393,9 +515,11 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 }
 
 // tryCandidate preserves the internal compatibility seam while delegating all
-// upstream execution policy to AttemptExecutor.
-func (g *Gateway) tryCandidate(w http.ResponseWriter, r *http.Request, model catalog.Model, capability, endpoint string, payload []byte, contentType string, index int, candidates []catalog.Model) bool {
-	return g.executor.Execute(w, r, model, capability, endpoint, payload, contentType, index, candidates).Terminal
+// upstream execution policy to AttemptExecutor. deferErrorWrite is forwarded
+// to Execute so callers running a higher-level fallback (e.g. chat-tools ->
+// plain chat) can defer the final 4xx/5xx write and inspect LastError.
+func (g *Gateway) tryCandidate(w http.ResponseWriter, r *http.Request, model catalog.Model, capability, endpoint string, payload []byte, contentType string, index int, candidates []catalog.Model, deferErrorWrite bool) AttemptResult {
+	return g.executor.Execute(w, r, model, capability, endpoint, payload, contentType, index, candidates, deferErrorWrite)
 }
 
 func localLimitError(err error) (int, string, bool) {
@@ -513,8 +637,8 @@ func rewriteMultipartModel(body []byte, boundary, model string) ([]byte, string,
 	return output.Bytes(), writer.FormDataContentType(), nil
 }
 
-func (g *Gateway) candidates(requested, capability string, needsTools bool) ([]catalog.Model, bool) {
-	return g.planner.Candidates(requested, capability, needsTools)
+func (g *Gateway) candidates(requested, capability string, needsTools bool, sessionSeed uint64) ([]catalog.Model, bool) {
+	return g.planner.CandidatesSeeded(requested, capability, needsTools, sessionSeed)
 }
 
 func (g *Gateway) requestCapability(requested, fallback string) string {
