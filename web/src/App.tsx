@@ -26,8 +26,6 @@ import type {
   AppState, EffectiveModel, HealthProbeStatus, HealthState, Model, ModelOverride, ProviderDetails, ProviderStatus, RouteType, RouterConfig, RuntimeStatus,
 } from './types'
 
-type Page = 'overview' | 'routes' | 'models' | 'providers' | 'statistics' | 'system'
-
 const routeLabels: Record<string, { title: string; description: string }> = {
   chat: { title: '通用对话', description: '标准文本聊天与流式输出' },
   'chat-tools': { title: '工具调用', description: '需要 function/tool call 的任务' },

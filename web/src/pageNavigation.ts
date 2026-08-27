@@ -1,6 +1,6 @@
-export type Page = 'overview' | 'routes' | 'models' | 'providers' | 'system'
+export type Page = 'overview' | 'routes' | 'models' | 'providers' | 'statistics' | 'system'
 
-const pages = new Set<Page>(['overview', 'routes', 'models', 'providers', 'system'])
+const pages = new Set<Page>(['overview', 'routes', 'models', 'providers', 'statistics', 'system'])
 
 type PageLocation = Pick<Location, 'href' | 'search'>
 type PageEventTarget = Pick<Window, 'location' | 'history' | 'addEventListener' | 'removeEventListener'>
