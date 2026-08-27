@@ -47,7 +47,7 @@ func TestFormulaCatalogIncludesProvidersWithoutCredentials(t *testing.T) {
 	for _, spec := range applyFreeModelManifest(builtins(), manifest) {
 		byID[spec.ID] = spec
 	}
-	for _, id := range []string{"bigmodel", "qianfan", "openrouter"} {
+	for _, id := range []string{"bigmodel", "xfyun", "openrouter"} {
 		_, ok := byID[id]
 		if !ok {
 			t.Fatalf("missing Chinese provider %s", id)
@@ -250,7 +250,7 @@ func TestCreditProvidersExposeBillingWarnings(t *testing.T) {
 	for _, spec := range builtins() {
 		byID[spec.ID] = spec
 	}
-	for _, id := range []string{"xiaomi-mimo", "dashscope", "volcengine-ark", "baichuan"} {
+	for _, id := range []string{"xiaomi-mimo", "dashscope", "volcengine-ark", "xfyun", "cohere"} {
 		spec, ok := byID[id]
 		if !ok {
 			t.Fatalf("missing credit provider %s", id)
@@ -266,7 +266,8 @@ func TestBuiltinsHaveOfficialRegistrationURLs(t *testing.T) {
 		"mistral":        "https://console.mistral.ai/home?profile_dialog=api-keys",
 		"dashscope":      "https://bailian.console.aliyun.com/cn-beijing/?tab=app#/api-key",
 		"volcengine-ark": "https://console.volcengine.com/ark/region:ark+cn-beijing/apikey",
-		"baichuan":       "https://platform.baichuan-ai.com/homePage",
+		"xfyun":          "https://console.xfyun.cn/services/spark",
+		"cohere":         "https://dashboard.cohere.com/api-keys",
 		"cloudflare":     "https://dash.cloudflare.com/?to=%2F%3Aaccount%2Fai%2Fworkers-ai",
 	}
 	for _, spec := range builtins() {
@@ -276,9 +277,6 @@ func TestBuiltinsHaveOfficialRegistrationURLs(t *testing.T) {
 		}
 		if want, ok := expected[spec.ID]; ok && spec.RegisterURL != want {
 			t.Errorf("provider %s registration URL = %q, want %q", spec.ID, spec.RegisterURL, want)
-		}
-		if spec.ID == "baichuan" && spec.RegisterLabel != "申请接入" {
-			t.Errorf("baichuan registration label = %q, want 申请接入", spec.RegisterLabel)
 		}
 	}
 }

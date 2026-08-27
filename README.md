@@ -10,8 +10,8 @@
 | --- | --- | --- | --- |
 | OpenRouter | `OPENROUTER_API_KEY` | 严格选择输入、输出价格均为 0 的模型 | [OpenRouter Keys](https://openrouter.ai/keys) |
 | Groq | `GROQ_API_KEY` | Free Plan | [Groq Console](https://console.groq.com/keys) |
-| Cerebras | `CEREBRAS_API_KEY` | Free Tier | [Cerebras Cloud](https://cloud.cerebras.ai/) |
 | Google Gemini | `GEMINI_API_KEY` | Free Tier | [Google AI Studio](https://aistudio.google.com/apikey) |
+| Cohere | `COHERE_API_KEY` | 试用 Key 每月 1000 次调用 | [Cohere API Keys](https://dashboard.cohere.com/api-keys) |
 | GitHub Models | `GITHUB_TOKEN` | 免费原型额度 | [创建 PAT](https://github.com/settings/personal-access-tokens/new)（需 `models:read`） |
 | Pollinations | `POLLINATIONS_API_KEY` | 免费 credits / Pollen | [Pollinations](https://enter.pollinations.ai/) |
 | Hugging Face | `HF_TOKEN` | 每月免费 credits | [Access Tokens](https://huggingface.co/settings/tokens) |
@@ -23,11 +23,11 @@
 | Xiaomi MiMo | `MIMO_API_KEY` | 账号赠送体验金 | [API Keys](https://platform.xiaomimimo.com/#/console/api-keys) |
 | 阿里云百炼 | `DASHSCOPE_API_KEY` | 新人模型免费额度 | [API Key](https://bailian.console.aliyun.com/?apiKey=1#/api-key) |
 | 火山方舟 | `ARK_API_KEY` | 各模型免费体验额度 | [API Key](https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey) |
-| 百川智能 | `BAICHUAN_API_KEY` | 新用户赠送金 | [开放平台](https://platform.baichuan-ai.com/) |
+| 科大讯飞星火 | `XFYUN_API_KEY` | Spark Lite 免费模型 | [星火 API](https://console.xfyun.cn/services/spark) |
 | 智谱开放平台 | `BIGMODEL_API_KEY` | 官方 Flash 免费模型系列 | [API Keys](https://bigmodel.cn/usercenter/proj-mgmt/apikeys) |
-| 百度千帆 | `QIANFAN_API_KEY` | 长期免费的 ERNIE Speed / Lite / Tiny | [API Key 管理](https://console.bce.baidu.com/qianfan/ais/console/apiKey) |
 | SiliconFlow | `SILICONFLOW_API_KEY` | 官方标记免费的聊天模型 | [API 密钥](https://cloud.siliconflow.cn/account/ak) |
 | Z.AI | `ZAI_API_KEY` | GLM Flash 免费模型 | [API Keys](https://z.ai/manage-apikey/apikey-list) |
+| 快手万擎 | `WQ_API_KEY` | KAT-Coder-Air-V1 免费 | [万擎控制台](https://console.streamlake.com/console/home/index) |
 | Cloudflare Workers AI | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | 每日 10,000 Neurons | [创建 API Token](https://dash.cloudflare.com/profile/api-tokens) |
 
 这些服务的条款、区域和额度会变化。除 OpenRouter 的零价模型筛选外，provider 通常不会通过 `/models` 告诉路由器账户是否启用了付费；要确保绝不扣费，请使用没有绑定计费方式的 Free Tier 账户。
@@ -54,9 +54,9 @@ go run . discover-model-data all | jq
 
 ### 中国大陆免费源的筛选原则
 
-内置中国大陆来源目前包括 ModelScope、SiliconFlow、智谱开放平台、百度千帆、Xiaomi MiMo、阿里云百炼、火山方舟和百川智能。免费模型名单和判定证据统一维护在版本化数据清单中，不再写死在 Go 代码里；真实调用结果属于本机运行诊断，不会反向污染官方模型源数据。
+内置中国大陆来源目前包括 ModelScope、SiliconFlow、智谱开放平台、科大讯飞星火、快手万擎、Xiaomi MiMo、阿里云百炼和火山方舟。免费模型名单和判定证据统一维护在版本化数据清单中，不再写死在 Go 代码里；真实调用结果属于本机运行诊断，不会反向污染官方模型源数据。
 
-`gift-credits`、`new-user-free-quota`、`free-trial-quota` 都属于额度型来源，并非永久免费。只有用户配置对应 Key 后它们才会启用，管理页面会持续显示计费警告。百炼用户应先开启“免费额度用完即停”；其他额度型平台应关闭后付费或确保账户没有可扣余额。Kimi 当前按输入/输出计费，MiniMax 当前使用付费 Token Plan、Credits 或按量计费，因此没有作为免费来源内置。
+`gift-credits`、`new-user-free-quota`、`free-trial-quota` 都属于额度型来源，并非永久免费。只有用户配置对应 Key 后它们才会启用，管理页面会持续显示计费警告。百炼用户应先开启“免费额度用完即停”；其他额度型平台应关闭后付费或确保账户没有可扣余额。Kimi 当前按输入/输出计费，MiniMax 当前使用付费 Token Plan、Credits 或按量计费，因此没有作为免费来源内置。Cerebras 官方已明确不提供永久免费层（Free Trial 为 $5/30 天且需绑定支付方式），百川智能赠送金政策（2024 年 5 月起 3 个月有效）已过期且当前全部按量计费，百度千帆官方目录已无零价模型，故三者均已从内置免费源中清理。
 
 OpenRouter 还支持网页中的 **OAuth 登录**：点击后在 OpenRouter 完成授权，free-router 使用 PKCE 换取用户自己的 API Key，并直接保存到本机安全凭据存储。整个过程无需复制 Key，授权回调只允许 localhost，且 10 分钟后自动失效。其他 Provider 的官网社交登录不等于 API OAuth；需要预先注册 OAuth Client 的平台暂不内置公共 Client 凭据。
 
