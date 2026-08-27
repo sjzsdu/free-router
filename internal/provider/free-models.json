@@ -1,142 +1,62 @@
 {
   "schema_version": 2,
-  "generated_at": "2026-07-27T05:40:09Z",
+  "generated_at": "2026-08-27T03:41:06Z",
   "providers": {
-    "baichuan": {
-      "free_basis": "2024年5月22日下午起注册的新用户获赠80元，注册后生效，有效期3个月；官方折算示例为Baichuan2-Turbo约1000万Tokens。此前已注册且认证的用户曾额外获赠40元，有效期3个月，该批赠送金现已过期。",
-      "billing_warning": "赠送金不可提现、转让或开票。赠送金耗尽后，如消耗账户另有充值余额，后续API调用按各模型现行价格从账户余额扣除；总余额不足时停止服务并返回429，需充值，不提供自动后付费。",
+    "bigmodel": {
+      "free_basis": "智谱开放平台定价页将 GLM-4-Flash-250414（128K）、GLM-Z1-Flash（128K 推理）、GLM-4.7-Flash（200K）、GLM-4.6V-Flash（多模态）标记为免费；其余模型按量计费。",
+      "billing_warning": "仅清单内 Flash 免费系列零价；其他模型按量计费，请勿配置付费模型密钥。",
       "source_urls": [
-        "https://platform.baichuan-ai.com/prices",
-        "https://platform.baichuan-ai.com/article/consume-agreement",
-        "https://platform.baichuan-ai.com/docs/errCode",
-        "https://platform.baichuan-ai.com/docs/api"
+        "https://open.bigmodel.cn/pricing",
+        "https://bigmodel.cn/dev/api/normal-model/glm-4"
       ],
       "discovery_status": "ready",
-      "discovery_message": "agent inventory accepted",
+      "discovery_message": "free models verified from official pricing page",
       "models": [
         {
           "functions": [
-            "chat"
+            "chat",
+            "chat-tools"
           ],
-          "id": "Baichuan-M2",
+          "id": "GLM-4-Flash-250414",
           "source_urls": [
-            "https://platform.baichuan-ai.com/prices"
+            "https://open.bigmodel.cn/pricing"
           ],
-          "verified_at": "2026-07-27T05:40:09Z"
+          "verified_at": "2026-08-27T03:41:06Z"
         },
         {
           "functions": [
-            "chat"
+            "chat",
+            "chat-tools"
           ],
-          "id": "Baichuan-M2-Plus",
+          "id": "GLM-Z1-Flash",
           "source_urls": [
-            "https://platform.baichuan-ai.com/prices"
+            "https://open.bigmodel.cn/pricing"
           ],
-          "verified_at": "2026-07-27T05:40:09Z"
+          "verified_at": "2026-08-27T03:41:06Z"
         },
         {
           "functions": [
-            "chat"
+            "chat",
+            "chat-tools"
           ],
-          "id": "Baichuan-M3",
+          "id": "GLM-4.7-Flash",
           "source_urls": [
-            "https://platform.baichuan-ai.com/prices"
+            "https://open.bigmodel.cn/pricing"
           ],
-          "verified_at": "2026-07-27T05:40:09Z"
+          "verified_at": "2026-08-27T03:41:06Z"
         },
         {
           "functions": [
-            "chat"
+            "chat",
+            "chat-tools",
+            "image-understanding"
           ],
-          "id": "Baichuan-M3-Plus",
+          "id": "GLM-4.6V-Flash",
           "source_urls": [
-            "https://platform.baichuan-ai.com/prices"
+            "https://open.bigmodel.cn/pricing"
           ],
-          "verified_at": "2026-07-27T05:40:09Z"
-        },
-        {
-          "functions": [
-            "chat"
-          ],
-          "id": "Baichuan2-53B",
-          "source_urls": [
-            "https://platform.baichuan-ai.com/prices"
-          ],
-          "verified_at": "2026-07-27T05:40:09Z"
-        },
-        {
-          "functions": [
-            "chat"
-          ],
-          "id": "Baichuan2-Turbo",
-          "source_urls": [
-            "https://platform.baichuan-ai.com/prices",
-            "https://platform.baichuan-ai.com/docs/api"
-          ],
-          "verified_at": "2026-07-27T05:40:09Z"
-        },
-        {
-          "functions": [
-            "chat"
-          ],
-          "id": "Baichuan3-Turbo",
-          "source_urls": [
-            "https://platform.baichuan-ai.com/prices"
-          ],
-          "verified_at": "2026-07-27T05:40:09Z"
-        },
-        {
-          "functions": [
-            "chat"
-          ],
-          "id": "Baichuan3-Turbo-128k",
-          "source_urls": [
-            "https://platform.baichuan-ai.com/prices"
-          ],
-          "verified_at": "2026-07-27T05:40:09Z"
-        },
-        {
-          "functions": [
-            "chat"
-          ],
-          "id": "Baichuan4",
-          "source_urls": [
-            "https://platform.baichuan-ai.com/prices"
-          ],
-          "verified_at": "2026-07-27T05:40:09Z"
-        },
-        {
-          "functions": [
-            "chat"
-          ],
-          "id": "Baichuan4-Air",
-          "source_urls": [
-            "https://platform.baichuan-ai.com/prices"
-          ],
-          "verified_at": "2026-07-27T05:40:09Z"
-        },
-        {
-          "functions": [
-            "chat"
-          ],
-          "id": "Baichuan4-Turbo",
-          "source_urls": [
-            "https://platform.baichuan-ai.com/prices"
-          ],
-          "verified_at": "2026-07-27T05:40:09Z"
+          "verified_at": "2026-08-27T03:41:06Z"
         }
-      ]
-    },
-    "bigmodel": {
-      "discovery_status": "validation-failed",
-      "discovery_message": "provider result did not match the required schema or evidence rules"
-    },
-    "cerebras": {
-      "discovery_message": "models endpoint returned 403 Forbidden: error code: 1009",
-      "discovery_status": "discovery-failed",
-      "free_basis": "Models exposed to a configured free-tier account are limited by that tier.",
-      "source_urls": [
-        "https://inference-docs.cerebras.ai/support/rate-limits"
       ]
     },
     "cloudflare": {
@@ -145,6 +65,40 @@
       "free_basis": "Workers AI includes a daily free allocation measured in Neurons.",
       "source_urls": [
         "https://developers.cloudflare.com/workers-ai/platform/pricing/"
+      ]
+    },
+    "cohere": {
+      "free_basis": "Cohere 试用（evaluation）Key 免费，限每月 1000 次 API 调用、Chat 20 req/min；Compatibility API 兼容 OpenAI SDK（base_url https://api.cohere.ai/compatibility/v1）。",
+      "billing_warning": "试用 Key 每月 1000 次调用，超出后请求失败或需升级生产 Key；请勿绑定付费方式。",
+      "source_urls": [
+        "https://docs.cohere.com/docs/rate-limits",
+        "https://docs.cohere.com/docs/compatibility-api"
+      ],
+      "discovery_status": "ready",
+      "discovery_message": "free trial verified from official documentation",
+      "models": [
+        {
+          "functions": [
+            "chat",
+            "chat-tools"
+          ],
+          "id": "command-a-plus-05-2026",
+          "source_urls": [
+            "https://docs.cohere.com/docs/compatibility-api"
+          ],
+          "verified_at": "2026-08-27T03:41:06Z"
+        },
+        {
+          "functions": [
+            "chat",
+            "chat-tools"
+          ],
+          "id": "command-a",
+          "source_urls": [
+            "https://docs.cohere.com/docs/rate-limits"
+          ],
+          "verified_at": "2026-08-27T03:41:06Z"
+        }
       ]
     },
     "dashscope": {
@@ -3404,14 +3358,6 @@
       "discovery_status": "verification-failed",
       "discovery_message": "agent could not identify free models from official catalog; provider abandoned"
     },
-    "qianfan": {
-      "free_basis": "Long-term free models documented by the provider.",
-      "source_urls": [
-        "https://cloud.baidu.com/doc/WENXINWORKSHOP/s/Fm2vrveyu"
-      ],
-      "discovery_status": "confirmed-empty",
-      "discovery_message": "official catalog contains no eligible free models; provider abandoned"
-    },
     "sambanova": {
       "discovery_message": "fetch models: Get \"https://api.sambanova.ai/v1/models\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
       "discovery_status": "discovery-failed",
@@ -3421,8 +3367,86 @@
       ]
     },
     "siliconflow": {
-      "discovery_status": "verification-failed",
-      "discovery_message": "agent could not identify free models from official catalog; provider abandoned"
+      "free_basis": "SiliconFlow 官方文档免费大语言模型列表：Qwen/Qwen2-7B-Instruct、Qwen/Qwen2-1.5B-Instruct、Qwen/Qwen1.5-7B-Chat、THUDM/glm-4-9b-chat、THUDM/chatglm3-6b、internlm/internlm2_5-7b-chat、mistralai/Mistral-7B-Instruct-v0.2（均为 32K 上下文），不超过平台限速即可免费使用；北京硅基流动科技有限公司保留免费模型解释权。",
+      "billing_warning": "免费模型以官方文档列表为准，其余模型按量计费；免费模型受平台 Rate Limits 约束。",
+      "source_urls": [
+        "https://docs.siliconflow.com/quickstart/models",
+        "https://docs.siliconflow.cn/docs/userguide/faqs/rate-limit-and-upgradation"
+      ],
+      "discovery_status": "ready",
+      "discovery_message": "free models verified from official documentation",
+      "models": [
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen2-7B-Instruct",
+          "source_urls": [
+            "https://docs.siliconflow.com/quickstart/models"
+          ],
+          "verified_at": "2026-08-27T03:41:06Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen2-1.5B-Instruct",
+          "source_urls": [
+            "https://docs.siliconflow.com/quickstart/models"
+          ],
+          "verified_at": "2026-08-27T03:41:06Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "Qwen/Qwen1.5-7B-Chat",
+          "source_urls": [
+            "https://docs.siliconflow.com/quickstart/models"
+          ],
+          "verified_at": "2026-08-27T03:41:06Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "THUDM/glm-4-9b-chat",
+          "source_urls": [
+            "https://docs.siliconflow.com/quickstart/models"
+          ],
+          "verified_at": "2026-08-27T03:41:06Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "THUDM/chatglm3-6b",
+          "source_urls": [
+            "https://docs.siliconflow.com/quickstart/models"
+          ],
+          "verified_at": "2026-08-27T03:41:06Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "internlm/internlm2_5-7b-chat",
+          "source_urls": [
+            "https://docs.siliconflow.com/quickstart/models"
+          ],
+          "verified_at": "2026-08-27T03:41:06Z"
+        },
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "mistralai/Mistral-7B-Instruct-v0.2",
+          "source_urls": [
+            "https://docs.siliconflow.com/quickstart/models"
+          ],
+          "verified_at": "2026-08-27T03:41:06Z"
+        }
+      ]
     },
     "volcengine-ark": {
       "free_basis": "官方产品页列明Doubao-Seed-2.1-pro、Doubao-Seed-2.1-turbo、Doubao-Seed-Evolving各有50万tokens试用额度；仅Doubao-Seed-Evolving同时核实到固定公共Model ID并可由项目的北京方舟/api/v3端点直接调用。",
@@ -3450,6 +3474,63 @@
         }
       ]
     },
+    "wanqing": {
+      "free_basis": "快手万擎官方模型服务价格表将 KAT-Coder-Air-V1 的输入/输出/缓存写入/缓存命中全部标记为“免费”（价格更新时间 2025/10/15），KAT-Coder-Exp-72B-1010 同样免费；其余 KAT-Coder-Pro/Air-V2.5 按 token 计费。API 兼容 OpenAI Chat Completions，但 model 参数需为控制台创建的在线推理点 ID（ep-xxx）。",
+      "billing_warning": "KAT-Coder-Air-V1 免费、其余版本按量计费；需先在万擎控制台创建在线推理服务并把模型 ID 覆盖为推理点 ID；免费推理额度是活动制，耗尽后按后付费出账，请确认账户无余额扣费风险。",
+      "source_urls": [
+        "https://www.streamlake.com/document/WANQING/mdsorb4ejjptsmfyrn",
+        "https://www.streamlake.com/document/WANQING/me6yi4shauyxx5fhdtv",
+        "https://www.streamlake.com/document/WANQING/mdsor5767ob7s796sp6"
+      ],
+      "discovery_status": "ready",
+      "discovery_message": "free model verified from official pricing page",
+      "models": [
+        {
+          "functions": [
+            "chat",
+            "chat-tools"
+          ],
+          "id": "KAT-Coder-Air-V1",
+          "source_urls": [
+            "https://www.streamlake.com/document/WANQING/mdsorb4ejjptsmfyrn"
+          ],
+          "verified_at": "2026-08-27T03:41:06Z"
+        },
+        {
+          "functions": [
+            "chat",
+            "chat-tools"
+          ],
+          "id": "KAT-Coder-Exp-72B-1010",
+          "source_urls": [
+            "https://www.streamlake.com/document/WANQING/mdsorb4ejjptsmfyrn"
+          ],
+          "verified_at": "2026-08-27T03:41:06Z"
+        }
+      ]
+    },
+    "xfyun": {
+      "free_basis": "讯飞星火 HTTP 接口文档将 Spark Lite 标记为“支持免费使用”的轻量级大语言模型（8K 输入 / 4K 输出），接口兼容 OpenAI SDK（base_url https://spark-api-open.xf-yun.com/v1）；产品页提供个人认证 20 万 tokens / 企业认证 100 万 tokens 免费包。",
+      "billing_warning": "仅 Lite 版本免费；Pro/Max/Ultra 按量计费。免费包按认证类型限量发放，耗尽后请勿继续调用以免产生费用。",
+      "source_urls": [
+        "https://www.xfyun.cn/doc/spark/HTTP%E8%B0%83%E7%94%A8%E6%96%87%E6%A1%A3.html",
+        "https://xinghuo.xfyun.cn/sparkapi"
+      ],
+      "discovery_status": "ready",
+      "discovery_message": "free model verified from official documentation",
+      "models": [
+        {
+          "functions": [
+            "chat"
+          ],
+          "id": "lite",
+          "source_urls": [
+            "https://www.xfyun.cn/doc/spark/HTTP%E8%B0%83%E7%94%A8%E6%96%87%E6%A1%A3.html"
+          ],
+          "verified_at": "2026-08-27T03:41:06Z"
+        }
+      ]
+    },
     "xiaomi-mimo": {
       "billing_warning": "赠送额度用完后停止使用或按账户计费设置执行，请先确认余额。",
       "discovery_message": "models endpoint returned 401 Unauthorized: Invalid API Key",
@@ -3460,8 +3541,50 @@
       ]
     },
     "zai": {
-      "discovery_status": "verification-failed",
-      "discovery_message": "agent could not identify free models from official catalog; provider abandoned"
+      "free_basis": "Z.AI 官方定价页将 GLM-4.5-Flash、GLM-4.7-Flash 标记为 Free（输入/输出/缓存均免费），GLM-4.6V-Flash 为免费视觉模型；其余 GLM 系列按量计费。",
+      "billing_warning": "仅清单内 Flash 免费系列零价；GLM-5.x 等付费模型请勿配置，避免产生费用。",
+      "source_urls": [
+        "https://docs.z.ai/guides/overview/pricing",
+        "https://docs.z.ai/guides/overview/quick-start"
+      ],
+      "discovery_status": "ready",
+      "discovery_message": "free models verified from official pricing page",
+      "models": [
+        {
+          "functions": [
+            "chat",
+            "chat-tools"
+          ],
+          "id": "GLM-4.5-Flash",
+          "source_urls": [
+            "https://docs.z.ai/guides/overview/pricing"
+          ],
+          "verified_at": "2026-08-27T03:41:06Z"
+        },
+        {
+          "functions": [
+            "chat",
+            "chat-tools"
+          ],
+          "id": "GLM-4.7-Flash",
+          "source_urls": [
+            "https://docs.z.ai/guides/overview/pricing"
+          ],
+          "verified_at": "2026-08-27T03:41:06Z"
+        },
+        {
+          "functions": [
+            "chat",
+            "chat-tools",
+            "image-understanding"
+          ],
+          "id": "GLM-4.6V-Flash",
+          "source_urls": [
+            "https://docs.z.ai/guides/overview/pricing"
+          ],
+          "verified_at": "2026-08-27T03:41:06Z"
+        }
+      ]
     }
   }
 }

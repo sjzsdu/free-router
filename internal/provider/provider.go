@@ -695,8 +695,8 @@ func builtins() []Spec {
 	return []Spec{
 		{ID: "openrouter", BaseURL: "https://openrouter.ai/api/v1", APIKeyEnv: "OPENROUTER_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "zero-price", Tier: "zero-price-models", RegisterURL: "https://openrouter.ai/keys", OAuth: true},
 		{ID: "groq", BaseURL: "https://api.groq.com/openai/v1", APIKeyEnv: "GROQ_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-tier", RegisterURL: "https://console.groq.com/keys"},
-		{ID: "cerebras", BaseURL: "https://api.cerebras.ai/v1", APIKeyEnv: "CEREBRAS_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-tier", RegisterURL: "https://cloud.cerebras.ai/"},
 		{ID: "gemini", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai", APIKeyEnv: "GEMINI_API_KEY", ModelDiscovery: "api-agent-filter", FreeModelPolicy: "all", Tier: "free-tier", RegisterURL: "https://aistudio.google.com/apikey"},
+		{ID: "cohere", BaseURL: "https://api.cohere.ai/compatibility/v1", APIKeyEnv: "COHERE_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-trial-quota", FreeKind: "trial", BillingWarning: "试用 Key 每月 1000 次调用，超出后需升级生产 Key；请勿绑定付费方式。", RegisterURL: "https://dashboard.cohere.com/api-keys"},
 		{ID: "github-models", BaseURL: "https://models.github.ai/inference", APIKeyEnv: "GITHUB_TOKEN", Headers: map[string]string{"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}, ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-tier", RegisterURL: "https://github.com/settings/personal-access-tokens/new"},
 		{ID: "pollinations", BaseURL: "https://gen.pollinations.ai/v1", APIKeyEnv: "POLLINATIONS_API_KEY", ModelDiscovery: "api-agent-filter", FreeModelPolicy: "all", Tier: "free-credits", RegisterURL: "https://enter.pollinations.ai/"},
 		{ID: "huggingface", BaseURL: "https://router.huggingface.co/v1", APIKeyEnv: "HF_TOKEN", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-credits", RegisterURL: "https://huggingface.co/settings/tokens"},
@@ -721,17 +721,13 @@ func builtins() []Spec {
 			RegisterURL: "https://console.volcengine.com/ark/region:ark+cn-beijing/apikey",
 		},
 		{
-			ID: "baichuan", BaseURL: "https://api.baichuan-ai.com/v1", APIKeyEnv: "BAICHUAN_API_KEY", ModelDiscovery: "agent",
-			Tier: "new-user-gift-credit", FreeKind: "credit", BillingWarning: "新用户赠送金有效期有限，余额耗尽后接口按平台价格计费。",
-			RegisterURL: "https://platform.baichuan-ai.com/homePage", RegisterLabel: "申请接入",
-		},
-		{
 			ID: "bigmodel", BaseURL: "https://open.bigmodel.cn/api/paas/v4", ModelDiscovery: "agent",
 			APIKeyEnv: "BIGMODEL_API_KEY", Tier: "free-flash-models", RegisterURL: "https://bigmodel.cn/usercenter/proj-mgmt/apikeys",
 		},
 		{
-			ID: "qianfan", BaseURL: "https://qianfan.baidubce.com/v2", ModelDiscovery: "api", FreeModelPolicy: "zero-price",
-			APIKeyEnv: "QIANFAN_API_KEY", Tier: "long-term-free-models", RegisterURL: "https://console.bce.baidu.com/qianfan/ais/console/apiKey",
+			ID: "xfyun", BaseURL: "https://spark-api-open.xf-yun.com/v1", ModelDiscovery: "agent",
+			APIKeyEnv: "XFYUN_API_KEY", Tier: "free-lite-model", FreeKind: "free", BillingWarning: "Spark Lite 免费使用；其他版本（Pro/Max/Ultra）按量计费，请勿配置付费版本密钥。",
+			RegisterURL: "https://console.xfyun.cn/services/spark",
 		},
 		{
 			ID: "siliconflow", BaseURL: "https://api.siliconflow.cn/v1",
@@ -739,6 +735,7 @@ func builtins() []Spec {
 			APIKeyEnv: "SILICONFLOW_API_KEY", Tier: "free-models", RegisterURL: "https://cloud.siliconflow.cn/account/ak",
 		},
 		{ID: "zai", BaseURL: "https://api.z.ai/api/paas/v4", APIKeyEnv: "ZAI_API_KEY", ModelDiscovery: "api-agent-filter", FreeModelPolicy: "all", Tier: "free-models", RegisterURL: "https://z.ai/manage-apikey/apikey-list"},
+		{ID: "wanqing", BaseURL: "https://wanqing.streamlakeapi.com/api/gateway/v1/endpoints", APIKeyEnv: "WQ_API_KEY", ModelDiscovery: "agent", FreeModelPolicy: "all", Tier: "free-kat-coder-air", FreeKind: "free", BillingWarning: "需先在万擎控制台创建在线推理服务，并把路由中该模型 ID 覆盖为推理点 ID（ep-xxx）才能调用；KAT-Coder-Air-V1 官方价格表免费。", RegisterURL: "https://console.streamlake.com/console/home/index"},
 		{ID: "cloudflare", BaseURL: "https://api.cloudflare.com/client/v4/accounts/" + cloudflareAccount + "/ai/v1", ModelsURL: "https://api.cloudflare.com/client/v4/accounts/" + cloudflareAccount + "/ai/models/search", APIKeyEnv: "CLOUDFLARE_API_TOKEN", RequiredEnvs: []string{"CLOUDFLARE_ACCOUNT_ID"}, UseNameAsID: true, ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "10000-neurons-per-day", RegisterURL: "https://dash.cloudflare.com/?to=%2F%3Aaccount%2Fai%2Fworkers-ai"},
 	}
 }
