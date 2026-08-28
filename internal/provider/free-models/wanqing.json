@@ -1,0 +1,35 @@
+{
+  "free_basis": "快手万擎官方模型服务价格表将 KAT-Coder-Air-V1 的输入/输出/缓存写入/缓存命中全部标记为“免费”（价格更新时间 2025/10/15），KAT-Coder-Exp-72B-1010 同样免费；其余 KAT-Coder-Pro/Air-V2.5 按 token 计费。API 兼容 OpenAI Chat Completions，但 model 参数需为控制台创建的在线推理点 ID（ep-xxx）。",
+  "billing_warning": "KAT-Coder-Air-V1 免费、其余版本按量计费；需先在万擎控制台创建在线推理服务并把模型 ID 覆盖为推理点 ID；免费推理额度是活动制，耗尽后按后付费出账，请确认账户无余额扣费风险。",
+  "source_urls": [
+    "https://www.streamlake.com/document/WANQING/mdsorb4ejjptsmfyrn",
+    "https://www.streamlake.com/document/WANQING/me6yi4shauyxx5fhdtv",
+    "https://www.streamlake.com/document/WANQING/mdsor5767ob7s796sp6"
+  ],
+  "discovery_status": "ready",
+  "discovery_message": "free model verified from official pricing page",
+  "models": [
+    {
+      "functions": [
+        "chat",
+        "chat-tools"
+      ],
+      "id": "KAT-Coder-Air-V1",
+      "source_urls": [
+        "https://www.streamlake.com/document/WANQING/mdsorb4ejjptsmfyrn"
+      ],
+      "verified_at": "2026-08-27T03:41:06Z"
+    },
+    {
+      "functions": [
+        "chat",
+        "chat-tools"
+      ],
+      "id": "KAT-Coder-Exp-72B-1010",
+      "source_urls": [
+        "https://www.streamlake.com/document/WANQING/mdsorb4ejjptsmfyrn"
+      ],
+      "verified_at": "2026-08-27T03:41:06Z"
+    }
+  ]
+}

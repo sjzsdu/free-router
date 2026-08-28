@@ -1,0 +1,8 @@
+{
+  "discovery_message": "fetch models: Get \"https://api.ollama.com/v1/models\": unexpected EOF",
+  "discovery_status": "discovery-failed",
+  "free_basis": "Models exposed to a configured free-tier account are subject to its usage limits.",
+  "source_urls": [
+    "https://ollama.com/cloud"
+  ]
+}

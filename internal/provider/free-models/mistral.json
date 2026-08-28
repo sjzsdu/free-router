@@ -1,0 +1,8 @@
+{
+  "discovery_message": "fetch models: Get \"https://api.mistral.ai/v1/models\": EOF",
+  "discovery_status": "discovery-failed",
+  "free_basis": "Models exposed to an Experiment Plan account are subject to experiment-plan limits.",
+  "source_urls": [
+    "https://docs.mistral.ai/deployment/ai-studio/tier/"
+  ]
+}

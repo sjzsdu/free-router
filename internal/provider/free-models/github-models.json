@@ -1,0 +1,8 @@
+{
+  "discovery_message": "models endpoint returned 401 Unauthorized: Unauthorized",
+  "discovery_status": "discovery-failed",
+  "free_basis": "GitHub Models provides rate-limited model experimentation at no cost.",
+  "source_urls": [
+    "https://docs.github.com/en/github-models/prototyping-with-ai-models"
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "discovery_message": "fetch models: Get \"https://api.cloudflare.com/client/v4/accounts//ai/models/search\": unexpected EOF",
+  "discovery_status": "discovery-failed",
+  "free_basis": "Workers AI includes a daily free allocation measured in Neurons.",
+  "source_urls": [
+    "https://developers.cloudflare.com/workers-ai/platform/pricing/"
+  ]
+}

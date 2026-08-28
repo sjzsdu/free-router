@@ -1,0 +1,8 @@
+{
+  "discovery_message": "fetch models: Get \"https://api.sambanova.ai/v1/models\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+  "discovery_status": "discovery-failed",
+  "free_basis": "Models exposed to a configured Free Tier account are subject to provider limits.",
+  "source_urls": [
+    "https://cloud.sambanova.ai/"
+  ]
+}

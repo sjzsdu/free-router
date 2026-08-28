@@ -1,0 +1,46 @@
+{
+  "free_basis": "Z.AI 官方定价页将 GLM-4.5-Flash、GLM-4.7-Flash 标记为 Free（输入/输出/缓存均免费），GLM-4.6V-Flash 为免费视觉模型；其余 GLM 系列按量计费。",
+  "billing_warning": "仅清单内 Flash 免费系列零价；GLM-5.x 等付费模型请勿配置，避免产生费用。",
+  "source_urls": [
+    "https://docs.z.ai/guides/overview/pricing",
+    "https://docs.z.ai/guides/overview/quick-start"
+  ],
+  "discovery_status": "ready",
+  "discovery_message": "free models verified from official pricing page",
+  "models": [
+    {
+      "functions": [
+        "chat",
+        "chat-tools"
+      ],
+      "id": "GLM-4.5-Flash",
+      "source_urls": [
+        "https://docs.z.ai/guides/overview/pricing"
+      ],
+      "verified_at": "2026-08-27T03:41:06Z"
+    },
+    {
+      "functions": [
+        "chat",
+        "chat-tools"
+      ],
+      "id": "GLM-4.7-Flash",
+      "source_urls": [
+        "https://docs.z.ai/guides/overview/pricing"
+      ],
+      "verified_at": "2026-08-27T03:41:06Z"
+    },
+    {
+      "functions": [
+        "chat",
+        "chat-tools",
+        "image-understanding"
+      ],
+      "id": "GLM-4.6V-Flash",
+      "source_urls": [
+        "https://docs.z.ai/guides/overview/pricing"
+      ],
+      "verified_at": "2026-08-27T03:41:06Z"
+    }
+  ]
+}
