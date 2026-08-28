@@ -1,0 +1,560 @@
+{
+  "free_basis": "Models exposed to the inference account consume its free inference quota.",
+  "source_urls": [
+    "https://modelscope.cn/docs/model-service/API-Inference/intro"
+  ],
+  "discovery_status": "ready",
+  "discovery_message": "official catalog accepted",
+  "models": [
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "LLM-Research/Llama-4-Maverick-17B-128E-Instruct",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "MedAIBase/AntAngelMed",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "MiniMax/MiniMax-M1-80k",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "MiniMax/MiniMax-M2.5",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "MiniMax/MiniMax-M2.7",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "MiniMax/MiniMax-M3",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "image-generation"
+      ],
+      "id": "MusePublic/Qwen-Image-Edit",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "image",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "OpenGVLab/InternVL3_5-241B-A28B",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "PaddlePaddle/ERNIE-4.5-0.3B-PT",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "PaddlePaddle/ERNIE-4.5-21B-A3B-PT",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "PaddlePaddle/ERNIE-4.5-300B-A47B-PT",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "PaddlePaddle/ERNIE-4.5-VL-28B-A3B-PT",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "image-generation"
+      ],
+      "id": "Qwen/Qwen-Image-Edit",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "image",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Qwen/Qwen3-14B",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Qwen/Qwen3-235B-A22B",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Qwen/Qwen3-235B-A22B-Thinking-2507",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Qwen/Qwen3-30B-A3B",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Qwen/Qwen3-30B-A3B-Thinking-2507",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Qwen/Qwen3-32B",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Qwen/Qwen3-4B",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Qwen/Qwen3-8B",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Qwen/Qwen3-Next-80B-A3B-Thinking",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Qwen/Qwen3-VL-235B-A22B-Instruct",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Qwen/Qwen3-VL-8B-Instruct",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Qwen/Qwen3-VL-8B-Thinking",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Qwen/Qwen3.5-122B-A10B",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Qwen/Qwen3.5-27B",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Qwen/Qwen3.5-35B-A3B",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Qwen/Qwen3.5-397B-A17B",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Shanghai_AI_Laboratory/Intern-S1",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Shanghai_AI_Laboratory/Intern-S1-mini",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Shanghai_AI_Laboratory/Intern-S2-Preview",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "Tencent-Hunyuan/Hy3",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "XGenerationLab/XiYanSQL-QwenCoder-32B-2412",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "XGenerationLab/XiYanSQL-QwenCoder-32B-2504",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "XiaomiMiMo/MiMo-V2-Flash",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "ZhipuAI/GLM-4.7-Flash",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "ZhipuAI/GLM-5",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "ZhipuAI/GLM-5.1",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "ZhipuAI/GLM-5.2",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "deepseek-ai/DeepSeek-V3.2",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "deepseek-ai/DeepSeek-V4-Flash",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "deepseek-ai/DeepSeek-V4-Pro",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "iic/GUI-Owl-1.5-8B-Instruct",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "iic/GUI-Owl-1.5-8B-Think",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "meituan-longcat/LongCat-Flash-Lite",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "mistralai/Mistral-Large-Instruct-2407",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "moonshotai/Kimi-K2.5",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "nex-agi/Nex-N2-Pro",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "opencompass/CompassJudger-1-32B-Instruct",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "stepfun-ai/Step-3.5-Flash",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "stepfun-ai/Step-3.7-Flash",
+      "owned_by": "system",
+      "pricing": {},
+      "type": "normal",
+      "verified_at": "2026-07-27T05:40:09Z"
+    }
+  ]
+}

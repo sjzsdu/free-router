@@ -1,0 +1,9 @@
+{
+  "billing_warning": "赠送额度用完后停止使用或按账户计费设置执行，请先确认余额。",
+  "discovery_message": "models endpoint returned 401 Unauthorized: Invalid API Key",
+  "discovery_status": "discovery-failed",
+  "free_basis": "Models consume account gift credits; this is a limited credit rather than permanent zero pricing.",
+  "source_urls": [
+    "https://platform.xiaomimimo.com/"
+  ]
+}

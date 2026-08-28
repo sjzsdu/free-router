@@ -113,6 +113,14 @@ type DiscoveryFailure struct {
 func (e *ModelProbeError) Error() string    { return e.Message }
 func (e *ProviderProbeError) Error() string { return e.Message }
 
+// ProbeRequestBuilder constructs the outgoing HTTP request for a capability
+// probe. Routing it through the adapter layer (instead of building an
+// OpenAI-shaped request directly) lets non-OpenAI providers be exercised on
+// their real wire protocol, mirroring how the gateway serves live traffic.
+type ProbeRequestBuilder interface {
+	BuildProbeRequest(ctx context.Context, model Model, spec provider.Spec, method, endpoint, contentType, function string, body []byte) (*http.Request, error)
+}
+
 func newDiscoveryFailure(providerID string, err error) DiscoveryFailure {
 	failure := DiscoveryFailure{Provider: providerID, Category: "unknown", Error: err.Error()}
 	var providerErr *ProviderProbeError
@@ -195,6 +203,7 @@ type Store struct {
 	cache                string
 	client               *http.Client
 	probeRunner          *ProbeRunner
+	probeBuilder         ProbeRequestBuilder
 	refreshMu            sync.Mutex
 	mu                   sync.RWMutex
 	models               []Model
@@ -236,6 +245,14 @@ func New(registry *provider.Registry, cache string, client *http.Client) *Store 
 		quarantine: make(map[string]string), verifiedTools: make(map[string]bool),
 		verifiedCapabilities: make(map[string]CapabilityVerification),
 	}
+}
+
+// SetProbeBuilder routes capability probes through the given request builder
+// (typically the adapter registry) so non-OpenAI providers are probed on their
+// real wire protocol. When unset, probes fall back to a direct OpenAI-shaped
+// request for backward compatibility.
+func (s *Store) SetProbeBuilder(builder ProbeRequestBuilder) {
+	s.probeBuilder = builder
 }
 
 func (s *Store) Bootstrap(ctx context.Context) error {
@@ -618,6 +635,9 @@ func (s *Store) ProbeModel(ctx context.Context, modelID, function string) (Model
 	runner := s.probeRunner
 	if runner == nil {
 		runner = NewProbeRunner(s.client)
+	}
+	if s.probeBuilder != nil {
+		runner = runner.WithBuilder(s.probeBuilder)
 	}
 	return runner.Run(ctx, model, spec, function)
 }

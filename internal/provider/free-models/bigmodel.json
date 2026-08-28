@@ -1,0 +1,57 @@
+{
+  "free_basis": "智谱开放平台定价页将 GLM-4-Flash-250414（128K）、GLM-Z1-Flash（128K 推理）、GLM-4.7-Flash（200K）、GLM-4.6V-Flash（多模态）标记为免费；其余模型按量计费。",
+  "billing_warning": "仅清单内 Flash 免费系列零价；其他模型按量计费，请勿配置付费模型密钥。",
+  "source_urls": [
+    "https://open.bigmodel.cn/pricing",
+    "https://bigmodel.cn/dev/api/normal-model/glm-4"
+  ],
+  "discovery_status": "ready",
+  "discovery_message": "free models verified from official pricing page",
+  "models": [
+    {
+      "functions": [
+        "chat",
+        "chat-tools"
+      ],
+      "id": "GLM-4-Flash-250414",
+      "source_urls": [
+        "https://open.bigmodel.cn/pricing"
+      ],
+      "verified_at": "2026-08-27T03:41:06Z"
+    },
+    {
+      "functions": [
+        "chat",
+        "chat-tools"
+      ],
+      "id": "GLM-Z1-Flash",
+      "source_urls": [
+        "https://open.bigmodel.cn/pricing"
+      ],
+      "verified_at": "2026-08-27T03:41:06Z"
+    },
+    {
+      "functions": [
+        "chat",
+        "chat-tools"
+      ],
+      "id": "GLM-4.7-Flash",
+      "source_urls": [
+        "https://open.bigmodel.cn/pricing"
+      ],
+      "verified_at": "2026-08-27T03:41:06Z"
+    },
+    {
+      "functions": [
+        "chat",
+        "chat-tools",
+        "image-understanding"
+      ],
+      "id": "GLM-4.6V-Flash",
+      "source_urls": [
+        "https://open.bigmodel.cn/pricing"
+      ],
+      "verified_at": "2026-08-27T03:41:06Z"
+    }
+  ]
+}

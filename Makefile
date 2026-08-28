@@ -70,7 +70,7 @@ run: web-build ## Run the service
 	$(GO) run -ldflags="$(LDFLAGS)" . serve
 
 validate-free-models: ## Validate the generated free model manifest
-	$(GO) run . validate-model-data internal/provider/free-models.json
+	$(GO) run . validate-model-data internal/provider/free-models
 
 test: ## Run unit and integration tests
 	$(GO) test ./...

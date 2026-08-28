@@ -1,0 +1,26 @@
+{
+  "free_basis": "官方产品页列明Doubao-Seed-2.1-pro、Doubao-Seed-2.1-turbo、Doubao-Seed-Evolving各有50万tokens试用额度；仅Doubao-Seed-Evolving同时核实到固定公共Model ID并可由项目的北京方舟/api/v3端点直接调用。",
+  "billing_warning": "Doubao-Seed-Evolving免费额度耗尽后按量计费：6元/百万输入tokens、30元/百万输出tokens；服务地域为华北2（北京，cn-beijing）。官方公开产品页未注明这50万tokens的领取条件和有效期，须以方舟开通管理页实际显示的到期时间为准，不能视为永久免费。",
+  "source_urls": [
+    "https://www.volcengine.com/docs/82379/1099320",
+    "https://www.volcengine.com/docs/82379/1544106",
+    "https://www.volcengine.com/docs/82379/1554711",
+    "https://www.volcengine.com/product/ark",
+    "https://www.volcengine.com/docs/82379/2373740"
+  ],
+  "discovery_status": "ready",
+  "discovery_message": "agent inventory accepted",
+  "models": [
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "doubao-seed-evolving",
+      "source_urls": [
+        "https://www.volcengine.com/product/ark",
+        "https://www.volcengine.com/docs/82379/2373740"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    }
+  ]
+}

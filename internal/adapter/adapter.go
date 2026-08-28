@@ -91,6 +91,23 @@ func (r *Registry) Resolve(spec provider.Spec) ProviderAdapter {
 	return r.Get(spec.ID)
 }
 
+// BuildProbeRequest adapts a catalog probe into the provider's real wire
+// request. It implements catalog.ProbeRequestBuilder so discovery and
+// model validation probe non-OpenAI providers on their actual protocol.
+func (r *Registry) BuildProbeRequest(ctx context.Context, model catalog.Model, spec provider.Spec, method, endpoint, contentType, function string, body []byte) (*http.Request, error) {
+	return r.Resolve(spec).BuildRequest(Request{
+		Context:     ctx,
+		Method:      method,
+		Endpoint:    endpoint,
+		Model:       model,
+		Provider:    spec,
+		Body:        body,
+		ContentType: contentType,
+		Stream:      false,
+		Function:    function,
+	})
+}
+
 type OpenAICompatibleAdapter struct{}
 
 func (a *OpenAICompatibleAdapter) Name() string {

@@ -2,12 +2,14 @@ package provider
 
 import (
 	"bytes"
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -15,8 +17,8 @@ import (
 	"sync"
 )
 
-//go:embed free-models.json
-var embeddedFreeModels []byte
+//go:embed free-models
+var embeddedFreeModels embed.FS
 
 var manifestPrice = regexp.MustCompile(`^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$`)
 
@@ -111,14 +113,28 @@ type FreeProviderDetails struct {
 }
 
 func loadFreeModelManifest(path string) (FreeModelManifest, error) {
-	content := embeddedFreeModels
-	if strings.TrimSpace(path) != "" {
-		var err error
-		content, err = os.ReadFile(path)
-		if err != nil {
-			return FreeModelManifest{}, fmt.Errorf("read free model manifest: %w", err)
-		}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return mergeFreeModelManifestDirFS(embeddedFreeModels, "free-models")
 	}
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return mergeFreeModelManifestDir(path)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return FreeModelManifest{}, fmt.Errorf("read free model manifest: %w", err)
+	}
+	manifest, err := decodeFreeModelManifest(content)
+	if err != nil {
+		return FreeModelManifest{}, err
+	}
+	if err := ValidateFreeModelManifest(manifest); err != nil {
+		return FreeModelManifest{}, err
+	}
+	return manifest, nil
+}
+
+func decodeFreeModelManifest(content []byte) (FreeModelManifest, error) {
 	var manifest FreeModelManifest
 	decoder := json.NewDecoder(bytes.NewReader(content))
 	decoder.DisallowUnknownFields()
@@ -132,10 +148,98 @@ func loadFreeModelManifest(path string) (FreeModelManifest, error) {
 		}
 		return FreeModelManifest{}, fmt.Errorf("decode free model manifest: %w", err)
 	}
+	return manifest, nil
+}
+
+func mergeFreeModelManifestDirFS(fsys embed.FS, dir string) (FreeModelManifest, error) {
+	entries, err := fsys.ReadDir(dir)
+	if err != nil {
+		return FreeModelManifest{}, fmt.Errorf("read embedded free model manifest: %w", err)
+	}
+	manifest := FreeModelManifest{SchemaVersion: 2, Providers: map[string]FreeProviderCatalog{}}
+	if err := applyFreeModelManifestMeta(&manifest, func(name string) ([]byte, error) {
+		return fsys.ReadFile(dir + "/" + name)
+	}, entries); err != nil {
+		return FreeModelManifest{}, err
+	}
+	if err := mergeFreeModelManifestEntries(manifest.Providers, func(name string) ([]byte, error) {
+		return fsys.ReadFile(dir + "/" + name)
+	}, entries); err != nil {
+		return FreeModelManifest{}, err
+	}
 	if err := ValidateFreeModelManifest(manifest); err != nil {
 		return FreeModelManifest{}, err
 	}
 	return manifest, nil
+}
+
+func mergeFreeModelManifestDir(dir string) (FreeModelManifest, error) {
+	entries, err := fs.ReadDir(os.DirFS(dir), ".")
+	if err != nil {
+		return FreeModelManifest{}, fmt.Errorf("read free model manifest directory: %w", err)
+	}
+	manifest := FreeModelManifest{SchemaVersion: 2, Providers: map[string]FreeProviderCatalog{}}
+	if err := applyFreeModelManifestMeta(&manifest, func(name string) ([]byte, error) {
+		return os.ReadFile(filepath.Join(dir, name))
+	}, entries); err != nil {
+		return FreeModelManifest{}, err
+	}
+	if err := mergeFreeModelManifestEntries(manifest.Providers, func(name string) ([]byte, error) {
+		return os.ReadFile(filepath.Join(dir, name))
+	}, entries); err != nil {
+		return FreeModelManifest{}, err
+	}
+	if err := ValidateFreeModelManifest(manifest); err != nil {
+		return FreeModelManifest{}, err
+	}
+	return manifest, nil
+}
+
+func applyFreeModelManifestMeta(manifest *FreeModelManifest, read func(string) ([]byte, error), entries []fs.DirEntry) error {
+	for _, entry := range entries {
+		if entry.Name() != "meta.json" {
+			continue
+		}
+		content, err := read(entry.Name())
+		if err != nil {
+			return err
+		}
+		var meta struct {
+			SchemaVersion int    `json:"schema_version"`
+			GeneratedAt   string `json:"generated_at"`
+		}
+		if err := json.Unmarshal(content, &meta); err != nil {
+			return fmt.Errorf("decode manifest meta %s: %w", entry.Name(), err)
+		}
+		if meta.SchemaVersion != 0 {
+			manifest.SchemaVersion = meta.SchemaVersion
+		}
+		manifest.GeneratedAt = meta.GeneratedAt
+	}
+	return nil
+}
+
+func mergeFreeModelManifestEntries(providers map[string]FreeProviderCatalog, read func(string) ([]byte, error), entries []fs.DirEntry) error {
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".json") || name == "meta.json" {
+			continue
+		}
+		content, err := read(name)
+		if err != nil {
+			return err
+		}
+		var catalog FreeProviderCatalog
+		if err := json.Unmarshal(content, &catalog); err != nil {
+			return fmt.Errorf("decode provider manifest %s: %w", name, err)
+		}
+		id := strings.TrimSuffix(name, ".json")
+		providers[id] = catalog
+	}
+	if len(providers) == 0 {
+		return fmt.Errorf("no provider manifests found")
+	}
+	return nil
 }
 
 func LoadFreeModelManifest(path string) (FreeModelManifest, error) {

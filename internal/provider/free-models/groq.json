@@ -1,0 +1,243 @@
+{
+  "free_basis": "Groq官方Rate Limits页面为这些当前目录ID列出明确的Free Plan模型级RPM/RPD/TPM/TPD或ASH/ASD限额。",
+  "source_urls": [
+    "https://console.groq.com/docs/models",
+    "https://console.groq.com/docs/rate-limits",
+    "https://console.groq.com/docs/deprecations",
+    "https://console.groq.com/docs/tool-use/overview"
+  ],
+  "discovery_status": "ready",
+  "discovery_message": "official API unavailable; inventory recovered from official documentation",
+  "models": [
+    {
+      "context_length": 4000,
+      "functions": [
+        "text-to-speech"
+      ],
+      "id": "canopylabs/orpheus-arabic-saudi",
+      "max_output_tokens": 50000,
+      "source_urls": [
+        "https://console.groq.com/docs/model/canopylabs/orpheus-arabic-saudi"
+      ],
+      "supported_parameters": [],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "context_length": 4000,
+      "functions": [
+        "text-to-speech"
+      ],
+      "id": "canopylabs/orpheus-v1-english",
+      "max_output_tokens": 50000,
+      "source_urls": [
+        "https://console.groq.com/docs/model/canopylabs/orpheus-v1-english"
+      ],
+      "supported_parameters": [],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "context_length": 131072,
+      "functions": [
+        "chat"
+      ],
+      "id": "groq/compound",
+      "max_output_tokens": 8192,
+      "source_urls": [
+        "https://console.groq.com/docs/compound/systems/compound"
+      ],
+      "supported_parameters": [
+        "response_format"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "context_length": 131072,
+      "functions": [
+        "chat"
+      ],
+      "id": "groq/compound-mini",
+      "max_output_tokens": 8192,
+      "source_urls": [
+        "https://console.groq.com/docs/compound/systems/compound-mini"
+      ],
+      "supported_parameters": [
+        "response_format"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "context_length": 131072,
+      "functions": [
+        "chat",
+        "chat-tools"
+      ],
+      "id": "llama-3.1-8b-instant",
+      "max_output_tokens": 131072,
+      "source_urls": [
+        "https://console.groq.com/docs/model/llama-3.1-8b-instant"
+      ],
+      "supported_parameters": [
+        "parallel_tool_calls",
+        "response_format",
+        "tool_choice",
+        "tools"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "context_length": 131072,
+      "functions": [
+        "chat",
+        "chat-tools"
+      ],
+      "id": "llama-3.3-70b-versatile",
+      "max_output_tokens": 32768,
+      "source_urls": [
+        "https://console.groq.com/docs/model/llama-3.3-70b-versatile"
+      ],
+      "supported_parameters": [
+        "parallel_tool_calls",
+        "response_format",
+        "tool_choice",
+        "tools"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "context_length": 512,
+      "functions": [
+        "moderation"
+      ],
+      "id": "meta-llama/llama-prompt-guard-2-22m",
+      "max_output_tokens": 512,
+      "source_urls": [
+        "https://console.groq.com/docs/model/meta-llama/llama-prompt-guard-2-22m"
+      ],
+      "supported_parameters": [],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "context_length": 512,
+      "functions": [
+        "moderation"
+      ],
+      "id": "meta-llama/llama-prompt-guard-2-86m",
+      "max_output_tokens": 512,
+      "source_urls": [
+        "https://console.groq.com/docs/model/meta-llama/llama-prompt-guard-2-86m"
+      ],
+      "supported_parameters": [
+        "response_format"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "context_length": 131072,
+      "functions": [
+        "chat",
+        "chat-tools"
+      ],
+      "id": "openai/gpt-oss-120b",
+      "max_output_tokens": 65536,
+      "source_urls": [
+        "https://console.groq.com/docs/model/openai/gpt-oss-120b"
+      ],
+      "supported_parameters": [
+        "include_reasoning",
+        "reasoning_effort",
+        "reasoning_format",
+        "response_format",
+        "tool_choice",
+        "tools"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "context_length": 131072,
+      "functions": [
+        "chat",
+        "chat-tools"
+      ],
+      "id": "openai/gpt-oss-20b",
+      "max_output_tokens": 65536,
+      "source_urls": [
+        "https://console.groq.com/docs/model/openai/gpt-oss-20b"
+      ],
+      "supported_parameters": [
+        "include_reasoning",
+        "reasoning_effort",
+        "reasoning_format",
+        "response_format",
+        "tool_choice",
+        "tools"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "context_length": 131072,
+      "functions": [
+        "moderation"
+      ],
+      "id": "openai/gpt-oss-safeguard-20b",
+      "max_output_tokens": 65536,
+      "source_urls": [
+        "https://console.groq.com/docs/model/openai/gpt-oss-safeguard-20b"
+      ],
+      "supported_parameters": [
+        "include_reasoning",
+        "reasoning_format",
+        "response_format"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "context_length": 131072,
+      "functions": [
+        "chat",
+        "chat-tools",
+        "image-understanding"
+      ],
+      "id": "qwen/qwen3.6-27b",
+      "max_output_tokens": 16384,
+      "source_urls": [
+        "https://console.groq.com/docs/model/qwen/qwen3.6-27b"
+      ],
+      "supported_parameters": [
+        "include_reasoning",
+        "parallel_tool_calls",
+        "reasoning_effort",
+        "reasoning_format",
+        "response_format",
+        "tool_choice",
+        "tools"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "context_length": 0,
+      "functions": [
+        "speech-to-text"
+      ],
+      "id": "whisper-large-v3",
+      "max_output_tokens": 0,
+      "source_urls": [
+        "https://console.groq.com/docs/model/whisper-large-v3"
+      ],
+      "supported_parameters": [],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "context_length": 0,
+      "functions": [
+        "speech-to-text"
+      ],
+      "id": "whisper-large-v3-turbo",
+      "max_output_tokens": 0,
+      "source_urls": [
+        "https://console.groq.com/docs/model/whisper-large-v3-turbo"
+      ],
+      "supported_parameters": [],
+      "verified_at": "2026-07-27T05:40:09Z"
+    }
+  ]
+}

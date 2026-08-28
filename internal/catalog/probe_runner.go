@@ -15,10 +15,20 @@ import (
 // ProbeRunner builds and executes minimal capability-specific inference
 // requests. It is independent from catalog persistence and publication.
 type ProbeRunner struct {
-	client *http.Client
+	client  *http.Client
+	builder ProbeRequestBuilder
 }
 
 func NewProbeRunner(client *http.Client) *ProbeRunner { return &ProbeRunner{client: client} }
+
+// WithBuilder returns a copy of the runner that routes request construction
+// through the given builder (the adapter registry) instead of the built-in
+// OpenAI-shaped fallback.
+func (p *ProbeRunner) WithBuilder(builder ProbeRequestBuilder) *ProbeRunner {
+	clone := *p
+	clone.builder = builder
+	return &clone
+}
 
 func (p *ProbeRunner) Run(ctx context.Context, model Model, spec provider.Spec, function string) (ModelProbeResult, error) {
 	var endpoint string
@@ -88,15 +98,21 @@ func (p *ProbeRunner) Run(ctx context.Context, model Model, spec provider.Spec, 
 			return ModelProbeResult{}, err
 		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, spec.APIEndpoint(endpoint), bytes.NewReader(payload))
-	if err != nil {
-		return ModelProbeResult{}, err
-	}
-	req.Header.Set("Content-Type", contentType)
-	headers := cloneMap(spec.Headers)
-	spec.ApplyAuth(headers)
-	for key, value := range headers {
-		req.Header.Set(key, value)
+	var req *http.Request
+	var err error
+	if p.builder != nil {
+		req, err = p.builder.BuildProbeRequest(ctx, model, spec, http.MethodPost, endpoint, contentType, function, payload)
+	} else {
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, spec.APIEndpoint(endpoint), bytes.NewReader(payload))
+		if err != nil {
+			return ModelProbeResult{}, err
+		}
+		req.Header.Set("Content-Type", contentType)
+		headers := cloneMap(spec.Headers)
+		spec.ApplyAuth(headers)
+		for key, value := range headers {
+			req.Header.Set(key, value)
+		}
 	}
 	resp, err := p.client.Do(req)
 	if err != nil {

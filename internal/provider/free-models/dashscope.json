@@ -1,0 +1,297 @@
+{
+  "free_basis": "首次开通百炼后自动发放模型独立的新人限时免费额度；下列模型经官方价格表逐项确认均为100万Token，不是永久零价。",
+  "billing_warning": "有效期为开通百炼、模型发布或申请通过之日起90天（取较晚者）；仅抵扣实时推理，Batch不适用。除glm-5.2、glm-5.1在新加坡国际部署也明确有额度外，其余按华北2（北京）中国内地部署口径；额度耗尽或过期后，已认证账户未开启“免费额度用完即停”将按量计费。",
+  "source_urls": [
+    "https://help.aliyun.com/zh/model-studio/getting-started/models",
+    "https://help.aliyun.com/zh/model-studio/model-pricing",
+    "https://help.aliyun.com/zh/model-studio/new-free-quota",
+    "https://help.aliyun.com/zh/model-studio/qwen-api-reference",
+    "https://help.aliyun.com/zh/model-studio/deepseek-api",
+    "https://help.aliyun.com/zh/model-studio/kimi-api",
+    "https://help.aliyun.com/zh/model-studio/minimax-api"
+  ],
+  "discovery_status": "ready",
+  "discovery_message": "official API unavailable; inventory recovered from official documentation",
+  "models": [
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "MiniMax-M2.5",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/minimax-api"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "deepseek-v3.2",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/deepseek-api"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "deepseek-v4-flash",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/deepseek-api"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "deepseek-v4-pro",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/deepseek-api"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "glm-4.5",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/model-pricing"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "glm-4.5-air",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/model-pricing"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "glm-4.6",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/model-pricing"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "glm-4.7",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/model-pricing"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "glm-5",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/model-pricing"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "glm-5.1",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/model-pricing"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "glm-5.2",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/model-pricing"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "kimi-k2.5",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/kimi-api"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "kimi-k2.6",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/kimi-api"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "kimi-k2.7-code",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/kimi-api"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "qwen-flash",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "qwen-long",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/long-context-qwen-long"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "qwen-plus",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "qwen-plus-latest",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "qwen-turbo",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "qwen3-coder-flash",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/qwen-coder"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "qwen3.5-flash",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "qwen3.5-plus",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "qwen3.6-flash",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "qwen3.6-plus",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "qwen3.7-flash",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "qwen3.7-max",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "qwen3.7-plus",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "qwq-plus",
+      "source_urls": [
+        "https://help.aliyun.com/zh/model-studio/qwen-api-reference"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    }
+  ]
+}

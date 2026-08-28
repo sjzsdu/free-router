@@ -1,0 +1,22 @@
+{
+  "free_basis": "讯飞星火 HTTP 接口文档将 Spark Lite 标记为“支持免费使用”的轻量级大语言模型（8K 输入 / 4K 输出），接口兼容 OpenAI SDK（base_url https://spark-api-open.xf-yun.com/v1）；产品页提供个人认证 20 万 tokens / 企业认证 100 万 tokens 免费包。",
+  "billing_warning": "仅 Lite 版本免费；Pro/Max/Ultra 按量计费。免费包按认证类型限量发放，耗尽后请勿继续调用以免产生费用。",
+  "source_urls": [
+    "https://www.xfyun.cn/doc/spark/HTTP%E8%B0%83%E7%94%A8%E6%96%87%E6%A1%A3.html",
+    "https://xinghuo.xfyun.cn/sparkapi"
+  ],
+  "discovery_status": "ready",
+  "discovery_message": "free model verified from official documentation",
+  "models": [
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "lite",
+      "source_urls": [
+        "https://www.xfyun.cn/doc/spark/HTTP%E8%B0%83%E7%94%A8%E6%96%87%E6%A1%A3.html"
+      ],
+      "verified_at": "2026-08-27T03:41:06Z"
+    }
+  ]
+}

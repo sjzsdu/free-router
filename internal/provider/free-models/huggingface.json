@@ -1,0 +1,68 @@
+{
+  "free_basis": "Hugging Face Router 按账户每月发放 Inference Providers credits：Free 用户 $0.10（可能调整）、PRO 用户 $2、Team/Enterprise 每席位 $2；这是账户额度，不代表模型零价，且仅适用于通过 Hugging Face 路由并符合条件的 providers。",
+  "billing_warning": "月度 credits 耗尽后不会继续免费；需购买额外 credits 才能继续按 provider 原价计费。使用自定义 provider key 时 credits 不适用，由该 provider 直接计费。",
+  "source_urls": [
+    "https://huggingface.co/docs/inference-providers/pricing",
+    "https://huggingface.co/docs/inference-providers/index",
+    "https://huggingface.co/docs/inference-providers/tasks/chat-completion",
+    "https://huggingface.co/docs/inference-providers/hub-api"
+  ],
+  "discovery_status": "ready",
+  "discovery_message": "official API unavailable; inventory recovered from official documentation",
+  "models": [
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "deepseek-ai/DeepSeek-R1",
+      "source_urls": [
+        "https://huggingface.co/docs/inference-providers/index",
+        "https://huggingface.co/deepseek-ai/DeepSeek-R1"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "deepseek-ai/DeepSeek-V4-Pro",
+      "source_urls": [
+        "https://huggingface.co/docs/inference-providers/hub-api"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "google/gemma-3-27b-it",
+      "source_urls": [
+        "https://huggingface.co/docs/inference-providers/hub-api",
+        "https://huggingface.co/google/gemma-3-27b-it"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "google/gemma-4-31B-it",
+      "source_urls": [
+        "https://huggingface.co/docs/inference-providers/tasks/chat-completion",
+        "https://huggingface.co/google/gemma-4-31B-it"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    },
+    {
+      "functions": [
+        "chat"
+      ],
+      "id": "openai/gpt-oss-120b",
+      "source_urls": [
+        "https://huggingface.co/docs/inference-providers/tasks/chat-completion",
+        "https://huggingface.co/openai/gpt-oss-120b"
+      ],
+      "verified_at": "2026-07-27T05:40:09Z"
+    }
+  ]
+}

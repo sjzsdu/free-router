@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sjzsdu/free-router/internal/adapter"
 	"github.com/sjzsdu/free-router/internal/admin"
 	"github.com/sjzsdu/free-router/internal/appdirs"
 	"github.com/sjzsdu/free-router/internal/catalog"
@@ -72,6 +73,7 @@ func Execute() error {
 	addTrayCommand(root, &opts)
 	addOnboardCommand(root, &opts)
 	addDiscoveryCommand(root, &opts)
+	addModelValidationCommand(root, &opts)
 
 	serve := &cobra.Command{
 		Use:   "serve",
@@ -199,6 +201,8 @@ func runServer(ctx context.Context, opts options) error {
 		return err
 	}
 	store := catalog.New(registry, opts.cache, catalogHTTPClient())
+	adapters := adapter.NewRegistry()
+	store.SetProbeBuilder(adapters)
 	if err := store.Bootstrap(ctx); err != nil {
 		return fmt.Errorf("load free model catalog: %w", err)
 	}
@@ -212,7 +216,7 @@ func runServer(ctx context.Context, opts options) error {
 		return fmt.Errorf("load model statistics: %w", err)
 	}
 	httpClient := transport.NewClient(transport.NewConfig())
-	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts, Routes: routes, Health: tracker, APIToken: opts.apiToken, Statistics: stats}, httpClient)
+	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts, Routes: routes, Health: tracker, APIToken: opts.apiToken, Statistics: stats, Adapters: adapters}, httpClient)
 	reloadProviders := func(providerEnv map[string][]string) (func(), error) {
 		rollback := registry.Backup()
 		if err := registry.ReloadWithManifest(opts.providers, provider.EnvMap(providerEnv), opts.freeModels, vault.Get); err != nil {

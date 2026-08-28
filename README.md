@@ -34,7 +34,7 @@
 
 ### 免费源验证与可信度边界
 
-内置 `free-models.json` 是带来源链接和生成时间的维护清单，不等同于当前账户的实时可调用证明。运行时只有同时满足以下条件的模型才进入稳定能力路由：清单仍包含该模型、对应 Provider 已配置、该“模型 + 能力”最近一次探测成功且未被健康检查隔离。
+内置 `free-models/`（按 Provider 拆分的 `<id>.json` 与 `meta.json`）是带来源链接和生成时间的维护清单，不等同于当前账户的实时可调用证明。运行时只有同时满足以下条件的模型才进入稳定能力路由：清单仍包含该模型、对应 Provider 已配置、该“模型 + 能力”最近一次探测成功且未被健康检查隔离。
 
 维护者可用隐藏命令生成可复现的目录发现证据：
 
@@ -276,7 +276,7 @@ free-router 的全局配置与运行资料统一存放在 `~/.free-router`：
 ~/.free-router/
 ├── config.json       # 路由、Provider 环境变量映射和模型覆盖
 ├── credentials.json  # Keychain 不可用时的仅限当前用户凭据文件
-├── free-models.json  # 可选的外部免费模型清单
+├── free-models/      # 可选的外部免费模型清单目录（按 Provider 拆分的 <id>.json + meta.json）
 ├── models.json       # 自动维护的模型目录缓存
 ├── daemon-env.json   # 守护进程环境快照
 └── free-router.log   # macOS 守护进程日志
@@ -339,23 +339,23 @@ free-router onboard --force            # 明确覆盖已有配置
 
 可信模型目录、调用凭据和健康状态是三类独立数据：
 
-1. `internal/provider/free-models.json` 是维护者核实并提交的版本化数据文件，通过 Go Embed 随二进制发布；每个 Provider 只有经过官方来源确认的 `models[]`，不再存在 policy 或运行时 allowlist。
+1. `internal/provider/free-models/<provider>.json` 是维护者按 Provider 拆分、核实并提交的版本化数据文件，与 `meta.json`（清单级 `schema_version` / `generated_at`）一起通过 Go Embed 随二进制发布；每个 Provider 只有经过官方来源确认的 `models[]`，不再存在 policy 或运行时 allowlist。
 2. 读取和缓存内置模型不需要配置 API Key。API Key 只负责启用对应 Provider 的实际调用能力，不参与模型发现，也不会改变目录内容。
 3. 启动、保存凭据和 Admin 操作均不会请求 Provider `/models` 扩充目录。运行时代码只消费内置清单数据，Provider 连接地址和鉴权逻辑仍留在 Go 代码中。
 4. `~/.free-router/models.json` 使用内置模型目录的稳定内容指纹校验缓存。普通模型调用失败只在内存中隔离对应的模型能力，不会删除目录中的整个模型；别名自动路由会避开该失败能力，直接指定完整模型 ID 调用成功后会恢复它。
 5. Admin 主动探测失败才会从缓存持久清退整个模型，并记录模型关键路由元数据指纹。被清退模型只有自身元数据发生变化，或用户显式重新检测并验证成功后才会恢复；重启或仅更新描述、`generated_at` 均不会清空该隔离。
-6. 可用 `--free-models FILE` 或 `FREE_ROUTER_FREE_MODELS` 临时加载外部清单，无需重新构建二进制。
+6. 可用 `--free-models FILE` 或 `FREE_ROUTER_FREE_MODELS` 临时加载外部清单（单个 JSON 文件，或包含多个 `<provider>.json` 与 `meta.json` 的目录），无需重新构建二进制。
 
 ### 维护免费模型清单
 
-维护者直接核实并更新 `internal/provider/free-models.json`。模型 ID、免费条件和来源必须来自 Provider 官方 API、模型目录、价格页或文档；一次网络失败不能作为删除旧模型的依据。修改后运行与程序启动时相同的严格校验：
+维护者直接核实并更新 `internal/provider/free-models/<provider>.json`。模型 ID、免费条件和来源必须来自 Provider 官方 API、模型目录、价格页或文档；一次网络失败不能作为删除旧模型的依据。修改后运行与程序启动时相同的严格校验：
 
 ```bash
 make validate-free-models
 go test ./internal/provider ./internal/catalog ./cmd
 ```
 
-业务代码无需跟随模型名单变化。若只想在本机立即使用另一份清单，可通过 `--free-models FILE` 或 `FREE_ROUTER_FREE_MODELS` 加载外部文件。
+业务代码无需跟随模型名单变化。若只想在本机立即使用另一份清单，可通过 `--free-models FILE` 或 `FREE_ROUTER_FREE_MODELS` 加载外部文件或目录。
 
 ## 接入任意免费源
 
