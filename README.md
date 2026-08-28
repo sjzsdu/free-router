@@ -348,12 +348,26 @@ free-router onboard --force            # 明确覆盖已有配置
 
 ### 维护免费模型清单
 
-维护者直接核实并更新 `internal/provider/free-models/<provider>.json`。模型 ID、免费条件和来源必须来自 Provider 官方 API、模型目录、价格页或文档；一次网络失败不能作为删除旧模型的依据。修改后运行与程序启动时相同的严格校验：
+维护者直接核实并更新 `internal/provider/free-models/<provider>.json`。模型 ID、免费条件和来源必须来自 Provider 官方 API、模型目录、价格页或文档；一次网络失败不能作为删除旧模型的依据。
 
-```bash
-make validate-free-models
-go test ./internal/provider ./internal/catalog ./cmd
-```
+更新清单时，**必须确认你改动的模型是真实可调用的**——这一验证在写代码阶段就完成，而不是等上线后：
+
+1. 准备密钥：复制模板并只填写本次要维护的 provider 对应的 Key（没有 Key 的 provider 在校验时会被自动跳过）：
+   ```bash
+   cp .env.example .env
+   # 编辑 .env，只填本次要更新的 provider 的 Key
+   ```
+2. 编辑 `internal/provider/free-models/<provider>.json`，增删或调整模型。
+3. 跑真实探测，确认清单里（配了 Key 的）模型都能用最小请求成功调用：
+   ```bash
+   make verify-free-models
+   ```
+   该命令对带 Key 的 provider 逐个发送最小 chat / embedding / audio 请求，任一部分失败即以非零状态退出，禁止合入。
+4. 再跑清单结构校验与单元测试：
+   ```bash
+   make validate-free-models
+   go test ./internal/provider ./internal/catalog ./cmd
+   ```
 
 业务代码无需跟随模型名单变化。若只想在本机立即使用另一份清单，可通过 `--free-models FILE` 或 `FREE_ROUTER_FREE_MODELS` 加载外部文件或目录。
 

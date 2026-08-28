@@ -66,8 +66,14 @@ func addModelValidationCommand(root *cobra.Command, opts *options) {
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if strings.TrimSpace(envFile) != "" {
-				if err := loadEnvFile(envFile); err != nil {
-					return err
+				if _, statErr := os.Stat(envFile); statErr == nil {
+					if err := loadEnvFile(envFile); err != nil {
+						return err
+					}
+				} else if !errors.Is(statErr, os.ErrNotExist) {
+					return fmt.Errorf("open env file: %w", statErr)
+				} else {
+					fmt.Fprintf(os.Stderr, "note: env file %q not found; using process environment (set keys in .env, see .env.example)\n", envFile)
 				}
 			}
 			cache := opts.cache
@@ -83,6 +89,9 @@ func addModelValidationCommand(root *cobra.Command, opts *options) {
 			report, err := validateModels(cmd.Context(), *opts, cache, concurrency, timeout, cmd.OutOrStdout())
 			if err != nil {
 				return err
+			}
+			if report.Summary.CheckedModels == 0 && !exitZero {
+				return fmt.Errorf("no provider had credentials configured; set the relevant keys in .env (see .env.example) before verifying free models")
 			}
 			if report.Summary.FailedProbes > 0 && !exitZero {
 				return fmt.Errorf("%d model capability probe(s) failed across %d model(s)", report.Summary.FailedProbes, report.Summary.FailedModels)
@@ -123,7 +132,8 @@ func validateModels(ctx context.Context, opts options, cache string, concurrency
 	skipped := make(map[string]bool)
 	jobs := make([]modelProbeOutcome, 0)
 	for _, model := range models {
-		if _, ok := registry.Get(model.Provider); !ok {
+		spec, ok := registry.Get(model.Provider)
+		if !ok || spec.APIKey == "" {
 			skipped[model.Provider] = true
 			continue
 		}

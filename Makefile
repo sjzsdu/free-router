@@ -13,7 +13,7 @@ endif
 LDFLAGS := -s -w
 
 .DEFAULT_GOAL := help
-.PHONY: help build web-install web-build web-check web-test install uninstall daemon-install daemon-start daemon-stop daemon-restart daemon-status daemon-logs daemon-uninstall run validate-free-models test test-race test-cover vet fmt fmt-check version-check check tidy clean
+.PHONY: help build web-install web-build web-check web-test install uninstall daemon-install daemon-start daemon-stop daemon-restart daemon-status daemon-logs daemon-uninstall run validate-free-models verify-free-models test test-race test-cover vet fmt fmt-check version-check check tidy clean
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -71,6 +71,9 @@ run: web-build ## Run the service
 
 validate-free-models: ## Validate the generated free model manifest
 	$(GO) run . validate-model-data internal/provider/free-models
+
+verify-free-models: ## Probe maintained models with real minimal requests to confirm they are callable (needs keys in .env)
+	$(GO) run . validate-models --free-models internal/provider/free-models
 
 test: ## Run unit and integration tests
 	$(GO) test ./...
