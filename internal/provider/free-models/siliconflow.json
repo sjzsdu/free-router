@@ -1,82 +1,168 @@
 {
-  "free_basis": "SiliconFlow 官方文档免费大语言模型列表：Qwen/Qwen2-7B-Instruct、Qwen/Qwen2-1.5B-Instruct、Qwen/Qwen1.5-7B-Chat、THUDM/glm-4-9b-chat、THUDM/chatglm3-6b、internlm/internlm2_5-7b-chat、mistralai/Mistral-7B-Instruct-v0.2（均为 32K 上下文），不超过平台限速即可免费使用；北京硅基流动科技有限公司保留免费模型解释权。",
-  "billing_warning": "免费模型以官方文档列表为准，其余模型按量计费；免费模型受平台 Rate Limits 约束。",
+  "free_basis": "SiliconFlow 平台免费模型不带 Pro/ 前缀，LoRA/ 前缀为微调适配器模型。免费模型受平台 Rate Limits 约束，超过限速返回 429。",
+  "billing_warning": "免费模型以 API 返回为准；Pro/ 前缀模型为付费版本，请勿使用以免产生费用。",
   "source_urls": [
-    "https://docs.siliconflow.com/quickstart/models",
-    "https://docs.siliconflow.cn/docs/userguide/faqs/rate-limit-and-upgradation"
+    "https://docs.siliconflow.cn/en/userguide/rate-limits/rate-limit-and-upgradation",
+    "https://siliconflow.cn/models"
   ],
   "discovery_status": "ready",
-  "discovery_message": "free models verified from official documentation",
+  "discovery_message": "free models verified from API listing (non-Pro, non-LoRA text chat models)",
   "models": [
     {
-      "functions": [
-        "chat"
-      ],
-      "id": "Qwen/Qwen2-7B-Instruct",
-      "source_urls": [
-        "https://docs.siliconflow.com/quickstart/models"
-      ],
-      "verified_at": "2026-08-27T03:41:06Z"
+      "functions": ["chat", "chat-tools"],
+      "id": "Qwen/Qwen2.5-7B-Instruct",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
     },
     {
-      "functions": [
-        "chat"
-      ],
-      "id": "Qwen/Qwen2-1.5B-Instruct",
-      "source_urls": [
-        "https://docs.siliconflow.com/quickstart/models"
-      ],
-      "verified_at": "2026-08-27T03:41:06Z"
+      "functions": ["chat", "chat-tools"],
+      "id": "Qwen/Qwen2.5-14B-Instruct",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
     },
     {
-      "functions": [
-        "chat"
-      ],
-      "id": "Qwen/Qwen1.5-7B-Chat",
-      "source_urls": [
-        "https://docs.siliconflow.com/quickstart/models"
-      ],
-      "verified_at": "2026-08-27T03:41:06Z"
+      "functions": ["chat", "chat-tools"],
+      "id": "Qwen/Qwen2.5-32B-Instruct",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
     },
     {
-      "functions": [
-        "chat"
-      ],
-      "id": "THUDM/glm-4-9b-chat",
-      "source_urls": [
-        "https://docs.siliconflow.com/quickstart/models"
-      ],
-      "verified_at": "2026-08-27T03:41:06Z"
+      "functions": ["chat", "chat-tools"],
+      "id": "Qwen/Qwen2.5-72B-Instruct",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
     },
     {
-      "functions": [
-        "chat"
-      ],
-      "id": "THUDM/chatglm3-6b",
-      "source_urls": [
-        "https://docs.siliconflow.com/quickstart/models"
-      ],
-      "verified_at": "2026-08-27T03:41:06Z"
+      "functions": ["chat", "chat-tools"],
+      "id": "Qwen/Qwen3-8B",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
     },
     {
-      "functions": [
-        "chat"
-      ],
-      "id": "internlm/internlm2_5-7b-chat",
-      "source_urls": [
-        "https://docs.siliconflow.com/quickstart/models"
-      ],
-      "verified_at": "2026-08-27T03:41:06Z"
+      "functions": ["chat", "chat-tools"],
+      "id": "Qwen/Qwen3-14B",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
     },
     {
-      "functions": [
-        "chat"
-      ],
-      "id": "mistralai/Mistral-7B-Instruct-v0.2",
-      "source_urls": [
-        "https://docs.siliconflow.com/quickstart/models"
-      ],
-      "verified_at": "2026-08-27T03:41:06Z"
+      "functions": ["chat", "chat-tools"],
+      "id": "Qwen/Qwen3-32B",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
+    },
+    {
+      "functions": ["chat", "chat-tools"],
+      "id": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
+    },
+    {
+      "functions": ["chat", "chat-tools"],
+      "id": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
+    },
+    {
+      "functions": ["chat", "chat-tools"],
+      "id": "Qwen/Qwen3.5-4B",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
+    },
+    {
+      "functions": ["chat", "chat-tools"],
+      "id": "Qwen/Qwen3.5-9B",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
+    },
+    {
+      "functions": ["chat", "chat-tools"],
+      "id": "Qwen/Qwen3.5-27B",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
+    },
+    {
+      "functions": ["chat", "chat-tools"],
+      "id": "Qwen/Qwen3.5-35B-A3B",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
+    },
+    {
+      "functions": ["chat", "chat-tools"],
+      "id": "Qwen/Qwen3.5-122B-A10B",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
+    },
+    {
+      "functions": ["chat", "chat-tools"],
+      "id": "THUDM/GLM-4-9B-0414",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
+    },
+    {
+      "functions": ["chat", "chat-tools"],
+      "id": "THUDM/GLM-4-32B-0414",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
+    },
+    {
+      "functions": ["chat", "chat-tools"],
+      "id": "THUDM/GLM-Z1-9B-0414",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
+    },
+    {
+      "functions": ["chat", "chat-tools"],
+      "id": "deepseek-ai/DeepSeek-R1",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
+    },
+    {
+      "functions": ["chat", "chat-tools"],
+      "id": "deepseek-ai/DeepSeek-V3",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
+    },
+    {
+      "functions": ["chat", "chat-tools"],
+      "id": "deepseek-ai/DeepSeek-OCR",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
+    },
+    {
+      "functions": ["chat", "chat-tools"],
+      "id": "inclusionAI/Ling-flash-2.0",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
+    },
+    {
+      "functions": ["chat", "chat-tools"],
+      "id": "inclusionAI/Ling-mini-2.0",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
+    },
+    {
+      "functions": ["chat", "chat-tools"],
+      "id": "tencent/Hunyuan-A13B-Instruct",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
+    },
+    {
+      "functions": ["chat", "chat-tools"],
+      "id": "tencent/Hunyuan-MT-7B",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
+    },
+    {
+      "functions": ["chat", "chat-tools"],
+      "id": "zai-org/GLM-4.5-Air",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
+    },
+    {
+      "functions": ["chat", "chat-tools"],
+      "id": "stepfun-ai/Step-3.5-Flash",
+      "source_urls": ["https://siliconflow.cn/models"],
+      "verified_at": "2026-08-28T00:00:00Z"
     }
   ]
 }

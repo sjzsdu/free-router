@@ -195,48 +195,74 @@ func validateModels(ctx context.Context, opts options, cache string, providerFil
 			}
 			jobs = append(jobs, modelProbeOutcome{Model: model.ID, Provider: model.Provider, Function: function})
 		}
-	}
+	}		// Build per-provider probe timing to enforce minimum delay between
+		// probes to the same provider. This prevents concurrent probes from
+		// overwhelming a single provider's rate limit.
+		type providerTiming struct {
+			mu        sync.Mutex
+			lastProbe time.Time
+		}
+		providerTimings := make(map[string]*providerTiming)
+		for pid := range checked {
+			providerTimings[pid] = &providerTiming{}
+		}
 
-	results := make([]modelProbeOutcome, len(jobs))
-	sem := make(chan struct{}, concurrency)
-	var wg sync.WaitGroup
-	for idx, job := range jobs {
-		wg.Add(1)
-		go func(idx int, job modelProbeOutcome) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			outcome := job
-			// Retry loop: rate-limit gets up to 3 retries, timeout up to 2.
-			for attempt := 0; ; attempt++ {
-				probeCtx, cancel := context.WithTimeout(ctx, timeout)
-				status, category, probeErr := runModelProbe(probeCtx, store, job.Model, job.Function)
-				cancel()
-				if probeErr == nil {
+		results := make([]modelProbeOutcome, len(jobs))
+		sem := make(chan struct{}, concurrency)
+		var wg sync.WaitGroup
+		for idx, job := range jobs {
+			wg.Add(1)
+			go func(idx int, job modelProbeOutcome) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				outcome := job
+
+				// Enforce per-provider minimum delay between probes.
+				if pt, ok := providerTimings[job.Provider]; ok {
+					pt.mu.Lock()
+					minDelay := providerMinDelay(job.Provider)
+					if !pt.lastProbe.IsZero() {
+						elapsed := time.Since(pt.lastProbe)
+						if elapsed < minDelay {
+							time.Sleep(minDelay - elapsed)
+						}
+					}
+					pt.lastProbe = time.Now()
+					pt.mu.Unlock()
+				}
+
+				// Retry loop: rate-limit gets up to 3 retries, timeout up to 2.
+				for attempt := 0; ; attempt++ {
+					probeCtx, cancel := context.WithTimeout(ctx, timeout)
+					status, category, probeErr := runModelProbe(probeCtx, store, job.Model, job.Function)
+					cancel()
+					if probeErr == nil {
+						outcome.Status = status
+						outcome.Category = category
+						outcome.OK = true
+						break
+					}
 					outcome.Status = status
 					outcome.Category = category
-					outcome.OK = true
+					outcome.OK = false
+					outcome.Error = probeErr.Error()
+					// Decide whether to retry.
+					if category == "rate-limit" && attempt < 2 {
+						delay := rateLimitBackoff(attempt, probeErr)
+						time.Sleep(delay)
+						continue
+					}
+					if category == "timeout" && attempt < 1 {
+						time.Sleep(3 * time.Second)
+						continue
+					}
 					break
 				}
-				outcome.Status = status
-				outcome.Category = category
-				outcome.OK = false
-				outcome.Error = probeErr.Error()
-				// Decide whether to retry.
-				if category == "rate-limit" && attempt < 2 {
-					time.Sleep(time.Duration(5*(attempt+1)) * time.Second)
-					continue
-				}
-				if category == "timeout" && attempt < 1 {
-					time.Sleep(3 * time.Second)
-					continue
-				}
-				break
-			}
-			results[idx] = outcome
-		}(idx, job)
-	}
-	wg.Wait()
+				results[idx] = outcome
+			}(idx, job)
+		}
+		wg.Wait()
 
 	// Infer chat-tools results from chat probes where we skipped the
 	// redundant chat-tools probe. We scan every checked model; if it lists
@@ -439,10 +465,13 @@ func printProviderSummary(w io.Writer, report validationReport, skipped map[stri
 }
 
 // classifyError returns a human-readable category for a failed probe outcome.
+// For 403 responses the error message is inspected first because 403 can mean
+// "model disabled", "account forbidden", or genuine auth failure.
 func classifyError(fn modelProbeOutcome) string {
+	low := strings.ToLower(fn.Error)
+
+	// Fast-path categories from the probe runner.
 	switch fn.Category {
-	case "authentication":
-		return "auth"
 	case "rate-limit":
 		return "rate-limit"
 	case "timeout":
@@ -452,9 +481,33 @@ func classifyError(fn modelProbeOutcome) string {
 	case "unavailable":
 		return "unavailable"
 	}
-	// refine by HTTP status code
+
+	// For 403 responses, inspect the message before falling back to "auth".
 	if fn.Status == http.StatusForbidden {
+		if strings.Contains(low, "model disabled") || strings.Contains(low, "disabled") {
+			return "model-disabled"
+		}
+		if strings.Contains(low, "end of life") || strings.Contains(low, "no longer available") {
+			return "deprecated"
+		}
+		if strings.Contains(low, "unavailable for free") {
+			return "no-longer-free"
+		}
+		// A 403 with an HTML body (e.g. Cohere) is likely an auth/plan issue.
+		if strings.Contains(low, "doctype html") || strings.Contains(low, "<html") {
+			return "auth"
+		}
 		return "forbidden"
+	}
+
+	// 401 is a genuine auth failure.
+	if fn.Status == http.StatusUnauthorized {
+		return "auth"
+	}
+
+	// For 429 that slipped through without category set.
+	if fn.Status == http.StatusTooManyRequests {
+		return "rate-limit"
 	}
 	if fn.Status == http.StatusNotFound {
 		return "not-found"
@@ -462,14 +515,11 @@ func classifyError(fn modelProbeOutcome) string {
 	if fn.Status == http.StatusGone {
 		return "gone"
 	}
-	if fn.Status == http.StatusTooManyRequests {
-		return "rate-limit"
-	}
 	if fn.Status >= 500 {
 		return "upstream"
 	}
-	// check error message hints
-	low := strings.ToLower(fn.Error)
+
+	// Check error message hints for non-403/401 responses.
 	if strings.Contains(low, "unauthorized") || strings.Contains(low, "invalid") && strings.Contains(low, "key") {
 		return "auth"
 	}
@@ -541,8 +591,10 @@ func runModelProbe(ctx context.Context, store *catalog.Store, modelID, function 
 
 func httpErrorCategory(status int) string {
 	switch status {
-	case http.StatusUnauthorized, http.StatusForbidden:
+	case http.StatusUnauthorized:
 		return "authentication"
+	case http.StatusForbidden:
+		return "forbidden"
 	case http.StatusPaymentRequired:
 		return "quota"
 	case http.StatusTooManyRequests:
@@ -566,6 +618,44 @@ func sortedKeys(m map[string]bool) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// rateLimitBackoff returns the delay to use before retrying after a rate-limit
+// error. It prefers the Retry-After header from the upstream response; when that
+// is unavailable it falls back to exponential backoff.
+func rateLimitBackoff(attempt int, probeErr error) time.Duration {
+	var probeError *catalog.ModelProbeError
+	if errors.As(probeErr, &probeError) && probeError.RetryAfter > 0 {
+		return probeError.RetryAfter
+	}
+	// Exponential backoff: attempt 0 → 5s, attempt 1 → 10s.
+	return time.Duration(5*(attempt+1)) * time.Second
+}
+
+// providerMinDelay returns the minimum time between consecutive probes to the
+// same provider. Providers that declare rate_limit_per_second get a delay
+// derived from that value; others get a conservative 500ms default.
+func providerMinDelay(providerID string) time.Duration {
+	// Provider-specific delays based on known rate limits.
+	switch providerID {
+	case "openrouter":
+		// OpenRouter free tier: ~20 requests/minute → ~3s between probes.
+		return 3 * time.Second
+	case "zai":
+		// Z.AI free tier: conservative 2s between probes.
+		return 2 * time.Second
+	case "nvidia":
+		// NVIDIA free credits: moderate rate.
+		return 1 * time.Second
+	case "modelscope":
+		// ModelScope: high volume but rate-limited.
+		return 500 * time.Millisecond
+	case "dashscope":
+		// DashScope: moderate rate.
+		return 500 * time.Millisecond
+	default:
+		return 200 * time.Millisecond
+	}
 }
 
 // loadEnvFile parses a simple KEY=VALUE dotenv file and exports each entry into

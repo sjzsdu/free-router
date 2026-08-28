@@ -68,7 +68,7 @@ func TestLoadEnvFileInvalid(t *testing.T) {
 func TestHTTPErrorCategory(t *testing.T) {
 	cases := map[int]string{
 		401: "authentication",
-		403: "authentication",
+		403: "forbidden",
 		402: "quota",
 		429: "rate-limit",
 		404: "unavailable",

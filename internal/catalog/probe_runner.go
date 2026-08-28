@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sjzsdu/free-router/internal/provider"
 )
@@ -126,7 +128,11 @@ func (p *ProbeRunner) Run(ctx context.Context, model Model, spec provider.Spec, 
 		if detail != "" {
 			message += ": " + detail
 		}
-		return result, &ModelProbeError{Status: resp.StatusCode, Message: message}
+		return result, &ModelProbeError{
+			Status:     resp.StatusCode,
+			Message:    message,
+			RetryAfter: parseRetryAfterHeader(resp.Header),
+		}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
@@ -136,4 +142,28 @@ func (p *ProbeRunner) Run(ctx context.Context, model Model, spec provider.Spec, 
 		return result, &ModelProbeError{Status: resp.StatusCode, Message: "successful response did not contain a tool call"}
 	}
 	return result, nil
+}
+
+// parseRetryAfterHeader extracts the Retry-After duration from an HTTP response.
+// It supports both numeric seconds and HTTP-date formats.
+func parseRetryAfterHeader(header http.Header) time.Duration {
+	value := header.Get("Retry-After")
+	if value == "" {
+		return 0
+	}
+	// Try numeric seconds first.
+	if seconds, err := strconv.ParseFloat(value, 64); err == nil && seconds > 0 {
+		d := time.Duration(seconds * float64(time.Second))
+		if d > 0 {
+			return d
+		}
+	}
+	// Try HTTP-date format.
+	if t, err := time.Parse(time.RFC1123, value); err == nil {
+		d := time.Until(t)
+		if d > 0 && d < 5*time.Minute { // sanity check
+			return d
+		}
+	}
+	return 0
 }
