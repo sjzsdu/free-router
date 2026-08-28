@@ -16,3 +16,5 @@ dist/
 .beads-credential-key
 reasonix.toml
 .reasonix
+.env
+.env.local
