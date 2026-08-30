@@ -797,49 +797,76 @@ func MissingConfiguration(spec Spec, envMap EnvMap, resolvers ...KeyResolver) []
 func builtins() []Spec {
 	cloudflareAccount := os.Getenv("CLOUDFLARE_ACCOUNT_ID")
 	return []Spec{
-		{ID: "openrouter", BaseURL: "https://openrouter.ai/api/v1", APIKeyEnv: "OPENROUTER_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "zero-price", Tier: "zero-price-models", RegisterURL: "https://openrouter.ai/keys", OAuth: true},
-		{ID: "groq", BaseURL: "https://api.groq.com/openai/v1", APIKeyEnv: "GROQ_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-tier", RegisterURL: "https://console.groq.com/keys"},
-		{ID: "gemini", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai", APIKeyEnv: "GEMINI_API_KEY", ModelDiscovery: "api-agent-filter", FreeModelPolicy: "all", Tier: "free-tier", RegisterURL: "https://aistudio.google.com/apikey"},
-		{ID: "cohere", BaseURL: "https://api.cohere.ai/compatibility/v1", APIKeyEnv: "COHERE_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-trial-quota", FreeKind: "trial", BillingWarning: "试用 Key 每月 1000 次调用，超出后需升级生产 Key；请勿绑定付费方式。", RegisterURL: "https://dashboard.cohere.com/api-keys"},
-		{ID: "github-models", BaseURL: "https://models.github.ai/inference", APIKeyEnv: "GITHUB_TOKEN", Headers: map[string]string{"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}, ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-tier", RegisterURL: "https://github.com/settings/personal-access-tokens/new"},
-		{ID: "pollinations", BaseURL: "https://gen.pollinations.ai/v1", APIKeyEnv: "POLLINATIONS_API_KEY", ModelDiscovery: "api-agent-filter", FreeModelPolicy: "all", Tier: "free-credits", RegisterURL: "https://enter.pollinations.ai/"},
-		{ID: "huggingface", BaseURL: "https://router.huggingface.co/v1", APIKeyEnv: "HF_TOKEN", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-credits", RegisterURL: "https://huggingface.co/settings/tokens"},
-		{ID: "nvidia", BaseURL: "https://integrate.api.nvidia.com/v1", APIKeyEnv: "NVIDIA_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-credits", RegisterURL: "https://build.nvidia.com/settings/api-keys"},
-		{ID: "mistral", BaseURL: "https://api.mistral.ai/v1", APIKeyEnv: "MISTRAL_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-experiment-plan", RegisterURL: "https://console.mistral.ai/home?profile_dialog=api-keys"},
-		{ID: "sambanova", BaseURL: "https://api.sambanova.ai/v1", APIKeyEnv: "SAMBANOVA_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-tier", RegisterURL: "https://cloud.sambanova.ai/apis"},
-		{ID: "ollama-cloud", BaseURL: "https://api.ollama.com/v1", APIKeyEnv: "OLLAMA_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-tier", RegisterURL: "https://ollama.com/settings/keys"},
-		{ID: "modelscope", BaseURL: "https://api-inference.modelscope.cn/v1", APIKeyEnv: "MODELSCOPE_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-tier", RegisterURL: "https://modelscope.cn/my/myaccesstoken"},
+		// OpenRouter: zero-price model policy; rate limit varies by upstream model.
+		{ID: "openrouter", BaseURL: "https://openrouter.ai/api/v1", APIKeyEnv: "OPENROUTER_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "zero-price", Tier: "zero-price-models", RegisterURL: "https://openrouter.ai/keys", OAuth: true, RateLimitPerSecond: 2, MaxConcurrent: 5, QueueSize: 20},
+		// Groq: free tier 30 RPM / 6K TPM.
+		{ID: "groq", BaseURL: "https://api.groq.com/openai/v1", APIKeyEnv: "GROQ_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-tier", RegisterURL: "https://console.groq.com/keys", RateLimitPerSecond: 0.5, MaxConcurrent: 3, QueueSize: 10},
+		// Gemini: free tier 2–15 RPM depending on model.
+		{ID: "gemini", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai", APIKeyEnv: "GEMINI_API_KEY", ModelDiscovery: "api-agent-filter", FreeModelPolicy: "all", Tier: "free-tier", RegisterURL: "https://aistudio.google.com/apikey", RateLimitPerSecond: 0.2, MaxConcurrent: 2, QueueSize: 10},
+		// Cohere: trial ~1000 calls/month.
+		{ID: "cohere", BaseURL: "https://api.cohere.ai/compatibility/v1", APIKeyEnv: "COHERE_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-trial-quota", FreeKind: "trial", BillingWarning: "试用 Key 每月 1000 次调用，超出后需升级生产 Key；请勿绑定付费方式。", RegisterURL: "https://dashboard.cohere.com/api-keys", RateLimitPerSecond: 0.5, MaxConcurrent: 3, QueueSize: 10},
+		// GitHub Models: free inference for all models.
+		{ID: "github-models", BaseURL: "https://models.github.ai/inference", APIKeyEnv: "GITHUB_TOKEN", Headers: map[string]string{"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}, ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-tier", RegisterURL: "https://github.com/settings/personal-access-tokens/new", RateLimitPerSecond: 1, MaxConcurrent: 3, QueueSize: 10},
+		// Pollinations: generous free credits.
+		{ID: "pollinations", BaseURL: "https://gen.pollinations.ai/v1", APIKeyEnv: "POLLINATIONS_API_KEY", ModelDiscovery: "api-agent-filter", FreeModelPolicy: "all", Tier: "free-credits", RegisterURL: "https://enter.pollinations.ai/", RateLimitPerSecond: 2, MaxConcurrent: 5, QueueSize: 20},
+		// HuggingFace: free inference API.
+		{ID: "huggingface", BaseURL: "https://router.huggingface.co/v1", APIKeyEnv: "HF_TOKEN", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-credits", RegisterURL: "https://huggingface.co/settings/tokens", RateLimitPerSecond: 2, MaxConcurrent: 5, QueueSize: 20},
+		// NVIDIA NIM: free tier 40 RPM.
+		{ID: "nvidia", BaseURL: "https://integrate.api.nvidia.com/v1", APIKeyEnv: "NVIDIA_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-credits", RegisterURL: "https://build.nvidia.com/settings/api-keys", RateLimitPerSecond: 0.5, MaxConcurrent: 3, QueueSize: 10},
+		// Mistral: free experiment plan 300 RPM.
+		{ID: "mistral", BaseURL: "https://api.mistral.ai/v1", APIKeyEnv: "MISTRAL_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-experiment-plan", RegisterURL: "https://console.mistral.ai/home?profile_dialog=api-keys", RateLimitPerSecond: 5, MaxConcurrent: 5, QueueSize: 20},
+		// SambaNova: free tier.
+		{ID: "sambanova", BaseURL: "https://api.sambanova.ai/v1", APIKeyEnv: "SAMBANOVA_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-tier", RegisterURL: "https://cloud.sambanova.ai/apis", RateLimitPerSecond: 2, MaxConcurrent: 5, QueueSize: 20},
+		// Ollama Cloud: free tier.
+		{ID: "ollama-cloud", BaseURL: "https://api.ollama.com/v1", APIKeyEnv: "OLLAMA_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-tier", RegisterURL: "https://ollama.com/settings/keys", RateLimitPerSecond: 2, MaxConcurrent: 5, QueueSize: 20},
+		// ModelScope: free tier (requires Alibaba Cloud account binding).
+		{ID: "modelscope", BaseURL: "https://api-inference.modelscope.cn/v1", APIKeyEnv: "MODELSCOPE_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "free-tier", RegisterURL: "https://modelscope.cn/my/myaccesstoken", RateLimitPerSecond: 1, MaxConcurrent: 3, QueueSize: 10},
+		// Xiaomi MiMo: gift credits.
 		{
 			ID: "xiaomi-mimo", BaseURL: "https://api.xiaomimimo.com/v1", APIKeyEnv: "MIMO_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all",
 			Tier: "gift-credits", FreeKind: "credit", BillingWarning: "赠送额度用完后停止使用或按账户计费设置执行，请先确认余额。",
 			RegisterURL: "https://platform.xiaomimimo.com/#/console/api-keys",
+			RateLimitPerSecond: 1, MaxConcurrent: 3, QueueSize: 10,
 		},
+		// DashScope (Alibaba): new-user free quota; requires billing opt-in to stop.
 		{
 			ID: "dashscope", BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", APIKeyEnv: "DASHSCOPE_API_KEY", ModelDiscovery: "api-agent-filter", FreeModelPolicy: "all",
 			Tier: "new-user-free-quota", FreeKind: "trial", BillingWarning: "新人额度通常仅 30～90 天；请在百炼控制台开启免费额度用完即停。",
 			RegisterURL: "https://bailian.console.aliyun.com/cn-beijing/?tab=app#/api-key",
+			RateLimitPerSecond: 2, MaxConcurrent: 5, QueueSize: 20,
 		},
+		// Volcengine Ark: free trial quota per model.
 		{
 			ID: "volcengine-ark", BaseURL: "https://ark.cn-beijing.volces.com/api/v3", APIKeyEnv: "ARK_API_KEY", ModelDiscovery: "agent",
 			Tier: "free-trial-quota", FreeKind: "trial", BillingWarning: "免费额度按模型限量发放，耗尽后可能转为计费。",
 			RegisterURL: "https://console.volcengine.com/ark/region:ark+cn-beijing/apikey",
+			RateLimitPerSecond: 1, MaxConcurrent: 3, QueueSize: 10,
 		},
+		// BigModel (Zhipu): free flash models only.
 		{
 			ID: "bigmodel", BaseURL: "https://open.bigmodel.cn/api/paas/v4", ModelDiscovery: "agent",
 			APIKeyEnv: "BIGMODEL_API_KEY", Tier: "free-flash-models", RegisterURL: "https://bigmodel.cn/usercenter/proj-mgmt/apikeys",
+			RateLimitPerSecond: 1, MaxConcurrent: 3, QueueSize: 10,
 		},
+		// XFYUN (iFlytek): Spark Lite free.
 		{
 			ID: "xfyun", BaseURL: "https://spark-api-open.xf-yun.com/v1", ModelDiscovery: "agent",
 			APIKeyEnv: "XFYUN_API_KEY", Tier: "free-lite-model", FreeKind: "free", BillingWarning: "Spark Lite 免费使用；其他版本（Pro/Max/Ultra）按量计费，请勿配置付费版本密钥。",
 			RegisterURL: "https://console.xfyun.cn/services/spark",
+			RateLimitPerSecond: 1, MaxConcurrent: 3, QueueSize: 10,
 		},
+		// SiliconFlow: L0 tier 1000 RPM / 40K TPM for free models.
 		{
 			ID: "siliconflow", BaseURL: "https://api.siliconflow.cn/v1",
 			ModelsURL: "https://api.siliconflow.cn/v1/models?type=text&sub_type=chat", ModelDiscovery: "api-agent-filter", FreeModelPolicy: "all",
 			APIKeyEnv: "SILICONFLOW_API_KEY", Tier: "free-models", RegisterURL: "https://cloud.siliconflow.cn/account/ak",
+			RateLimitPerSecond: 10, MaxConcurrent: 5, QueueSize: 20,
 		},
-		{ID: "zai", BaseURL: "https://api.z.ai/api/paas/v4", APIKeyEnv: "ZAI_API_KEY", ModelDiscovery: "api-agent-filter", FreeModelPolicy: "all", Tier: "free-models", RegisterURL: "https://z.ai/manage-apikey/apikey-list"},
-		{ID: "wanqing", BaseURL: "https://wanqing.streamlakeapi.com/api/gateway/v1/endpoints", APIKeyEnv: "WQ_API_KEY", ModelDiscovery: "agent", FreeModelPolicy: "all", Tier: "free-kat-coder-air", FreeKind: "free", BillingWarning: "需先在万擎控制台创建在线推理服务，并把路由中该模型 ID 覆盖为推理点 ID（ep-xxx）才能调用；KAT-Coder-Air-V1 官方价格表免费。", RegisterURL: "https://console.streamlake.com/console/home/index"},
-		{ID: "cloudflare", BaseURL: "https://api.cloudflare.com/client/v4/accounts/" + cloudflareAccount + "/ai/v1", ModelsURL: "https://api.cloudflare.com/client/v4/accounts/" + cloudflareAccount + "/ai/models/search", APIKeyEnv: "CLOUDFLARE_API_TOKEN", RequiredEnvs: []string{"CLOUDFLARE_ACCOUNT_ID"}, UseNameAsID: true, ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "10000-neurons-per-day", RegisterURL: "https://dash.cloudflare.com/?to=%2F%3Aaccount%2Fai%2Fworkers-ai"},
+		// Z.ai: free models.
+		{ID: "zai", BaseURL: "https://api.z.ai/api/paas/v4", APIKeyEnv: "ZAI_API_KEY", ModelDiscovery: "api-agent-filter", FreeModelPolicy: "all", Tier: "free-models", RegisterURL: "https://z.ai/manage-apikey/apikey-list", RateLimitPerSecond: 1, MaxConcurrent: 3, QueueSize: 10},
+		// Wanqing: KAT-Coder-Air free.
+		{ID: "wanqing", BaseURL: "https://wanqing.streamlakeapi.com/api/gateway/v1/endpoints", APIKeyEnv: "WQ_API_KEY", ModelDiscovery: "agent", FreeModelPolicy: "all", Tier: "free-kat-coder-air", FreeKind: "free", BillingWarning: "需先在万擎控制台创建在线推理服务，并把路由中该模型 ID 覆盖为推理点 ID（ep-xxx）才能调用；KAT-Coder-Air-V1 官方价格表免费。", RegisterURL: "https://console.streamlake.com/console/home/index", RateLimitPerSecond: 1, MaxConcurrent: 3, QueueSize: 10},
+		// Cloudflare Workers AI: 10K neurons/day free.
+		{ID: "cloudflare", BaseURL: "https://api.cloudflare.com/client/v4/accounts/" + cloudflareAccount + "/ai/v1", ModelsURL: "https://api.cloudflare.com/client/v4/accounts/" + cloudflareAccount + "/ai/models/search", APIKeyEnv: "CLOUDFLARE_API_TOKEN", RequiredEnvs: []string{"CLOUDFLARE_ACCOUNT_ID"}, UseNameAsID: true, ModelDiscovery: "api", FreeModelPolicy: "all", Tier: "10000-neurons-per-day", RegisterURL: "https://dash.cloudflare.com/?to=%2F%3Aaccount%2Fai%2Fworkers-ai", RateLimitPerSecond: 2, MaxConcurrent: 5, QueueSize: 20},
 	}
 }

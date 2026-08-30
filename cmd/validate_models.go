@@ -17,6 +17,7 @@ import (
 
 	"github.com/sjzsdu/free-router/internal/adapter"
 	"github.com/sjzsdu/free-router/internal/catalog"
+	"github.com/sjzsdu/free-router/internal/provider"
 	"github.com/spf13/cobra"
 )
 
@@ -221,7 +222,7 @@ func validateModels(ctx context.Context, opts options, cache string, providerFil
 				// Enforce per-provider minimum delay between probes.
 				if pt, ok := providerTimings[job.Provider]; ok {
 					pt.mu.Lock()
-					minDelay := providerMinDelay(job.Provider)
+					minDelay := providerMinDelay(job.Provider, registry)
 					if !pt.lastProbe.IsZero() {
 						elapsed := time.Since(pt.lastProbe)
 						if elapsed < minDelay {
@@ -633,29 +634,21 @@ func rateLimitBackoff(attempt int, probeErr error) time.Duration {
 }
 
 // providerMinDelay returns the minimum time between consecutive probes to the
-// same provider. Providers that declare rate_limit_per_second get a delay
-// derived from that value; others get a conservative 500ms default.
-func providerMinDelay(providerID string) time.Duration {
-	// Provider-specific delays based on known rate limits.
-	switch providerID {
-	case "openrouter":
-		// OpenRouter free tier: ~20 requests/minute → ~3s between probes.
-		return 3 * time.Second
-	case "zai":
-		// Z.AI free tier: conservative 2s between probes.
-		return 2 * time.Second
-	case "nvidia":
-		// NVIDIA free credits: moderate rate.
-		return 1 * time.Second
-	case "modelscope":
-		// ModelScope: high volume but rate-limited.
-		return 500 * time.Millisecond
-	case "dashscope":
-		// DashScope: moderate rate.
-		return 500 * time.Millisecond
-	default:
-		return 200 * time.Millisecond
+// same provider. It derives the delay from the provider's rate_limit_per_second
+// spec value, falling back to a conservative 500ms default.
+func providerMinDelay(providerID string, store *provider.Registry) time.Duration {
+	if spec, ok := store.Get(providerID); ok && spec.RateLimitPerSecond > 0 {
+		// Add 20% buffer to avoid hitting the limit exactly.
+		delay := time.Duration(float64(time.Second) / (spec.RateLimitPerSecond * 0.8))
+		if delay < 100*time.Millisecond {
+			delay = 100 * time.Millisecond
+		}
+		if delay > 10*time.Second {
+			delay = 10 * time.Second
+		}
+		return delay
 	}
+	return 500 * time.Millisecond
 }
 
 // loadEnvFile parses a simple KEY=VALUE dotenv file and exports each entry into

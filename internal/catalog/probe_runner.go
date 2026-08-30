@@ -120,13 +120,18 @@ func (p *ProbeRunner) Run(ctx context.Context, model Model, spec provider.Spec, 
 	if err != nil {
 		return ModelProbeResult{}, err
 	}
-	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	resp.Body.Close()
 	result := ModelProbeResult{Status: resp.StatusCode}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		detail := upstreamErrorDetail(resp.Body)
+		detail := string(respBody)
 		message := resp.Status
 		if detail != "" {
 			message += ": " + detail
+		}
+		// If the error indicates the model only supports streaming, retry with stream=true.
+		if isStreamOnlyError(detail) && canRetryAsStream(function) {
+			return p.retryAsStream(ctx, model, spec, function, endpoint, input, payload, contentType)
 		}
 		return result, &ModelProbeError{
 			Status:     resp.StatusCode,
@@ -134,10 +139,7 @@ func (p *ProbeRunner) Run(ctx context.Context, model Model, spec provider.Spec, 
 			RetryAfter: parseRetryAfterHeader(resp.Header),
 		}
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return result, err
-	}
+	body := respBody
 	if function == FunctionChatTools && !containsToolCall(body) {
 		return result, &ModelProbeError{Status: resp.StatusCode, Message: "successful response did not contain a tool call"}
 	}
@@ -166,4 +168,79 @@ func parseRetryAfterHeader(header http.Header) time.Duration {
 		}
 	}
 	return 0
+}
+
+// isStreamOnlyError checks if the error message indicates the model only supports streaming.
+func isStreamOnlyError(detail string) bool {
+	return strings.Contains(strings.ToLower(detail), "only support stream mode") ||
+		strings.Contains(strings.ToLower(detail), "stream mode is required")
+}
+
+// canRetryAsStream returns true for chat-related functions that can be retried with stream=true.
+func canRetryAsStream(function string) bool {
+	switch function {
+	case FunctionChat, FunctionChatTools, FunctionImageUnderstanding,
+		FunctionVideoUnderstanding, FunctionAudioUnderstanding:
+		return true
+	}
+	return false
+}
+
+// retryAsStream retries the probe request with stream=true and validates the SSE response.
+func (p *ProbeRunner) retryAsStream(ctx context.Context, model Model, spec provider.Spec, function, endpoint string, input map[string]any, originalPayload []byte, contentType string) (ModelProbeResult, error) {
+	// Enable streaming in the input payload.
+	if input != nil {
+		input["stream"] = true
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return ModelProbeResult{}, err
+	}
+
+	var req *http.Request
+	if p.builder != nil {
+		req, err = p.builder.BuildProbeRequest(ctx, model, spec, http.MethodPost, endpoint, contentType, function, payload)
+	} else {
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, spec.APIEndpoint(endpoint), bytes.NewReader(payload))
+		if err != nil {
+			return ModelProbeResult{}, err
+		}
+		req.Header.Set("Content-Type", contentType)
+		headers := cloneMap(spec.Headers)
+		spec.ApplyAuth(headers)
+		for key, value := range headers {
+			req.Header.Set(key, value)
+		}
+	}
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return ModelProbeResult{}, err
+	}
+	defer resp.Body.Close()
+	result := ModelProbeResult{Status: resp.StatusCode}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		detail := upstreamErrorDetail(resp.Body)
+		message := resp.Status
+		if detail != "" {
+			message += ": " + detail
+		}
+		return result, &ModelProbeError{
+			Status:     resp.StatusCode,
+			Message:    message,
+			RetryAfter: parseRetryAfterHeader(resp.Header),
+		}
+	}
+	// Read the SSE stream — just confirm we get a valid data: line.
+	buf := make([]byte, 4096)
+	n, _ := io.ReadAtLeast(resp.Body, buf, 1)
+	if n == 0 {
+		return result, &ModelProbeError{Status: resp.StatusCode, Message: "stream response was empty"}
+	}
+	// Check for SSE data lines (start with "data:").
+	chunk := string(buf[:n])
+	if !strings.Contains(chunk, "data:") && !strings.Contains(chunk, "data: ") {
+		return result, &ModelProbeError{Status: resp.StatusCode, Message: "stream response did not contain SSE data"}
+	}
+	return result, nil
 }

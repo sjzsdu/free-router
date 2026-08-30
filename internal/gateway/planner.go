@@ -131,6 +131,11 @@ func (p *CandidatePlanner) dynamicCandidatesSeeded(view eligibility.Snapshot, ro
 		if reason != "" {
 			continue
 		}
+		// Skip unavailable models (degraded/open/cooling) so they don't
+		// consume rotation slots and push healthy models past maxAttempts.
+		if !view.Available(effective.ID, route.Capability) {
+			continue
+		}
 		if effective.Provider == "openrouter" && effective.UpstreamID == "openrouter/free" {
 			copy := effective
 			preferred = &copy
