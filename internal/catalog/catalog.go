@@ -94,8 +94,8 @@ type ModelProbeResult struct {
 }
 
 type ModelProbeError struct {
-	Status    int
-	Message   string
+	Status     int
+	Message    string
 	RetryAfter time.Duration
 }
 

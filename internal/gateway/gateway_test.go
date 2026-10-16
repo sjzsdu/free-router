@@ -90,6 +90,50 @@ func TestAutoRetriesNextFreeModel(t *testing.T) {
 	}
 }
 
+func TestAutoRetriesNextFreeModelOnBadRequest(t *testing.T) {
+	clearBuiltinKeys(t)
+	var chatCalls atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/models":
+			return testResponse(http.StatusOK, `{"data":[
+				{"id":"free/a","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]}},
+				{"id":"free/b","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]}}
+			]}`), nil
+		case "/chat/completions":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if chatCalls.Add(1) == 1 {
+				return testResponse(http.StatusBadRequest, `{"error":{"message":"HTTP 400","type":"free_router_error"}}`), nil
+			}
+			response, _ := json.Marshal(map[string]any{"model": body["model"]})
+			return testResponse(http.StatusOK, string(response)), nil
+		default:
+			return testResponse(http.StatusNotFound, "not found"), nil
+		}
+	})}
+
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"https://test.invalid","api_key":"test"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), client)
+	discoverModelsForTest(t, store)
+	handler := New(store, registry, Config{MaxAttempts: 2, Health: health.New()}, client)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"auto","messages":[]}`)))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if chatCalls.Load() != 2 {
+		t.Fatalf("expected fallback after 400, got %d calls", chatCalls.Load())
+	}
+	if !strings.Contains(recorder.Body.String(), "free/b") {
+		t.Fatalf("response did not come from fallback model: %s", recorder.Body.String())
+	}
+}
+
 func TestGatewayRecordsModelUsageAndMissingUsage(t *testing.T) {
 	clearBuiltinKeys(t)
 	var calls atomic.Int32
