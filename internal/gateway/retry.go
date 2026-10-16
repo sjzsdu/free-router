@@ -45,9 +45,13 @@ type RetryPolicy struct {
 
 func DefaultRetryPolicy() RetryPolicy {
 	return RetryPolicy{
-		MaxAttempts:         3,
-		MaxRetryDelay:       30 * time.Second,
-		RetryOnClientErrors: false,
+		MaxAttempts:   3,
+		MaxRetryDelay: 30 * time.Second,
+		// A provider can start returning 400 when a model/session becomes
+		// invalid while the router is still running. Idempotent requests may
+		// safely fall back to another provider; non-idempotent requests remain
+		// protected by the guard above.
+		RetryOnClientErrors: true,
 		RetryOnServerErrors: true,
 		RetryOnRateLimit:    true,
 		AllowNonIdempotent:  false,

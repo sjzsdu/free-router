@@ -52,7 +52,7 @@ func TestRetryPolicyShouldRetry(t *testing.T) {
 		{"idempotent 429", RequestIdempotent, 429, false, 0, true, "rate limited"},
 		{"idempotent 408", RequestIdempotent, 408, false, 0, true, "timeout"},
 		{"idempotent 0 connection error", RequestIdempotent, 0, false, 0, true, "connection error"},
-		{"idempotent 400", RequestIdempotent, 400, false, 0, false, "client error not retryable"},
+		{"idempotent 400", RequestIdempotent, 400, false, 0, true, "client error"},
 		{"idempotent 401", RequestIdempotent, 401, false, 0, true, "provider account unavailable"},
 		{"idempotent 402", RequestIdempotent, 402, false, 0, true, "provider account unavailable"},
 		{"idempotent 403", RequestIdempotent, 403, false, 0, true, "provider account unavailable"},

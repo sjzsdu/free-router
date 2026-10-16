@@ -199,6 +199,16 @@ func (a *OpenAICompatibleAdapter) ClassifyError(statusCode int, body []byte) Err
 	case statusCode == http.StatusNotFound:
 		err.Message = "upstream model unavailable"
 		err.Retryable = true
+	case statusCode == http.StatusBadRequest:
+		// Free providers occasionally return a bare/generic 400 after a
+		// model or session has become invalid. Treat it as provider-scoped for
+		// idempotent requests so the gateway can try the next configured model
+		// instead of leaking an intermittent HTTP 400 to the client.
+		err.Message = a.parseErrorMessage(statusCode, body)
+		// Preserve normal client-validation semantics (for example, an
+		// invalid messages array) while recognizing the generic envelope from
+		// providers that have lost a model/session.
+		err.Retryable = err.Message == "HTTP 400"
 	case statusCode >= 400:
 		err.Message = a.parseErrorMessage(statusCode, body)
 		err.Retryable = false
