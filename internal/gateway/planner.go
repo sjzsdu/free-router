@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -72,10 +74,13 @@ func (p *CandidatePlanner) CandidatesSeeded(requested, capability string, needsT
 				configured[id] = true
 				model, ok := view.Find(id)
 				if !ok {
+					slog.Debug("route model not found in catalog", "modelID", id)
 					continue
 				}
 				if effective, reason := view.Eligible(model, effectiveRoute, false, false); reason == "" {
 					priority = append(priority, effective)
+				} else {
+					slog.Debug("route model not eligible", "modelID", id, "reason", reason)
 				}
 			}
 			result := p.strictlyAvailable(view, priority, effectiveRoute.Capability)
@@ -89,16 +94,34 @@ func (p *CandidatePlanner) CandidatesSeeded(requested, capability string, needsT
 			if remaining, ok := p.pickRemaining(view, effectiveRoute, configured, true); ok {
 				result = append(result, remaining...)
 			}
+			slog.Debug("route candidates", "requested", requested, "route", requested, "priorityCount", len(priority), "finalCount", len(result), "candidates", func() []string {
+				var cands []string
+				for _, m := range result {
+					cands = append(cands, fmt.Sprintf("%s/%s", m.Provider, m.UpstreamID))
+				}
+				return cands
+			}())
 			return result, true
 		}
-		return p.dynamicCandidatesSeeded(view, effectiveRoute, false, seed), true
+		dynamic := p.dynamicCandidatesSeeded(view, effectiveRoute, false, seed)
+		slog.Debug("dynamic route candidates", "requested", requested, "count", len(dynamic), "candidates", func() []string {
+			var cands []string
+			for _, m := range dynamic {
+				cands = append(cands, fmt.Sprintf("%s/%s", m.Provider, m.UpstreamID))
+			}
+			return cands
+		}())
+		return dynamic, true
 	}
 	if model, ok := view.Find(requested); ok {
 		route := routing.Route{Capability: capability, RequireTool: needsTools}
 		if effective, reason := view.Eligible(model, route, false, false); reason == "" {
 			return []catalog.Model{effective}, false
+		} else {
+			slog.Debug("direct model not eligible", "model", requested, "reason", reason)
 		}
 	}
+	slog.Debug("no candidates found", "requested", requested)
 	return nil, false
 }
 

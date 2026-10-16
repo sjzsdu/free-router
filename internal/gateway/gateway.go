@@ -306,6 +306,13 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 	// 4xx errors multiply and collapse the chat-tools pool.
 	sessionSeed := sessionSeedFromRequest(request)
 	candidates, fallback := g.candidates(requested, capability, needsTools, sessionSeed)
+	slog.Debug("proxyJSON candidates", "requested", requested, "capability", capability, "needsTools", needsTools, "fallback", fallback, "sessionSeed", sessionSeed, "candidates", func() []string {
+		var cands []string
+		for _, m := range candidates {
+			cands = append(cands, fmt.Sprintf("%s/%s", m.Provider, m.UpstreamID))
+		}
+		return cands
+	}())
 	g.runBeforeCandidateAcquire()
 
 	// lastError accumulates the most recent deferred upstream error so the
@@ -316,6 +323,7 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 
 	for index, model := range candidates {
 		if !g.tracker.TryAcquire(model.ID, capability) {
+			slog.Debug("candidate not acquirable, skipping", "provider", model.Provider, "model", model.UpstreamID)
 			continue
 		}
 		// Release the in-flight slot on every exit path (including panics)
@@ -346,12 +354,21 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 	// leaking the upstream 4xx ("usage_limit_reached" etc.) to the caller,
 	// which downstream agents misread as their own quota event.
 	if needsTools && fallback {
+		slog.Debug("entering loose fallback (chat-tools -> plain chat)", "originalCandidates", len(candidates))
 		looseCandidates, _ := g.candidates(catalog.FunctionChat, catalog.FunctionChat, false, sessionSeed)
+		slog.Debug("loose fallback candidates", "count", len(looseCandidates), "candidates", func() []string {
+			var cands []string
+			for _, m := range looseCandidates {
+				cands = append(cands, fmt.Sprintf("%s/%s", m.Provider, m.UpstreamID))
+			}
+			return cands
+		}())
 		if len(looseCandidates) > 0 {
 			looseRequest := stripTools(request)
 			looseCapability := catalog.FunctionChat
 			for index, model := range looseCandidates {
 				if !g.tracker.TryAcquire(model.ID, looseCapability) {
+					slog.Debug("loose candidate not acquirable, skipping", "provider", model.Provider, "model", model.UpstreamID)
 					continue
 				}
 				defer g.tracker.Release(model.ID, looseCapability)
@@ -380,6 +397,7 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 	// generic "no acquirable models" 503 even though an upstream did speak
 	// (e.g. "provider account unavailable"), which hides the real reason.
 	if lastError != nil {
+		slog.Debug("writing last deferred error", "status", lastError.StatusCode, "message", lastError.Message)
 		writeError(w, lastError.StatusCode, lastError.Message)
 		return
 	}

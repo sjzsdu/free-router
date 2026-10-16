@@ -42,7 +42,26 @@ func TestClassifyError(t *testing.T) {
 		{"402 quota exhausted", 402, []byte(`{"error":{"message":"quota exhausted"}}`), "provider account unavailable", true, false},
 		{"403 account disabled", 403, []byte(`{"error":{"message":"forbidden"}}`), "provider account unavailable", true, false},
 		{"404 model removed", 404, []byte(`{"error":{"message":"missing model"}}`), "upstream model unavailable", true, false},
+<<<<<<< HEAD
 		{"400 error without message", 400, []byte(`{}`), "HTTP 400", true, false},
+=======
+		{"400 error without message", 400, []byte(`{}`), "HTTP 400", false, false},
+		// Capability-related 400 errors should be retryable for fallback
+		{"400 model not found", 400, []byte(`{"error":{"message":"model not found"}}`), "model not found", true, false},
+		{"400 invalid model", 400, []byte(`{"error":{"message":"invalid model"}}`), "invalid model", true, false},
+		{"400 unknown model", 400, []byte(`{"error":{"message":"unknown model"}}`), "unknown model", true, false},
+		{"400 model unavailable", 400, []byte(`{"error":{"message":"model unavailable"}}`), "model unavailable", true, false},
+		{"400 unsupported feature", 400, []byte(`{"error":{"message":"tools not supported"}}`), "tools not supported", true, false},
+		{"400 streaming not supported", 400, []byte(`{"error":{"message":"streaming not supported"}}`), "streaming not supported", true, false},
+		{"400 context length exceeded", 400, []byte(`{"error":{"message":"context length exceeded"}}`), "context length exceeded", true, false},
+		{"400 max tokens exceeded", 400, []byte(`{"error":{"message":"max tokens exceeded"}}`), "max tokens exceeded", true, false},
+		{"400 not implemented", 400, []byte(`{"error":{"message":"not implemented"}}`), "not implemented", true, false},
+		{"400 deprecated model", 400, []byte(`{"error":{"message":"model deprecated"}}`), "model deprecated", true, false},
+		// Non-capability 400 errors should NOT be retryable
+		{"400 malformed json", 400, []byte(`{"error":{"message":"malformed json"}}`), "malformed json", false, false},
+		{"400 invalid parameter", 400, []byte(`{"error":{"message":"invalid parameter 'foo'"}}`), "invalid parameter 'foo'", false, false},
+		{"400 missing required field", 400, []byte(`{"error":{"message":"missing required field: messages"}}`), "missing required field: messages", false, false},
+>>>>>>> b5331af (fix(adapter): handle 4xx errors indicating provider/model capabilities)
 	}
 
 	for _, tt := range tests {

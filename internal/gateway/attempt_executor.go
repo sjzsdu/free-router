@@ -40,6 +40,7 @@ func NewAttemptExecutor(gateway *Gateway) *AttemptExecutor {
 func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model catalog.Model, capability, endpoint string, payload []byte, contentType string, index int, candidates []catalog.Model, deferErrorWrite bool) AttemptResult {
 
 	started := time.Now()
+	slog.Debug("attempt start", "provider", model.Provider, "model", model.UpstreamID, "index", index, "total_candidates", len(candidates), "capability", capability, "deferErrorWrite", deferErrorWrite)
 	resp, err := e.gateway.forward(r, model, payload, endpoint, contentType)
 	if err != nil {
 		if status, message, local := localLimitError(err); local {
@@ -47,6 +48,7 @@ func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model 
 			// reported as-is instead of falling back to another provider:
 			// this gateway's own limits must not amplify load across
 			// providers. Upstream failures still fall back.
+			slog.Debug("local limit error, not falling back", "provider", model.Provider, "model", model.UpstreamID, "status", status, "message", message)
 			writeError(w, status, message)
 			if status == http.StatusTooManyRequests {
 				e.gateway.metrics.RecordRateLimit()
@@ -58,17 +60,18 @@ func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model 
 		e.gateway.tracker.Failure(model.ID, capability, time.Since(started), 0, err.Error(), 0)
 		slog.Warn("provider request failed", "provider", model.Provider, "model", model.UpstreamID, "error", err)
 		decision := e.gateway.shouldRetry(model, capability, 0, false, index)
+		slog.Debug("connection error retry decision", "provider", model.Provider, "model", model.UpstreamID, "shouldRetry", decision.ShouldRetry, "reason", decision.Reason, "index", index, "candidatesLeft", len(candidates)-index-1)
 		if decision.ShouldRetry && index+1 < len(candidates) {
 			e.record(model, capability, false, 0, time.Since(started), nil, false)
 			e.gateway.metrics.RecordFallback()
-			// No backoff sleep on connection errors: fallback moves to a
-			// different provider, and waiting would only delay recovery.
+			slog.Info("fallback after connection error", "provider", model.Provider, "model", model.UpstreamID, "nextIndex", index+1)
 			return AttemptResult{Terminal: false}
 		}
 		if deferErrorWrite {
 			err := adapter.Error{StatusCode: http.StatusBadGateway, Message: "all configured free providers failed", Retryable: true}
 			e.gateway.metrics.RecordFailure(time.Since(started), 0)
 			e.record(model, capability, false, 0, time.Since(started), nil, false)
+			slog.Debug("defer error write after connection error", "provider", model.Provider, "model", model.UpstreamID)
 			return AttemptResult{Terminal: false, LastError: &err}
 		}
 		writeError(w, http.StatusBadGateway, "all configured free providers failed")
@@ -83,15 +86,18 @@ func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model 
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
 		e.gateway.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, err.Error(), 0)
+		slog.Debug("normalize response failed", "provider", model.Provider, "model", model.UpstreamID, "status", resp.StatusCode, "error", err)
 		writeError(w, http.StatusBadGateway, err.Error())
 		e.gateway.metrics.RecordFailure(time.Since(started), resp.StatusCode)
 		e.record(model, capability, false, resp.StatusCode, time.Since(started), nil, false)
 		return AttemptResult{Terminal: true}
 	}
+	slog.Debug("normalized response", "provider", model.Provider, "model", model.UpstreamID, "status", normalizedResp.StatusCode, "hasError", normalizedResp.Error != nil, "errorMsg", func() string { if normalizedResp.Error != nil { return normalizedResp.Error.Message } else { return "" } }(), "errorRetryable", func() bool { if normalizedResp.Error != nil { return normalizedResp.Error.Retryable } else { return false } }(), "errorRateLimit", func() bool { if normalizedResp.Error != nil { return normalizedResp.Error.RateLimit } else { return false } }(), "bodyLen", len(normalizedResp.Body))
 	decision := RetryDecision{}
 	if normalizedResp.Error != nil && normalizedResp.Error.Retryable {
 		decision = e.gateway.shouldRetry(model, capability, normalizedResp.Error.StatusCode, len(normalizedResp.Body) > 0, index)
 	}
+	slog.Debug("retry decision", "provider", model.Provider, "model", model.UpstreamID, "shouldRetry", decision.ShouldRetry, "reason", decision.Reason, "errorRetryable", func() bool { if normalizedResp.Error != nil { return normalizedResp.Error.Retryable } else { return false } }(), "index", index, "candidatesLeft", len(candidates)-index-1)
 	if decision.ShouldRetry && index+1 < len(candidates) {
 		retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
 		e.gateway.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, resp.Status, retryAfter)
@@ -112,6 +118,7 @@ func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model 
 		e.gateway.tracker.Failure(model.ID, capability, time.Since(started), normalizedResp.Error.StatusCode, normalizedResp.Error.Message, 0)
 		e.gateway.metrics.RecordFailure(time.Since(started), normalizedResp.Error.StatusCode)
 		e.record(model, capability, false, normalizedResp.Error.StatusCode, time.Since(started), nil, false)
+		slog.Debug("non-retryable error, deferErrorWrite=%v", "provider", model.Provider, "model", model.UpstreamID, "status", normalizedResp.Error.StatusCode, "message", normalizedResp.Error.Message, "deferErrorWrite", deferErrorWrite)
 		if deferErrorWrite {
 			err := *normalizedResp.Error
 			return AttemptResult{Terminal: false, LastError: &err}

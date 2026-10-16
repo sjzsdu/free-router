@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/sjzsdu/free-router/internal/catalog"
 	"github.com/sjzsdu/free-router/internal/provider"
@@ -211,13 +212,56 @@ func (a *OpenAICompatibleAdapter) ClassifyError(statusCode int, body []byte) Err
 		err.Retryable = err.Message == "HTTP 400"
 	case statusCode >= 400:
 		err.Message = a.parseErrorMessage(statusCode, body)
-		err.Retryable = false
+		// Make certain 4xx errors retryable to enable fallback for availability.
+		// Errors indicating the provider/model can't handle the request (rather
+		// than a genuinely malformed client request) should fall back.
+		err.Retryable = a.isProviderCapabilityError(err.Message)
 	default:
 		err.Message = "unknown error"
 		err.Retryable = false
 	}
 
 	return err
+}
+
+// isProviderCapabilityError returns true for 4xx error messages that indicate
+// the provider or model cannot handle the request (model not found, unsupported
+// feature, etc.) rather than a genuinely malformed client request. These should
+// trigger fallback to another provider for better availability.
+func (a *OpenAICompatibleAdapter) isProviderCapabilityError(message string) bool {
+	lower := strings.ToLower(message)
+	// Patterns indicating the provider/model doesn't support the request
+	capabilityPatterns := []string{
+		"model not found",
+		"model does not exist",
+		"unknown model",
+		"invalid model",
+		"model unavailable",
+		"unsupported",
+		"not supported",
+		"not implemented",
+		"capability",
+		"does not support",
+		"not available",
+		"no such model",
+		"model_decommissioned",
+		"deprecated",
+		"context length",
+		"max tokens",
+		"token limit",
+		"too many tokens",
+		"tools not supported",
+		"tool call not supported",
+		"function calling not supported",
+		"streaming not supported",
+		"stream not supported",
+	}
+	for _, pattern := range capabilityPatterns {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *OpenAICompatibleAdapter) parseErrorMessage(statusCode int, body []byte) string {
