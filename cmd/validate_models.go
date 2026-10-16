@@ -63,8 +63,8 @@ func addModelValidationCommand(root *cobra.Command, opts *options) {
 	var timeout time.Duration
 	var exitZero bool
 	cmd := &cobra.Command{
-		Use:    "validate-models",
-		Short:  "Probe maintained models with a minimal request to confirm they are callable",
+		Use:   "validate-models",
+		Short: "Probe maintained models with a minimal request to confirm they are callable",
 		Long: "Validate free model providers by sending minimal requests.\n" +
 			"By default only providers with API keys configured in .env are checked.\n" +
 			"Use --providers to validate a specific subset.",
@@ -196,74 +196,74 @@ func validateModels(ctx context.Context, opts options, cache string, providerFil
 			}
 			jobs = append(jobs, modelProbeOutcome{Model: model.ID, Provider: model.Provider, Function: function})
 		}
-	}		// Build per-provider probe timing to enforce minimum delay between
-		// probes to the same provider. This prevents concurrent probes from
-		// overwhelming a single provider's rate limit.
-		type providerTiming struct {
-			mu        sync.Mutex
-			lastProbe time.Time
-		}
-		providerTimings := make(map[string]*providerTiming)
-		for pid := range checked {
-			providerTimings[pid] = &providerTiming{}
-		}
+	} // Build per-provider probe timing to enforce minimum delay between
+	// probes to the same provider. This prevents concurrent probes from
+	// overwhelming a single provider's rate limit.
+	type providerTiming struct {
+		mu        sync.Mutex
+		lastProbe time.Time
+	}
+	providerTimings := make(map[string]*providerTiming)
+	for pid := range checked {
+		providerTimings[pid] = &providerTiming{}
+	}
 
-		results := make([]modelProbeOutcome, len(jobs))
-		sem := make(chan struct{}, concurrency)
-		var wg sync.WaitGroup
-		for idx, job := range jobs {
-			wg.Add(1)
-			go func(idx int, job modelProbeOutcome) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-				outcome := job
+	results := make([]modelProbeOutcome, len(jobs))
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for idx, job := range jobs {
+		wg.Add(1)
+		go func(idx int, job modelProbeOutcome) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			outcome := job
 
-				// Enforce per-provider minimum delay between probes.
-				if pt, ok := providerTimings[job.Provider]; ok {
-					pt.mu.Lock()
-					minDelay := providerMinDelay(job.Provider, registry)
-					if !pt.lastProbe.IsZero() {
-						elapsed := time.Since(pt.lastProbe)
-						if elapsed < minDelay {
-							time.Sleep(minDelay - elapsed)
-						}
+			// Enforce per-provider minimum delay between probes.
+			if pt, ok := providerTimings[job.Provider]; ok {
+				pt.mu.Lock()
+				minDelay := providerMinDelay(job.Provider, registry)
+				if !pt.lastProbe.IsZero() {
+					elapsed := time.Since(pt.lastProbe)
+					if elapsed < minDelay {
+						time.Sleep(minDelay - elapsed)
 					}
-					pt.lastProbe = time.Now()
-					pt.mu.Unlock()
 				}
+				pt.lastProbe = time.Now()
+				pt.mu.Unlock()
+			}
 
-				// Retry loop: rate-limit gets up to 3 retries, timeout up to 2.
-				for attempt := 0; ; attempt++ {
-					probeCtx, cancel := context.WithTimeout(ctx, timeout)
-					status, category, probeErr := runModelProbe(probeCtx, store, job.Model, job.Function)
-					cancel()
-					if probeErr == nil {
-						outcome.Status = status
-						outcome.Category = category
-						outcome.OK = true
-						break
-					}
+			// Retry loop: rate-limit gets up to 3 retries, timeout up to 2.
+			for attempt := 0; ; attempt++ {
+				probeCtx, cancel := context.WithTimeout(ctx, timeout)
+				status, category, probeErr := runModelProbe(probeCtx, store, job.Model, job.Function)
+				cancel()
+				if probeErr == nil {
 					outcome.Status = status
 					outcome.Category = category
-					outcome.OK = false
-					outcome.Error = probeErr.Error()
-					// Decide whether to retry.
-					if category == "rate-limit" && attempt < 2 {
-						delay := rateLimitBackoff(attempt, probeErr)
-						time.Sleep(delay)
-						continue
-					}
-					if category == "timeout" && attempt < 1 {
-						time.Sleep(3 * time.Second)
-						continue
-					}
+					outcome.OK = true
 					break
 				}
-				results[idx] = outcome
-			}(idx, job)
-		}
-		wg.Wait()
+				outcome.Status = status
+				outcome.Category = category
+				outcome.OK = false
+				outcome.Error = probeErr.Error()
+				// Decide whether to retry.
+				if category == "rate-limit" && attempt < 2 {
+					delay := rateLimitBackoff(attempt, probeErr)
+					time.Sleep(delay)
+					continue
+				}
+				if category == "timeout" && attempt < 1 {
+					time.Sleep(3 * time.Second)
+					continue
+				}
+				break
+			}
+			results[idx] = outcome
+		}(idx, job)
+	}
+	wg.Wait()
 
 	// Infer chat-tools results from chat probes where we skipped the
 	// redundant chat-tools probe. We scan every checked model; if it lists
@@ -397,8 +397,8 @@ func printProviderSummary(w io.Writer, report validationReport, skipped map[stri
 	for _, entry := range report.Models {
 		ps, ok := byProvider[entry.Provider]
 		if !ok {
-		ps = &providerStats{issues: make(map[string]int)}
-		byProvider[entry.Provider] = ps
+			ps = &providerStats{issues: make(map[string]int)}
+			byProvider[entry.Provider] = ps
 		}
 		ps.totalModels++
 		for _, fn := range entry.Functions {

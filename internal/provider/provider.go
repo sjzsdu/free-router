@@ -825,21 +825,21 @@ func builtins() []Spec {
 		{
 			ID: "xiaomi-mimo", BaseURL: "https://api.xiaomimimo.com/v1", APIKeyEnv: "MIMO_API_KEY", ModelDiscovery: "api", FreeModelPolicy: "all",
 			Tier: "gift-credits", FreeKind: "credit", BillingWarning: "赠送额度用完后停止使用或按账户计费设置执行，请先确认余额。",
-			RegisterURL: "https://platform.xiaomimimo.com/#/console/api-keys",
+			RegisterURL:        "https://platform.xiaomimimo.com/#/console/api-keys",
 			RateLimitPerSecond: 1, MaxConcurrent: 3, QueueSize: 10,
 		},
 		// DashScope (Alibaba): new-user free quota; requires billing opt-in to stop.
 		{
 			ID: "dashscope", BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", APIKeyEnv: "DASHSCOPE_API_KEY", ModelDiscovery: "api-agent-filter", FreeModelPolicy: "all",
 			Tier: "new-user-free-quota", FreeKind: "trial", BillingWarning: "新人额度通常仅 30～90 天；请在百炼控制台开启免费额度用完即停。",
-			RegisterURL: "https://bailian.console.aliyun.com/cn-beijing/?tab=app#/api-key",
+			RegisterURL:        "https://bailian.console.aliyun.com/cn-beijing/?tab=app#/api-key",
 			RateLimitPerSecond: 2, MaxConcurrent: 5, QueueSize: 20,
 		},
 		// Volcengine Ark: free trial quota per model.
 		{
 			ID: "volcengine-ark", BaseURL: "https://ark.cn-beijing.volces.com/api/v3", APIKeyEnv: "ARK_API_KEY", ModelDiscovery: "agent",
 			Tier: "free-trial-quota", FreeKind: "trial", BillingWarning: "免费额度按模型限量发放，耗尽后可能转为计费。",
-			RegisterURL: "https://console.volcengine.com/ark/region:ark+cn-beijing/apikey",
+			RegisterURL:        "https://console.volcengine.com/ark/region:ark+cn-beijing/apikey",
 			RateLimitPerSecond: 1, MaxConcurrent: 3, QueueSize: 10,
 		},
 		// BigModel (Zhipu): free flash models only.
@@ -852,7 +852,7 @@ func builtins() []Spec {
 		{
 			ID: "xfyun", BaseURL: "https://spark-api-open.xf-yun.com/v1", ModelDiscovery: "agent",
 			APIKeyEnv: "XFYUN_API_KEY", Tier: "free-lite-model", FreeKind: "free", BillingWarning: "Spark Lite 免费使用；其他版本（Pro/Max/Ultra）按量计费，请勿配置付费版本密钥。",
-			RegisterURL: "https://console.xfyun.cn/services/spark",
+			RegisterURL:        "https://console.xfyun.cn/services/spark",
 			RateLimitPerSecond: 1, MaxConcurrent: 3, QueueSize: 10,
 		},
 		// SiliconFlow: L0 tier 1000 RPM / 40K TPM for free models.
