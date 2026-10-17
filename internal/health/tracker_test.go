@@ -1,6 +1,8 @@
 package health
 
 import (
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -153,6 +155,52 @@ func TestQuotaErrorQuarantinesProvider(t *testing.T) {
 	tracker.Failure("provider/model", "chat", 0, 402, "quota exhausted", 0)
 	if tracker.Available("provider/other", "chat") {
 		t.Fatal("account quota error should quarantine all models from same provider")
+	}
+}
+
+// A revoked key or a spent allowance cannot be fixed by retrying, so the
+// provider must stay out of the candidate pool long enough that it stops
+// consuming an attempt slot on every request. The transient curve bottoms out
+// at 30s, which made a dead provider look permanently half-healthy.
+func TestCredentialFailureQuarantinesProviderForLongerThanTransientFailures(t *testing.T) {
+	for _, status := range []int{401, 402} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			tracker := New()
+			now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
+			tracker.now = func() time.Time { return now }
+
+			tracker.Failure("provider/model", "chat", 0, status, "account unavailable", 0)
+			provider := tracker.ProviderSnapshot()[0]
+			quarantine := provider.CooldownUntil.Sub(now)
+			if quarantine < DefaultCredentialCoolDownBase {
+				t.Fatalf("quarantine = %v, want at least %v", quarantine, DefaultCredentialCoolDownBase)
+			}
+			// Still self-healing: it must come back on its own rather than
+			// require a restart.
+			if quarantine > DefaultCredentialCoolDownMax+DefaultCredentialCoolDownMax/2 {
+				t.Fatalf("quarantine = %v, want at most %v (plus jitter)", quarantine, DefaultCredentialCoolDownMax)
+			}
+
+			now = now.Add(DefaultCoolDownMax)
+			if tracker.Available("provider/other", "chat") {
+				t.Fatal("provider should still be quarantined after the transient cooldown elapsed")
+			}
+		})
+	}
+}
+
+// 403 is ambiguous — a suspended account or one model the key may not call —
+// so it keeps the short curve and must not freeze the provider's siblings for
+// minutes.
+func TestForbiddenKeepsShortCooldown(t *testing.T) {
+	tracker := New()
+	now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
+	tracker.now = func() time.Time { return now }
+
+	tracker.Failure("provider/model", "chat", 0, 403, "forbidden", 0)
+	provider := tracker.ProviderSnapshot()[0]
+	if quarantine := provider.CooldownUntil.Sub(now); quarantine > DefaultCoolDownMax+DefaultCoolDownMax/2 {
+		t.Fatalf("403 quarantine = %v, want the transient curve (<= %v plus jitter)", quarantine, DefaultCoolDownMax)
 	}
 }
 
@@ -553,5 +601,73 @@ func TestReleaseIsIdempotent(t *testing.T) {
 	tracker.Release("provider/model", "chat")
 	if !tracker.TryAcquire("provider/model", "chat") {
 		t.Fatal("idempotent Release should free the slot")
+	}
+}
+
+// Persistence now happens outside the state lock. Concurrent failures must
+// still produce a complete, reloadable file (run with -race to check the
+// snapshot sequence and the lock hand-off).
+func TestConcurrentFailuresPersistAReloadableSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "health.json")
+	tracker, err := NewPersistent(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const writers = 8
+	const perWriter = 25
+	var wait sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			model := fmt.Sprintf("provider%d/model", index)
+			for j := 0; j < perWriter; j++ {
+				tracker.Failure(model, "chat", time.Millisecond, http.StatusInternalServerError, "boom", 0)
+				// Readers must not be blocked behind a filesystem write.
+				_ = tracker.Available(model, "chat")
+			}
+		}(i)
+	}
+	wait.Wait()
+
+	reloaded, err := NewPersistent(path)
+	if err != nil {
+		t.Fatalf("reload persisted state: %v", err)
+	}
+	if got := len(reloaded.Snapshot()); got != writers {
+		t.Fatalf("persisted models = %d, want %d", got, writers)
+	}
+}
+
+// An older snapshot must not roll the file back: the sequence guard in persist
+// drops it once a newer snapshot is known to be on disk.
+func TestPersistDropsStaleSnapshots(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "health.json")
+	tracker := New()
+	tracker.path = path
+
+	tracker.mu.Lock()
+	tracker.state("provider/model", "chat").LastError = "older"
+	tracker.mu.Unlock()
+	tracker.persist()
+
+	// Change the in-memory state, then pretend a newer snapshot already
+	// reached the file. persist must refuse to write the older one.
+	tracker.mu.Lock()
+	tracker.state("provider/model", "chat").LastError = "newer-but-skipped"
+	tracker.mu.Unlock()
+	tracker.persistMu.Lock()
+	tracker.persistSeq = tracker.seq.Load() + 10
+	tracker.persistMu.Unlock()
+	tracker.persist()
+
+	reloaded, err := NewPersistent(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := reloaded.Snapshot()
+	if len(states) != 1 || states[0].LastError != "older" {
+		t.Fatalf("persisted state = %#v, want the older snapshot untouched", states)
 	}
 }

@@ -226,7 +226,7 @@ func runServer(ctx context.Context, opts options) error {
 		return rollback, nil
 	}
 	handler.Handle("GET /admin", http.RedirectHandler("/admin/", http.StatusTemporaryRedirect))
-	handler.Handle("/admin/", admin.New(routes, store, vault, tracker, admin.Config{AllowRemote: opts.adminAllowRemote, Token: opts.adminToken, Version: version, FreeModels: opts.freeModels, Statistics: stats}, reloadProviders))
+	handler.Handle("/admin/", admin.New(routes, store, vault, tracker, admin.Config{AllowRemote: opts.adminAllowRemote, Token: opts.adminToken, Version: version, FreeModels: opts.freeModels, Statistics: stats, RecentFailures: handler.RecentFailures}, reloadProviders))
 	server := &http.Server{
 		Addr:              opts.addr,
 		Handler:           handler,

@@ -7,8 +7,10 @@ import (
 	"errors"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1324,11 +1326,36 @@ func TestTransferMetricsSeparateTTFBTotalBytesAndCancellation(t *testing.T) {
 	metrics := NewMetrics()
 	metrics.RecordRequest()
 	metrics.RecordTransfer(true, 100*time.Millisecond, 20*time.Millisecond, 42, http.StatusOK, false)
+	metrics.RecordDone()
 	metrics.RecordRequest()
 	metrics.RecordTransfer(false, 200*time.Millisecond, 40*time.Millisecond, 10, 0, true)
+	metrics.RecordDone()
 	snapshot := metrics.Snapshot()
 	if snapshot.AverageLatency != 150 || snapshot.AverageTTFB != 30 || snapshot.OutputBytes != 52 || snapshot.Incomplete != 1 || snapshot.Cancellations != 1 || snapshot.ErrorsNetwork != 0 || snapshot.Concurrency != 0 {
 		t.Fatalf("metrics=%#v", snapshot)
+	}
+}
+
+// A request that falls back between providers produces several upstream
+// attempts. The concurrency gauge must count the request once, otherwise it
+// grows without bound and stops describing anything.
+func TestConcurrencyCountsRequestsNotAttempts(t *testing.T) {
+	metrics := NewMetrics()
+	metrics.RecordRequest()
+	// First attempt fails and falls back: no outcome recorder may release the
+	// request's slot.
+	metrics.RecordFallback()
+	metrics.RecordTransfer(false, 10*time.Millisecond, 5*time.Millisecond, 0, http.StatusTooManyRequests, false)
+	if got := metrics.Snapshot().Concurrency; got != 1 {
+		t.Fatalf("concurrency during a fallback = %d, want 1", got)
+	}
+	metrics.RecordTransfer(true, 20*time.Millisecond, 5*time.Millisecond, 12, http.StatusOK, false)
+	if got := metrics.Snapshot().Concurrency; got != 1 {
+		t.Fatalf("concurrency after success = %d, want 1 until the request ends", got)
+	}
+	metrics.RecordDone()
+	if got := metrics.Snapshot().Concurrency; got != 0 {
+		t.Fatalf("concurrency after RecordDone = %d, want 0", got)
 	}
 }
 
@@ -1381,6 +1408,76 @@ func TestNonIdempotentGenerationDoesNotFallbackAfterUpstreamDisconnect(t *testin
 	}
 	if firstCalls.Load() != 1 || secondCalls.Load() != 0 {
 		t.Fatalf("generation calls: first=%d second=%d", firstCalls.Load(), secondCalls.Load())
+	}
+}
+
+// A generation request whose provider could not even be connected to never
+// reached that provider, so replaying it against another free source cannot
+// duplicate any work — and turns a dead provider into a served request.
+func TestNonIdempotentGenerationFallsBackWhenNeverSent(t *testing.T) {
+	clearBuiltinKeys(t)
+	var firstCalls atomic.Int64
+	var secondCalls atomic.Int64
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/models":
+			model := "image-a"
+			if request.URL.Host == "b.invalid" {
+				model = "image-b"
+			}
+			return testResponse(http.StatusOK, `{"data":[{"id":"`+model+`","type":"image"}]}`), nil
+		case "/images/generations":
+			if request.URL.Host == "a.invalid" {
+				firstCalls.Add(1)
+				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+			}
+			secondCalls.Add(1)
+			return testResponse(http.StatusOK, `{"data":[{"url":"https://example.invalid/image.png"}]}`), nil
+		default:
+			return testResponse(http.StatusNotFound, `{}`), nil
+		}
+	})}
+	registry, err := provider.NewRegistry(`[
+		{"id":"a","base_url":"https://a.invalid","no_auth":true},
+		{"id":"b","base_url":"https://b.invalid","no_auth":true}
+	]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), client)
+	discoverModelsForTest(t, store)
+	handler := New(store, registry, Config{MaxAttempts: 2}, client)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"model":"image-generation","prompt":"one billed image"}`)))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if firstCalls.Load() != 1 || secondCalls.Load() != 1 {
+		t.Fatalf("generation calls: first=%d second=%d", firstCalls.Load(), secondCalls.Load())
+	}
+}
+
+func TestRequestNeverReachedUpstreamClassification(t *testing.T) {
+	dialErr := &url.Error{Op: "Post", URL: "https://a.invalid", Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}}
+	dnsErr := &url.Error{Op: "Post", URL: "https://a.invalid", Err: &net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "no such host", Name: "a.invalid"}}}
+	readErr := &url.Error{Op: "Post", URL: "https://a.invalid", Err: io.ErrUnexpectedEOF}
+	reset := &net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset")}
+
+	if !requestNeverReachedUpstream(dialErr) {
+		t.Error("dial failure must be treated as never sent")
+	}
+	if !requestNeverReachedUpstream(dnsErr) {
+		t.Error("dns failure must be treated as never sent")
+	}
+	if requestNeverReachedUpstream(readErr) {
+		t.Error("read failure may have reached the upstream and must not be replayed")
+	}
+	if requestNeverReachedUpstream(reset) {
+		t.Error("a non-url error must not be treated as never sent")
+	}
+	if requestNeverReachedUpstream(nil) {
+		t.Error("nil error must not be treated as never sent")
 	}
 }
 
@@ -1437,15 +1534,35 @@ func TestParseRetryAfterOverflowClamped(t *testing.T) {
 	}
 }
 
-func TestEffectiveDelayCapped(t *testing.T) {
-	if got := effectiveDelay(time.Second, 48*time.Hour); got != maxFallbackDelay {
-		t.Fatalf("effectiveDelay cap = %v, want %v", got, maxFallbackDelay)
+func TestFallbackDelayOnlyWaitsForSiblingModels(t *testing.T) {
+	candidates := []catalog.Model{
+		{ID: "alpha/one", Provider: "alpha"},
+		{ID: "beta/one", Provider: "beta"},
 	}
-	if got := effectiveDelay(2*time.Second, 0); got != 2*time.Second {
-		t.Fatalf("effectiveDelay backoff = %v, want 2s", got)
+	// Crossing to another provider must not inherit the failed provider's
+	// Retry-After: that wait is pure added latency for the caller.
+	if got := fallbackDelay(candidates, 0, 2*time.Second, 60*time.Second); got != 0 {
+		t.Fatalf("cross-provider fallbackDelay = %v, want 0", got)
 	}
-	if got := effectiveDelay(time.Second, 3*time.Second); got != 3*time.Second {
-		t.Fatalf("effectiveDelay retryAfter = %v, want 3s", got)
+	// The last candidate has nothing to wait for either.
+	if got := fallbackDelay(candidates, 1, 2*time.Second, 60*time.Second); got != 0 {
+		t.Fatalf("last-candidate fallbackDelay = %v, want 0", got)
+	}
+
+	siblings := []catalog.Model{
+		{ID: "alpha/one", Provider: "alpha"},
+		{ID: "alpha/two", Provider: "alpha"},
+	}
+	// Sibling models share the provider's key and quota, so the hint is
+	// honoured but capped so a long Retry-After cannot pin the handler.
+	if got := fallbackDelay(siblings, 0, 500*time.Millisecond, 60*time.Minute); got != sameProviderFallbackDelay {
+		t.Fatalf("sibling fallbackDelay = %v, want %v", got, sameProviderFallbackDelay)
+	}
+	if got := fallbackDelay(siblings, 0, 500*time.Millisecond, 1500*time.Millisecond); got != 1500*time.Millisecond {
+		t.Fatalf("sibling fallbackDelay = %v, want 1.5s", got)
+	}
+	if got := fallbackDelay(siblings, 0, 700*time.Millisecond, 100*time.Millisecond); got != 700*time.Millisecond {
+		t.Fatalf("sibling fallbackDelay = %v, want backoff 700ms", got)
 	}
 }
 

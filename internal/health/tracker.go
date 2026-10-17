@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,6 +26,17 @@ const (
 	DefaultFailureThreshold = 5
 	DefaultCoolDownBase     = time.Second
 	DefaultCoolDownMax      = 30 * time.Second
+
+	// Credential and quota failures (401/402/403) are not fixed by retrying:
+	// the key was revoked, the account was suspended or the free allowance is
+	// spent. Re-probing them on the transient-failure curve (30s) means every
+	// such provider keeps taking a share of each request's attempt budget
+	// forever while it can never answer. A long, still self-healing quarantine
+	// keeps the pool's fallback depth for providers that can actually serve,
+	// and an operator who fixes the key can lift it immediately from the admin
+	// UI (health reset) or by saving the provider config.
+	DefaultCredentialCoolDownBase = 2 * time.Minute
+	DefaultCredentialCoolDownMax  = 30 * time.Minute
 )
 
 type State struct {
@@ -57,14 +69,32 @@ type Summary struct {
 }
 
 type Tracker struct {
-	mu               sync.RWMutex
-	states           map[string]*State
-	providerStates   map[string]*State
-	now              func() time.Time
-	failureThreshold int
-	cooldownBase     time.Duration
-	cooldownMax      time.Duration
-	path             string
+	mu                     sync.RWMutex
+	states                 map[string]*State
+	providerStates         map[string]*State
+	now                    func() time.Time
+	failureThreshold       int
+	cooldownBase           time.Duration
+	cooldownMax            time.Duration
+	credentialCooldownBase time.Duration
+	credentialCooldownMax  time.Duration
+	path                   string
+
+	// Persistence is deliberately kept off the state lock. Serialising the
+	// whole state and writing it to disk while holding mu blocked every
+	// concurrent Available/TryAcquire/Healthy call — including the ones in
+	// flight for healthy providers — for the duration of a filesystem write,
+	// which is exactly when a free pool is having its worst moment (a 429
+	// storm produces one write per failed attempt).
+	//
+	// seq is advanced under mu for every snapshot; persistMu serialises the
+	// writers and persistSeq records the newest snapshot already on disk so a
+	// slower, older snapshot can never overwrite a newer one.
+	// A monotonic snapshot sequence, advanced under the read lock by
+	// snapshotLocked; see persist for how it prevents stale writes.
+	seq        atomic.Uint64
+	persistMu  sync.Mutex
+	persistSeq uint64
 }
 
 type persistedState struct {
@@ -75,12 +105,14 @@ type persistedState struct {
 
 func New() *Tracker {
 	return &Tracker{
-		states:           make(map[string]*State),
-		providerStates:   make(map[string]*State),
-		now:              time.Now,
-		failureThreshold: DefaultFailureThreshold,
-		cooldownBase:     DefaultCoolDownBase,
-		cooldownMax:      DefaultCoolDownMax,
+		states:                 make(map[string]*State),
+		providerStates:         make(map[string]*State),
+		now:                    time.Now,
+		failureThreshold:       DefaultFailureThreshold,
+		cooldownBase:           DefaultCoolDownBase,
+		cooldownMax:            DefaultCoolDownMax,
+		credentialCooldownBase: DefaultCredentialCoolDownBase,
+		credentialCooldownMax:  DefaultCredentialCoolDownMax,
 	}
 }
 
@@ -225,11 +257,19 @@ func (t *Tracker) checkAndTransition(state *State) {
 }
 
 func (t *Tracker) Success(model, capability string, latency time.Duration, status int) {
+	var persistRecovery bool
 	t.mu.Lock()
+	// persist runs after Unlock (deferred calls are LIFO), so the file write
+	// never happens while the state lock is held.
+	defer func() {
+		if persistRecovery {
+			t.persist()
+		}
+	}()
 	defer t.mu.Unlock()
 
 	existing := t.states[stateKey(model, capability)]
-	persistRecovery := existing != nil && (existing.Status != StatusHealthy || existing.LastError != "")
+	persistRecovery = existing != nil && (existing.Status != StatusHealthy || existing.LastError != "")
 	provider := providerFromModel(model)
 	if provider != "" {
 		pState := t.providerStates[provider]
@@ -257,16 +297,15 @@ func (t *Tracker) Success(model, capability string, latency time.Duration, statu
 		atomic.StoreInt32(&pState.InFlight, 0)
 	}
 	// Failures are persisted eagerly, so a successful request only needs to
-	// write when it clears a previously persisted model or provider failure.
-	if persistRecovery {
-		t.persistLocked()
-	}
+	// write when it clears a previously persisted model or provider failure;
+	// the deferred persist above performs that write.
 }
 
 func (t *Tracker) Failure(model, capability string, latency time.Duration, status int, message string, retryAfter time.Duration) {
 	t.mu.Lock()
+	// Deferred calls run LIFO: Unlock first, then the disk write.
+	defer t.persist()
 	defer t.mu.Unlock()
-	defer t.persistLocked()
 
 	errType := classifyError(status)
 	if errType == ErrorClient {
@@ -296,7 +335,7 @@ func (t *Tracker) Failure(model, capability string, latency time.Duration, statu
 			pState.LastError = message
 			pState.LastUsedAt = t.now()
 			pState.Status = StatusOpen
-			pState.CooldownUntil = t.now().Add(t.cooldownFor(pState.ConsecutiveFailures))
+			pState.CooldownUntil = t.now().Add(t.authCooldownFor(status, pState.ConsecutiveFailures))
 			atomic.StoreInt32(&pState.InFlight, 0)
 		}
 		// Record the credential failure on the model as well and always
@@ -339,8 +378,9 @@ func (t *Tracker) Failure(model, capability string, latency time.Duration, statu
 
 func (t *Tracker) ProbeSuccess(model, capability string, latency time.Duration) {
 	t.mu.Lock()
+	// Deferred calls run LIFO: Unlock first, then the disk write.
+	defer t.persist()
 	defer t.mu.Unlock()
-	defer t.persistLocked()
 
 	state := t.state(model, capability)
 	state.Checks++
@@ -382,8 +422,9 @@ func (t *Tracker) RestoreProbeSuccess(model, capability string, checkedAt time.T
 
 func (t *Tracker) ProbeFailure(model, capability string, latency time.Duration, status int, message string) {
 	t.mu.Lock()
+	// Deferred calls run LIFO: Unlock first, then the disk write.
+	defer t.persist()
 	defer t.mu.Unlock()
-	defer t.persistLocked()
 
 	state := t.state(model, capability)
 	state.Checks++
@@ -403,7 +444,7 @@ func (t *Tracker) ProbeFailure(model, capability string, latency time.Duration, 
 
 	if errType == ErrorAuth {
 		state.Status = StatusOpen
-		state.CooldownUntil = t.now().Add(t.cooldownFor(state.ConsecutiveFailures))
+		state.CooldownUntil = t.now().Add(t.authCooldownFor(status, state.ConsecutiveFailures))
 		return
 	}
 
@@ -482,8 +523,9 @@ func (t *Tracker) Summary() Summary {
 
 func (t *Tracker) Reset(model, capability string) {
 	t.mu.Lock()
+	// Deferred calls run LIFO: Unlock first, then the disk write.
+	defer t.persist()
 	defer t.mu.Unlock()
-	defer t.persistLocked()
 
 	if capability != "" {
 		delete(t.states, stateKey(model, capability))
@@ -550,10 +592,11 @@ func (t *Tracker) backupInvalidState(cause error) error {
 	return nil
 }
 
-func (t *Tracker) persistLocked() {
-	if t.path == "" {
-		return
-	}
+// snapshotLocked copies the persistable state and advances the snapshot
+// sequence. The caller must hold mu (a read lock is enough). It is pure memory
+// work, so it can run under the lock; encoding and the filesystem write happen
+// in persist, outside it.
+func (t *Tracker) snapshotLocked() (persistedState, uint64) {
 	persisted := persistedState{SchemaVersion: 1}
 	for _, state := range t.states {
 		copy := *state
@@ -572,6 +615,34 @@ func (t *Tracker) persistLocked() {
 		return persisted.Models[i].Model < persisted.Models[j].Model
 	})
 	sort.Slice(persisted.Providers, func(i, j int) bool { return persisted.Providers[i].Model < persisted.Providers[j].Model })
+	return persisted, t.seq.Add(1)
+}
+
+// persist writes the current state to disk *without* holding the state lock.
+// Callers register it as a deferred call so every exit path saves exactly once.
+//
+// Two requests can reach this point concurrently. persistMu serialises the
+// writers, and the snapshot sequence keeps the file monotonic: if a newer
+// snapshot was already written, an older one is dropped instead of rolling the
+// file back to stale state.
+func (t *Tracker) persist() {
+	if t.path == "" {
+		return
+	}
+	t.mu.RLock()
+	snapshot, seq := t.snapshotLocked()
+	t.mu.RUnlock()
+
+	t.persistMu.Lock()
+	defer t.persistMu.Unlock()
+	if seq <= t.persistSeq {
+		return
+	}
+	t.persistSeq = seq
+	t.writeSnapshot(snapshot)
+}
+
+func (t *Tracker) writeSnapshot(persisted persistedState) {
 	content, err := json.MarshalIndent(persisted, "", "  ")
 	if err != nil {
 		slog.Error("encode health state", "path", t.path, "error", err)
@@ -632,19 +703,51 @@ func (t *Tracker) providerState(provider string) *State {
 }
 
 func (t *Tracker) cooldownFor(failures int) time.Duration {
-	// Exponential backoff with saturation: double up to cooldownMax
-	// without ever overflowing int64 (a negative backoff would panic
-	// rand.Int63n below). Values of failures <= 0 fall back to the base.
-	backoff := t.cooldownBase
+	return cooldownWith(t.cooldownBase, t.cooldownMax, failures)
+}
+
+// credentialCooldownFor is the quarantine curve for failures that retrying
+// cannot fix (revoked key, suspended account, exhausted quota). It is longer
+// than the transient curve on purpose: while such a provider stays selectable,
+// every request spends one of its few attempt slots on a provider that is
+// guaranteed to fail, which shortens the effective fallback depth for the
+// healthy ones.
+func (t *Tracker) credentialCooldownFor(failures int) time.Duration {
+	return cooldownWith(t.credentialCooldownBase, t.credentialCooldownMax, failures)
+}
+
+// authCooldownFor picks the quarantine curve for an auth failure. A 401
+// (invalid key) or 402 (allowance spent) condemns the whole provider: retrying
+// cannot fix it and every request that still selects it burns one of its few
+// attempt slots, so it gets the long credential curve. A 403 is ambiguous — it
+// covers a suspended account as well as a single model the key may not call —
+// so it stays on the short transient curve to avoid freezing the provider's
+// other models for minutes.
+func (t *Tracker) authCooldownFor(status, failures int) time.Duration {
+	if providerWideAuthFailure(status) {
+		return t.credentialCooldownFor(failures)
+	}
+	return t.cooldownFor(failures)
+}
+
+func providerWideAuthFailure(status int) bool {
+	return status == http.StatusUnauthorized || status == http.StatusPaymentRequired
+}
+
+func cooldownWith(base, max time.Duration, failures int) time.Duration {
+	// Exponential backoff with saturation: double up to max without ever
+	// overflowing int64 (a negative backoff would panic rand.Int63n below).
+	// Values of failures <= 0 fall back to the base.
+	backoff := base
 	for i := 1; i < failures; i++ {
-		if backoff >= t.cooldownMax/2 {
-			backoff = t.cooldownMax
+		if backoff >= max/2 {
+			backoff = max
 			break
 		}
 		backoff *= 2
 	}
-	if backoff > t.cooldownMax {
-		backoff = t.cooldownMax
+	if backoff > max {
+		backoff = max
 	}
 	var jitter time.Duration
 	if backoff >= 2 {

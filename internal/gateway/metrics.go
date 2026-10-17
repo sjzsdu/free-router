@@ -32,6 +32,11 @@ func NewMetrics() *Metrics {
 	return &Metrics{}
 }
 
+// RecordRequest starts tracking one downstream request. It must be paired with
+// exactly one RecordDone, which is why the concurrency decrement does not live
+// in the individual outcome recorders: a request can produce many upstream
+// attempts (fallbacks) or none at all, and decrementing per attempt made the
+// concurrency gauge drift upward on every fallback.
 func (m *Metrics) RecordRequest() {
 	m.Requests.Add(1)
 	current := m.Concurrency.Add(1)
@@ -46,10 +51,8 @@ func (m *Metrics) RecordRequest() {
 	}
 }
 
-func (m *Metrics) RecordSuccess(latency time.Duration) {
-	m.Successes.Add(1)
-	m.LatencySum.Add(int64(latency))
-	m.LatencyCount.Add(1)
+// RecordDone releases the concurrency slot taken by RecordRequest.
+func (m *Metrics) RecordDone() {
 	m.Concurrency.Add(-1)
 }
 
@@ -57,7 +60,6 @@ func (m *Metrics) RecordFailure(latency time.Duration, statusCode int) {
 	m.Failures.Add(1)
 	m.LatencySum.Add(int64(latency))
 	m.LatencyCount.Add(1)
-	m.Concurrency.Add(-1)
 
 	switch {
 	case statusCode == 0:
@@ -97,7 +99,6 @@ func (m *Metrics) RecordTransfer(success bool, total, ttfb time.Duration, output
 	if outputBytes > 0 {
 		m.OutputBytes.Add(uint64(outputBytes))
 	}
-	m.Concurrency.Add(-1)
 }
 
 func (m *Metrics) RecordFallback() {

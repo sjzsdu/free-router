@@ -250,6 +250,58 @@ X-Free-Router-Provider: groq
 X-Free-Router-Model: openai/gpt-oss-120b
 ```
 
+## 失败归因
+
+所有响应都会带 `X-Request-Id`，同一个值也会出现在错误体的 `request_id` 里，方便把一次调用和日志对上。
+
+免费源会以各种方式失败：密钥被吊销、当日额度用尽、临时 429、主机不可达。路由器把所有候选都试过之后，不会再把“最后一家”的错误原样转给调用方——那会让“整池免费额度用尽”看起来像调用方自己的凭据出了问题。现在按整池情况给出结论：
+
+| 池内情况 | 状态码 | `code` |
+| --- | --- | --- |
+| 任一上游限流 | 429，并转发最小的 `Retry-After` | `rate_limited` |
+| 只有鉴权/额度类故障（401/402/403） | 503 | `accounts_unavailable` |
+| 全部超时或不可达 | 504 | `upstream_timeout` |
+| 其余上游故障 | 502 | `upstream_failed` |
+| 请求本身不合法（非 408/429 的非重试类 4xx） | 原样透传上游状态与文案 | `client_error` |
+| 单候选 | 原样透传上游状态与文案 | 按错误类型归类 |
+
+错误体保持 OpenAI 兼容，并额外带 `attempts`（每个试过的上游）、`skipped`（没有尝试的候选及原因）与 `elapsed_ms`（这次请求耗在整池尝试上的时间）：
+
+```json
+{
+  "error": {
+    "message": "all 2 configured free providers are rate limited; retry shortly",
+    "type": "free_router_error",
+    "code": "rate_limited",
+    "request_id": "4da8cab94fac3f61",
+    "route": "chat",
+    "elapsed_ms": 437,
+    "attempts": [
+      {"provider": "groq", "model": "openai/gpt-oss-120b", "capability": "chat", "phase": "strict", "status": 429, "message": "rate limited", "retryable": true, "rate_limited": true, "retry_after_seconds": 12, "latency_ms": 118},
+      {"provider": "openrouter", "model": "qwen/qwen3-coder:free", "capability": "chat", "phase": "strict", "status": 502, "message": "server error", "retryable": true, "latency_ms": 319}
+    ],
+    "skipped": [
+      {"provider": "gemini", "model": "gemini-3.5-flash", "reason": "no acquirable in-flight slot; the model is cooling down after recent failures"}
+    ]
+  }
+}
+```
+
+`phase` 为 `loose` 表示该次尝试来自“工具调用降级为普通对话”的兜底循环。`latency_ms` 用来区分“这家配错了”（例如 100ms 内返回的 401）和“这家很慢或被打爆”（例如 30s 才超时的 504）——两者需要完全不同的处理方式。
+
+### failover 不会替你等上游
+
+换源通常意味着换到另一个账号、另一份额度，因此失败 provider 的 `Retry-After` 只描述它自己：拿它来阻塞下一次尝试，只会把整整一个提示时长加到调用方身上（曾经可以叠加到 5 分钟）。现在：
+
+- 跨 provider 的 fallback **立即尝试**；失败的那个模型已经按 `Retry-After` 进入冷却，在其提示期内不会再被选中；
+- 只有同一个 provider 的兄弟模型（共享同一个 key 和配额）之间才保留短暂等待，且上限 2 秒。
+
+### 不可修复的失败会被长时间隔离
+
+免费池里最常见的一种“假可用”是密钥被吊销（401）或额度用尽（402）：重试永远不会成功，但只要它还留在候选里，每个请求就会先给它一次机会，白白消耗本来就不多的尝试预算（默认 3 次），并延后真正能服务的源。这两类失败现在按独立的隔离曲线处理：2 分钟起、指数退避、封顶 30 分钟。403 语义模糊（既可能是账号被停用，也可能是某个模型没有授权），因此仍走原来的短冷却，避免因为一个模型未授权而冻结同一个 key 下的其它模型。
+
+隔离期内该 provider 的全部模型都不会被选中，`skipped` 会写明它正在冷却。修好 key 或充值后，无需等它自然恢复：在 Admin 的模型健康页执行 reset，或重新保存一次 provider 配置即可立即解除。`/metrics` 的 `concurrency` 现在按“在途请求”计数，不再随 fallback 次数单调增长。
+
 ## 模型元数据
 
 `GET /v1/models` 只返回当前至少有一个健康候选的稳定能力名称，保证 Agent 不依赖具体 Provider 或真实模型；某项能力全部故障时会暂时从列表消失。完整物理模型目录只通过本机 Admin API/UI 展示，其中包括：

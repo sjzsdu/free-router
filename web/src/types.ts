@@ -203,3 +203,35 @@ export interface EffectiveModel extends Model {
   disabled: boolean
   route_types: RouteType[]
 }
+
+export interface FailureAttempt {
+  provider: string
+  model: string
+  capability?: string
+  phase?: string
+  status: number
+  message?: string
+  retryable: boolean
+  rate_limited?: boolean
+  retry_after_seconds?: number
+  latency_ms?: number
+}
+
+export interface FailureSkipped {
+  provider: string
+  model: string
+  reason: string
+}
+
+/** One request whose every candidate failed; mirrors the gateway error body. */
+export interface FailureRecord {
+  at: string
+  request_id?: string
+  route?: string
+  status: number
+  code: string
+  message: string
+  elapsed_ms?: number
+  attempts?: FailureAttempt[]
+  skipped?: FailureSkipped[]
+}
