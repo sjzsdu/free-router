@@ -302,6 +302,41 @@ X-Free-Router-Model: openai/gpt-oss-120b
 
 隔离期内该 provider 的全部模型都不会被选中，`skipped` 会写明它正在冷却。修好 key 或充值后，无需等它自然恢复：在 Admin 的模型健康页执行 reset，或重新保存一次 provider 配置即可立即解除。`/metrics` 的 `concurrency` 现在按“在途请求”计数，不再随 fallback 次数单调增长。
 
+## 日志
+
+默认是 `info` 级别、`text` 格式、写 stderr，并且**每个推理请求输出一行访问日志**（流式与非流式都有，健康检查等控制面请求不刷屏）：
+
+```text
+time=2026-10-17T15:20:01.812+08:00 level=INFO msg=request request_id=4da8cab94fac3f61 method=POST path=/v1/chat/completions route=chat status=200 attempts=2 duration_ms=437 bytes=812 provider=groq model=openai/gpt-oss-120b capability=chat ttfb_ms=210 stream=true input_tokens=12 output_tokens=34 total_tokens=46
+```
+
+| 字段 | 含义 |
+| --- | --- |
+| `request_id` | 与响应头 `X-Request-Id`、错误体里的 `request_id` 是同一个值，一条 `grep` 就能把一次调用对齐 |
+| `route` | 客户端请求的稳定能力名（`chat`、`chat-tools`、`embedding` 等） |
+| `status` | 调用方实际收到的状态码，失败时的错误体也计入 |
+| `attempts` | 本次请求一共尝试了几个上游；`1` 表示首选就成功，大于 `1` 就是发生过 fallback |
+| `provider` / `model` | 最终应答的真实上游，客户端看不到，但排查时最先需要 |
+| `duration_ms` / `ttfb_ms` / `bytes` | 总耗时、首字节耗时、写回的响应字节数 |
+| `stream` | 是否为 SSE 流式响应 |
+| `input_tokens` / `output_tokens` | 上游返回的用量；上游应当返回却没返回时是 `usage_missing=true`，不会估算 |
+| `phase=loose` | 该响应来自“工具调用降级为普通对话”的兜底循环，属于正确性相关信息 |
+| `code` | 请求失败时的归因码（`rate_limited`、`accounts_unavailable`、`upstream_timeout` 等），与错误体一致 |
+
+日志级别按结果自动区分：成功是 `INFO`、4xx 是 `WARN`、5xx 是 `ERROR`。所以 `--log-level warn` 只留下有问题的请求。
+
+两个开关：
+
+```bash
+free-router serve --log-level debug          # 输出每个候选的尝试、重试判定与 fallback 决策
+free-router serve --log-format json          # 交给 jq / Loki / 日志采集
+FREE_ROUTER_LOG_LEVEL=debug FREE_ROUTER_LOG_FORMAT=json free-router serve
+```
+
+`--log-level` 与 `--log-format` 对应环境变量 `FREE_ROUTER_LOG_LEVEL` / `FREE_ROUTER_LOG_FORMAT`。守护进程模式下，`free-router daemon install` 会把当前值写进 daemon 环境快照，修改后需要重新执行 `free-router daemon install` 并重启；`free-router daemon logs --follow` 查看后台日志。
+
+写日志不改变路由行为：日志级别只影响可见性，不会因为调高到 `debug` 而让请求更慢或触发更多上游调用。
+
 ## 模型元数据
 
 `GET /v1/models` 只返回当前至少有一个健康候选的稳定能力名称，保证 Agent 不依赖具体 Provider 或真实模型；某项能力全部故障时会暂时从列表消失。完整物理模型目录只通过本机 Admin API/UI 展示，其中包括：
@@ -461,6 +496,7 @@ export FREE_ROUTER_PROVIDERS='[
 free-router                       # 显示帮助
 free-router onboard               # 生成带说明的完整默认配置
 free-router serve --addr :9000    # 前台启动服务
+free-router serve --log-level debug   # 排查 fallback 时输出每个候选的决策
 free-router daemon install        # 安装并启动守护进程
 free-router daemon status         # 查看守护进程状态
 free-router providers             # 查看内置源及配置状态

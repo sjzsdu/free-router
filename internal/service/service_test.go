@@ -363,3 +363,18 @@ func TestInstallWritesMakeInstalledExecutableToLaunchdPlist(t *testing.T) {
 		t.Fatalf("Install should not copy make-installed binary to ~/.local/bin, stat err = %v", err)
 	}
 }
+
+func TestLogHintPointsAtTheRightSink(t *testing.T) {
+	manager := &Manager{goos: "darwin", home: "/home/test"}
+	if got, want := manager.LogHint(), filepath.Join("/home/test", ".free-router", "free-router.log"); got != want {
+		t.Fatalf("darwin log hint = %q, want %q", got, want)
+	}
+	manager = &Manager{goos: "linux", home: "/home/test"}
+	if got := manager.LogHint(); !strings.Contains(got, "journalctl") || !strings.Contains(got, systemdUnit) {
+		t.Fatalf("linux log hint = %q", got)
+	}
+	manager = &Manager{goos: "windows", home: "/home/test"}
+	if got := manager.LogHint(); got != "" {
+		t.Fatalf("unsupported platform log hint = %q, want empty", got)
+	}
+}

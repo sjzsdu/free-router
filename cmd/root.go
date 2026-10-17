@@ -23,6 +23,7 @@ import (
 	"github.com/sjzsdu/free-router/internal/credentials"
 	"github.com/sjzsdu/free-router/internal/gateway"
 	"github.com/sjzsdu/free-router/internal/health"
+	"github.com/sjzsdu/free-router/internal/logging"
 	"github.com/sjzsdu/free-router/internal/provider"
 	"github.com/sjzsdu/free-router/internal/routing"
 	"github.com/sjzsdu/free-router/internal/statistics"
@@ -51,6 +52,8 @@ type options struct {
 	adminToken       string
 	apiToken         string
 	maxAttempts      int
+	logLevel         string
+	logFormat        string
 }
 
 func Execute() error {
@@ -63,6 +66,12 @@ func Execute() error {
 		Short:         "An auto-updating router for free AI models",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		// Logging is configured before any command runs so that a bad
+		// --log-level fails fast instead of silently keeping the default.
+		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
+			_, err := logging.Setup(logging.Options{Level: opts.logLevel, Format: opts.logFormat})
+			return err
+		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -164,6 +173,8 @@ func defaultOptions() options {
 		adminToken:       os.Getenv("FREE_ROUTER_ADMIN_TOKEN"),
 		apiToken:         os.Getenv("FREE_ROUTER_API_TOKEN"),
 		maxAttempts:      6,
+		logLevel:         envOr("FREE_ROUTER_LOG_LEVEL", "info"),
+		logFormat:        envOr("FREE_ROUTER_LOG_FORMAT", "text"),
 	}
 }
 
@@ -179,6 +190,8 @@ func bindFlags(command *cobra.Command, opts *options) {
 	command.PersistentFlags().BoolVar(&opts.adminAllowRemote, "admin-allow-remote", opts.adminAllowRemote, "allow the admin UI outside localhost")
 	command.PersistentFlags().StringVar(&opts.apiToken, "api-token", opts.apiToken, "API token for inference endpoints (required for remote access)")
 	command.PersistentFlags().IntVar(&opts.maxAttempts, "max-attempts", opts.maxAttempts, "maximum upstream attempts for model=auto")
+	command.PersistentFlags().StringVar(&opts.logLevel, "log-level", opts.logLevel, "log level: debug, info, warn or error")
+	command.PersistentFlags().StringVar(&opts.logFormat, "log-format", opts.logFormat, "log format: text or json")
 }
 
 func runServer(ctx context.Context, opts options) error {
@@ -239,11 +252,14 @@ func runServer(ctx context.Context, opts options) error {
 		WriteTimeout:   15 * time.Minute,
 		IdleTimeout:    90 * time.Second,
 		MaxHeaderBytes: 10 * 1024 * 1024,
+		// Route net/http's own connection errors through the configured logger
+		// so they obey --log-level/--log-format like everything else.
+		ErrorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelWarn),
 	}
 
 	errCh := make(chan error, 1)
 	go func() {
-		slog.Info("free-router started", "addr", opts.addr, "providers", len(registry.All()), "catalog_providers", len(registry.CatalogAll()), "models", len(store.Models()))
+		slog.Info("free-router started", "addr", opts.addr, "providers", len(registry.All()), "catalog_providers", len(registry.CatalogAll()), "models", len(store.Models()), "log_level", opts.logLevel, "log_format", opts.logFormat)
 		errCh <- server.ListenAndServe()
 	}()
 

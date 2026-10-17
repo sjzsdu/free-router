@@ -35,6 +35,10 @@ func addDaemonCommands(root *cobra.Command, opts *options) {
 		environment["FREE_ROUTER_CONFIG"] = opts.config
 		environment["FREE_ROUTER_CREDENTIALS"] = opts.credentials
 		environment["FREE_ROUTER_HEALTH"] = opts.health
+		// Logging settings must survive the jump into launchd/systemd,
+		// otherwise "I raised the level" silently does nothing in daemon mode.
+		environment["FREE_ROUTER_LOG_LEVEL"] = opts.logLevel
+		environment["FREE_ROUTER_LOG_FORMAT"] = opts.logFormat
 		if opts.providers != "" {
 			environment["FREE_ROUTER_PROVIDERS"] = opts.providers
 		}
@@ -42,6 +46,9 @@ func addDaemonCommands(root *cobra.Command, opts *options) {
 			return err
 		}
 		fmt.Printf("free-router installed to %s\ndaemon installed and started\n", manager.BinaryPath())
+		if hint := manager.LogHint(); hint != "" {
+			fmt.Printf("logs: %s\n", hint)
+		}
 		return nil
 	}))
 	daemonCommand.AddCommand(daemonAction("start", "Start the installed daemon", func(command *cobra.Command, manager *servicepkg.Manager) error {

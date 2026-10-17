@@ -277,8 +277,16 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 	// Pair the concurrency gauge with the request itself, not with each
 	// upstream attempt: a fallback would otherwise leak a slot per retry.
 	defer g.metrics.RecordDone()
+	// Record the downstream response as the caller sees it: status and size
+	// include bodies written by the error paths below, which never reach the
+	// upstream attempt records.
+	started := time.Now()
+	recorder := newResponseRecorder(w)
+	w = recorder
 	requestID := beginRequest(w)
 	diagnostics := newRequestDiagnostics(requestID, "", g.failures)
+	// One line per request, emitted on every exit path including panics.
+	defer func() { g.logRequest(r, diagnostics, started, recorder) }()
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 32<<20))
 	if err != nil {
 		diagnostics.write(w, http.StatusBadRequest, "request body is too large or unreadable", "invalid_request")
@@ -350,6 +358,7 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 		// caller is told.
 		result := g.tryCandidate(w, r, model, capability, endpoint, payload, "application/json", index, candidates, deferOnLast(needsTools && fallback, index, candidates))
 		diagnostics.recordAttempt(model, capability, phaseStrict, result)
+		diagnostics.recordServed(result, phaseStrict)
 		if result.Terminal {
 			return
 		}
@@ -390,6 +399,7 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 				// chat candidate; the final error (if any) is written below.
 				result := g.tryCandidate(w, r, model, looseCapability, endpoint, payload, "application/json", index, looseCandidates, true)
 				diagnostics.recordAttempt(model, looseCapability, phaseLoose, result)
+				diagnostics.recordServed(result, phaseLoose)
 				if result.Terminal {
 					return
 				}
@@ -477,8 +487,12 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 	g.metrics.RecordRequest()
 	// See proxyJSON: the gauge tracks downstream requests, not attempts.
 	defer g.metrics.RecordDone()
+	started := time.Now()
+	recorder := newResponseRecorder(w)
+	w = recorder
 	requestID := beginRequest(w)
 	diagnostics := newRequestDiagnostics(requestID, "", g.failures)
+	defer func() { g.logRequest(r, diagnostics, started, recorder) }()
 	mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "multipart/form-data" || params["boundary"] == "" {
 		diagnostics.write(w, http.StatusBadRequest, "multipart/form-data with a boundary is required", "invalid_request")
@@ -537,6 +551,7 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 		// attributed across every provider that was tried.
 		result := g.tryCandidate(w, r, model, capability, endpoint, payload, contentType, index, candidates, deferOnLast(false, index, candidates))
 		diagnostics.recordAttempt(model, capability, phaseStrict, result)
+		diagnostics.recordServed(result, phaseStrict)
 		if result.Terminal {
 			return
 		}
