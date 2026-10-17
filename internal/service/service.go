@@ -239,6 +239,19 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 	}
 }
 
+// LogHint tells the user where the background service writes its output.
+// "Where is the log?" is the first question after "there is no log", and the
+// answer differs between launchd (a file) and systemd (the journal).
+func (m *Manager) LogHint() string {
+	switch m.goos {
+	case "darwin":
+		return m.logPath()
+	case "linux":
+		return "journalctl --user -u " + systemdUnit
+	}
+	return ""
+}
+
 func (m *Manager) Logs(ctx context.Context, output io.Writer, follow bool, lines int) error {
 	if lines < 1 {
 		lines = 100

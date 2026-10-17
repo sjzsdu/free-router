@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestValidateModelDataRejectsEmptyPath(t *testing.T) {
@@ -96,5 +98,25 @@ func TestIsRemoteAddr(t *testing.T) {
 				t.Fatalf("isRemoteAddr(%q) = %v, want %v", tt.addr, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestDefaultLoggingOptionsComeFromEnv(t *testing.T) {
+	t.Setenv("FREE_ROUTER_LOG_LEVEL", "debug")
+	t.Setenv("FREE_ROUTER_LOG_FORMAT", "json")
+	opts := defaultOptions()
+	if opts.logLevel != "debug" || opts.logFormat != "json" {
+		t.Fatalf("logging options = %q/%q, want debug/json", opts.logLevel, opts.logFormat)
+	}
+}
+
+func TestLoggingFlagsAreRegistered(t *testing.T) {
+	opts := defaultOptions()
+	command := &cobra.Command{Use: "free-router"}
+	bindFlags(command, &opts)
+	for _, name := range []string{"log-level", "log-format"} {
+		if command.PersistentFlags().Lookup(name) == nil {
+			t.Fatalf("persistent flag --%s is not registered", name)
+		}
 	}
 }

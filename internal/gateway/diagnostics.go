@@ -124,6 +124,14 @@ type requestDiagnostics struct {
 	Route     string
 	Attempts  []AttemptRecord
 	Skipped   []SkippedRecord
+	// Served describes the attempt that produced the downstream response.
+	// Failures leave it nil and are described by Attempts instead. It exists
+	// so the access log can name the provider that actually answered a
+	// successful request — previously only failures were logged at all.
+	Served *ServedRecord
+	// code is the terminal error code, retained so the access log can be
+	// grepped for "why" without opening the response body.
+	code string
 	// StartedAt measures the whole request, so the caller can tell whether the
 	// gateway spent its time trying providers or simply failed fast.
 	StartedAt time.Time
@@ -156,6 +164,18 @@ func (d *requestDiagnostics) recordAttempt(model catalog.Model, capability, phas
 	})
 }
 
+// recordServed retains the attempt that produced the downstream response so
+// the access log can report the provider and model the caller never sees
+// directly (they see the stable capability name instead).
+func (d *requestDiagnostics) recordServed(result AttemptResult, phase string) {
+	if d == nil || result.Served == nil {
+		return
+	}
+	result.Served.Phase = phase
+	d.Served = result.Served
+}
+
+// skip records a configured candidate that was never attempted.
 func (d *requestDiagnostics) skip(model catalog.Model, reason string) {
 	if d == nil {
 		return
@@ -317,6 +337,7 @@ func (d *requestDiagnostics) write(w http.ResponseWriter, status int, message, c
 		"code":    code,
 	}
 	if d != nil {
+		d.code = code
 		if d.RequestID != "" {
 			body["request_id"] = d.RequestID
 		}
