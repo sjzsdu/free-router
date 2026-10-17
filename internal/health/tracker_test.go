@@ -1,6 +1,7 @@
 package health
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -600,5 +601,73 @@ func TestReleaseIsIdempotent(t *testing.T) {
 	tracker.Release("provider/model", "chat")
 	if !tracker.TryAcquire("provider/model", "chat") {
 		t.Fatal("idempotent Release should free the slot")
+	}
+}
+
+// Persistence now happens outside the state lock. Concurrent failures must
+// still produce a complete, reloadable file (run with -race to check the
+// snapshot sequence and the lock hand-off).
+func TestConcurrentFailuresPersistAReloadableSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "health.json")
+	tracker, err := NewPersistent(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const writers = 8
+	const perWriter = 25
+	var wait sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			model := fmt.Sprintf("provider%d/model", index)
+			for j := 0; j < perWriter; j++ {
+				tracker.Failure(model, "chat", time.Millisecond, http.StatusInternalServerError, "boom", 0)
+				// Readers must not be blocked behind a filesystem write.
+				_ = tracker.Available(model, "chat")
+			}
+		}(i)
+	}
+	wait.Wait()
+
+	reloaded, err := NewPersistent(path)
+	if err != nil {
+		t.Fatalf("reload persisted state: %v", err)
+	}
+	if got := len(reloaded.Snapshot()); got != writers {
+		t.Fatalf("persisted models = %d, want %d", got, writers)
+	}
+}
+
+// An older snapshot must not roll the file back: the sequence guard in persist
+// drops it once a newer snapshot is known to be on disk.
+func TestPersistDropsStaleSnapshots(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "health.json")
+	tracker := New()
+	tracker.path = path
+
+	tracker.mu.Lock()
+	tracker.state("provider/model", "chat").LastError = "older"
+	tracker.mu.Unlock()
+	tracker.persist()
+
+	// Change the in-memory state, then pretend a newer snapshot already
+	// reached the file. persist must refuse to write the older one.
+	tracker.mu.Lock()
+	tracker.state("provider/model", "chat").LastError = "newer-but-skipped"
+	tracker.mu.Unlock()
+	tracker.persistMu.Lock()
+	tracker.persistSeq = tracker.seq.Load() + 10
+	tracker.persistMu.Unlock()
+	tracker.persist()
+
+	reloaded, err := NewPersistent(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := reloaded.Snapshot()
+	if len(states) != 1 || states[0].LastError != "older" {
+		t.Fatalf("persisted state = %#v, want the older snapshot untouched", states)
 	}
 }

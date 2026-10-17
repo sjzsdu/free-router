@@ -236,16 +236,16 @@ func TestTimeoutOnlyPoolReportsGatewayTimeout(t *testing.T) {
 // The ordering rules live in one pure function; keeping them unit-tested means
 // the candidate rotation in the planner cannot make these assertions flaky.
 func TestSummarizeAttemptsRules(t *testing.T) {
-	rateLimited := attemptRecord{Provider: "alpha", Model: "m", Status: http.StatusTooManyRequests, Message: "rate limit reached", Retryable: true, RateLimit: true, RetryAfter: 7}
-	slowerRateLimit := attemptRecord{Provider: "beta", Model: "m", Status: http.StatusTooManyRequests, Message: "rate limit reached", Retryable: true, RateLimit: true, RetryAfter: 3}
-	account := attemptRecord{Provider: "beta", Model: "m", Status: http.StatusUnauthorized, Message: "provider account unavailable", Retryable: true}
-	timeout := attemptRecord{Provider: "beta", Model: "m", Status: http.StatusGatewayTimeout, Message: "upstream timed out", Retryable: true}
-	serverError := attemptRecord{Provider: "beta", Model: "m", Status: http.StatusInternalServerError, Message: "server error", Retryable: true}
-	clientError := attemptRecord{Provider: "beta", Model: "m", Status: http.StatusBadRequest, Message: "invalid parameter 'temperature'", Retryable: false}
+	rateLimited := AttemptRecord{Provider: "alpha", Model: "m", Status: http.StatusTooManyRequests, Message: "rate limit reached", Retryable: true, RateLimit: true, RetryAfter: 7}
+	slowerRateLimit := AttemptRecord{Provider: "beta", Model: "m", Status: http.StatusTooManyRequests, Message: "rate limit reached", Retryable: true, RateLimit: true, RetryAfter: 3}
+	account := AttemptRecord{Provider: "beta", Model: "m", Status: http.StatusUnauthorized, Message: "provider account unavailable", Retryable: true}
+	timeout := AttemptRecord{Provider: "beta", Model: "m", Status: http.StatusGatewayTimeout, Message: "upstream timed out", Retryable: true}
+	serverError := AttemptRecord{Provider: "beta", Model: "m", Status: http.StatusInternalServerError, Message: "server error", Retryable: true}
+	clientError := AttemptRecord{Provider: "beta", Model: "m", Status: http.StatusBadRequest, Message: "invalid parameter 'temperature'", Retryable: false}
 
 	tests := []struct {
 		name     string
-		attempts []attemptRecord
+		attempts []AttemptRecord
 		status   int
 		code     string
 		message  string
@@ -253,46 +253,46 @@ func TestSummarizeAttemptsRules(t *testing.T) {
 	}{
 		{
 			name:     "rate limit outranks a sibling 5xx",
-			attempts: []attemptRecord{rateLimited, serverError},
+			attempts: []AttemptRecord{rateLimited, serverError},
 			status:   http.StatusTooManyRequests,
 			code:     "rate_limited",
 			retry:    7,
 		},
 		{
 			name:     "smallest upstream retry-after wins",
-			attempts: []attemptRecord{rateLimited, slowerRateLimit},
+			attempts: []AttemptRecord{rateLimited, slowerRateLimit},
 			status:   http.StatusTooManyRequests,
 			code:     "rate_limited",
 			retry:    3,
 		},
 		{
 			name:     "accounts exhausted is server side",
-			attempts: []attemptRecord{account, timeout},
+			attempts: []AttemptRecord{account, timeout},
 			status:   http.StatusServiceUnavailable,
 			code:     "accounts_unavailable",
 		},
 		{
 			name:     "all timeouts is a gateway timeout",
-			attempts: []attemptRecord{timeout, timeout},
+			attempts: []AttemptRecord{timeout, timeout},
 			status:   http.StatusGatewayTimeout,
 			code:     "upstream_timeout",
 		},
 		{
 			name:     "mixed upstream faults stay a bad gateway",
-			attempts: []attemptRecord{serverError, timeout},
+			attempts: []AttemptRecord{serverError, timeout},
 			status:   http.StatusBadGateway,
 			code:     "upstream_failed",
 		},
 		{
 			name:     "a repairable client error is never dressed up as a pool fault",
-			attempts: []attemptRecord{rateLimited, clientError},
+			attempts: []AttemptRecord{rateLimited, clientError},
 			status:   http.StatusBadRequest,
 			code:     "client_error",
 			message:  "invalid parameter 'temperature'",
 		},
 		{
 			name:     "single attempt is passed through verbatim",
-			attempts: []attemptRecord{serverError},
+			attempts: []AttemptRecord{serverError},
 			status:   http.StatusInternalServerError,
 			code:     "upstream_failed",
 			message:  "server error",
@@ -368,5 +368,50 @@ func TestAttemptsReportPerProviderLatency(t *testing.T) {
 	}
 	if elapsed, ok := body["elapsed_ms"].(float64); !ok || elapsed < 20 {
 		t.Fatalf("elapsed_ms = %#v, want >= 20", body["elapsed_ms"])
+	}
+}
+
+// The admin UI needs the same diagnosis the caller saw, retained after the
+// response is gone.
+func TestPoolWideFailureIsRetainedForTheAdminUI(t *testing.T) {
+	handler := failingPoolGateway(t, func(string, string) *http.Response {
+		return testResponse(http.StatusUnauthorized, `{"error":{"message":"invalid api key"}}`)
+	})
+
+	chatCompletion(t, handler)
+
+	failures := handler.RecentFailures()
+	if len(failures) != 1 {
+		t.Fatalf("retained failures = %d, want 1", len(failures))
+	}
+	record := failures[0]
+	if record.Code != "accounts_unavailable" || record.Status != http.StatusServiceUnavailable {
+		t.Fatalf("record = %#v, want accounts_unavailable/503", record)
+	}
+	if len(record.Attempts) != 2 {
+		t.Fatalf("attempts = %d, want 2 (%#v)", len(record.Attempts), record.Attempts)
+	}
+	if record.RequestID == "" || record.Route != "chat" || record.At.IsZero() {
+		t.Fatalf("record lacks correlation fields: %#v", record)
+	}
+}
+
+// The ring keeps the newest entries and never reports unwritten slots.
+func TestFailureLogKeepsNewestAndSkipsEmptySlots(t *testing.T) {
+	log := newFailureLog(3)
+	if got := log.List(); len(got) != 0 {
+		t.Fatalf("empty log returned %d records", len(got))
+	}
+	for i := 1; i <= 5; i++ {
+		log.add(FailureRecord{At: time.Now().Add(time.Duration(i) * time.Second), RequestID: fmt.Sprintf("r%d", i)})
+	}
+	records := log.List()
+	if len(records) != 3 {
+		t.Fatalf("records = %d, want 3", len(records))
+	}
+	for index, want := range []string{"r5", "r4", "r3"} {
+		if records[index].RequestID != want {
+			t.Fatalf("records[%d] = %q, want %q (newest first)", index, records[index].RequestID, want)
+		}
 	}
 }

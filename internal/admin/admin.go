@@ -20,6 +20,7 @@ import (
 	"github.com/sjzsdu/free-router/internal/catalog"
 	"github.com/sjzsdu/free-router/internal/credentials"
 	"github.com/sjzsdu/free-router/internal/eligibility"
+	"github.com/sjzsdu/free-router/internal/gateway"
 	"github.com/sjzsdu/free-router/internal/health"
 	"github.com/sjzsdu/free-router/internal/provider"
 	"github.com/sjzsdu/free-router/internal/routing"
@@ -59,6 +60,9 @@ type Config struct {
 	OpenRouterAuthURL  string
 	OpenRouterTokenURL string
 	Statistics         *statistics.Store
+	// RecentFailures returns the gateway's most recent pool-wide failures. It is
+	// injected so the admin package does not need to own a gateway instance.
+	RecentFailures func() []gateway.FailureRecord
 }
 
 func New(routes *routing.Store, models *catalog.Store, vault *credentials.Vault, tracker *health.Tracker, config Config, reload func(map[string][]string) (func(), error)) *Handler {
@@ -113,6 +117,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.runtime(w)
 	case r.Method == http.MethodGet && path == "/api/statistics":
 		writeJSON(w, http.StatusOK, h.statistics.Snapshot())
+	case r.Method == http.MethodGet && path == "/api/failures":
+		h.failures(w)
 	case r.Method == http.MethodPut && path == "/api/config":
 		h.updateConfig(w, r)
 	case r.Method == http.MethodPost && path == "/api/refresh":
@@ -194,6 +200,18 @@ func (h *Handler) state(w http.ResponseWriter) {
 		Health: h.health.Snapshot(), ProviderHealth: h.health.ProviderSnapshot(), Summary: h.health.Summary(),
 		HealthProbe: h.probes.Snapshot(), Runtime: h.runtimeState(), Eligibility: statuses,
 	})
+}
+
+// failures exposes the gateway's recent pool-wide failures. An empty list is a
+// valid answer: it means no request has exhausted the pool since startup.
+func (h *Handler) failures(w http.ResponseWriter) {
+	records := []gateway.FailureRecord{}
+	if h.config.RecentFailures != nil {
+		if recent := h.config.RecentFailures(); recent != nil {
+			records = recent
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"failures": records})
 }
 
 func (h *Handler) runtime(w http.ResponseWriter) {

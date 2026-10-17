@@ -21,6 +21,7 @@ import (
 
 	"github.com/sjzsdu/free-router/internal/catalog"
 	"github.com/sjzsdu/free-router/internal/credentials"
+	"github.com/sjzsdu/free-router/internal/gateway"
 	"github.com/sjzsdu/free-router/internal/health"
 	"github.com/sjzsdu/free-router/internal/provider"
 	"github.com/sjzsdu/free-router/internal/routing"
@@ -1079,5 +1080,58 @@ func discoverModelsForTest(t *testing.T, store *catalog.Store) {
 	models, failures := store.DiscoverFromProviders(context.Background())
 	if len(failures) > 0 || len(models) == 0 {
 		t.Fatalf("models=%d failures=%#v", len(models), failures)
+	}
+}
+
+// The admin UI reads the gateway's retained failures through this endpoint; an
+// empty (not missing) list is the normal state on a healthy deployment.
+func TestAdminFailuresEndpoint(t *testing.T) {
+	routes, _ := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	registry, _ := provider.NewRegistry("")
+	models := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
+	vault := credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json"))
+
+	request := func(handler *Handler) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		httpRequest := httptest.NewRequest(http.MethodGet, "/admin/api/failures", nil)
+		httpRequest.RemoteAddr = "127.0.0.1:1234"
+		handler.ServeHTTP(recorder, httpRequest)
+		return recorder
+	}
+
+	empty := New(routes, models, vault, health.New(), Config{}, nil)
+	recorder := request(empty)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Failures []gateway.FailureRecord `json:"failures"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if payload.Failures == nil || len(payload.Failures) != 0 {
+		t.Fatalf("failures = %#v, want an empty list", payload.Failures)
+	}
+
+	withRecord := New(routes, models, vault, health.New(), Config{RecentFailures: func() []gateway.FailureRecord {
+		return []gateway.FailureRecord{{
+			At: time.Now(), RequestID: "abc", Route: "chat", Status: http.StatusTooManyRequests,
+			Code: "rate_limited", Message: "all 2 configured free providers are rate limited", ElapsedMS: 42,
+			Attempts: []gateway.AttemptRecord{{Provider: "groq", Model: "m", Status: http.StatusTooManyRequests, LatencyMS: 12}},
+		}}
+	}}, nil)
+	recorder = request(withRecord)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(payload.Failures) != 1 || payload.Failures[0].RequestID != "abc" {
+		t.Fatalf("failures = %#v, want the injected record", payload.Failures)
+	}
+	if len(payload.Failures[0].Attempts) != 1 || payload.Failures[0].Attempts[0].LatencyMS != 12 {
+		t.Fatalf("attempts = %#v, want the attempt with latency", payload.Failures[0].Attempts)
 	}
 }

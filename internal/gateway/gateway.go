@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -11,9 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"mime"
-	"mime/multipart"
 	"net/http"
-	"net/textproto"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -36,6 +33,9 @@ type Config struct {
 	APIToken    string
 	Adapters    adapter.Resolver
 	Statistics  *statistics.Store
+	// FailureLogCapacity bounds how many pool-wide failures are retained for
+	// the admin UI. Zero uses the default.
+	FailureLogCapacity int
 }
 
 type Gateway struct {
@@ -52,6 +52,8 @@ type Gateway struct {
 	limiters sync.Map
 	metrics  *Metrics
 	stats    *statistics.Store
+	// failures keeps the most recent pool-wide failures for the admin UI.
+	failures *failureLog
 	// beforeCandidateAcquire is a deterministic test seam for exercising the
 	// race between candidate snapshots and half-open probe acquisition.
 	beforeCandidateAcquire func()
@@ -75,7 +77,7 @@ func New(store *catalog.Store, registry *provider.Registry, config Config, clien
 	if config.Statistics == nil {
 		config.Statistics = statistics.NewMemory()
 	}
-	gateway := &Gateway{catalog: store, registry: registry, adapters: config.Adapters, config: config, client: client, tracker: config.Health, mux: http.NewServeMux(), apiToken: config.APIToken, metrics: NewMetrics(), stats: config.Statistics}
+	gateway := &Gateway{catalog: store, registry: registry, adapters: config.Adapters, config: config, client: client, tracker: config.Health, mux: http.NewServeMux(), apiToken: config.APIToken, metrics: NewMetrics(), stats: config.Statistics, failures: newFailureLog(config.FailureLogCapacity)}
 	gateway.planner = NewCandidatePlanner(store, registry, config.Routes, config.Health, config.MaxAttempts)
 	gateway.executor = NewAttemptExecutor(gateway)
 	gateway.mux.HandleFunc("GET /healthz", gateway.health)
@@ -150,6 +152,12 @@ func (g *Gateway) authorized(r *http.Request) bool {
 }
 
 func (g *Gateway) Handle(pattern string, handler http.Handler) { g.mux.Handle(pattern, handler) }
+
+// RecentFailures returns the most recent pool-wide failures, newest first, so
+// the admin UI can explain a failure the caller already saw.
+func (g *Gateway) RecentFailures() []FailureRecord {
+	return g.failures.List()
+}
 
 func (g *Gateway) health(w http.ResponseWriter, _ *http.Request) {
 	status := g.catalog.Status()
@@ -270,7 +278,7 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 	// upstream attempt: a fallback would otherwise leak a slot per retry.
 	defer g.metrics.RecordDone()
 	requestID := beginRequest(w)
-	diagnostics := newRequestDiagnostics(requestID, "")
+	diagnostics := newRequestDiagnostics(requestID, "", g.failures)
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 32<<20))
 	if err != nil {
 		diagnostics.write(w, http.StatusBadRequest, "request body is too large or unreadable", "invalid_request")
@@ -470,7 +478,7 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 	// See proxyJSON: the gauge tracks downstream requests, not attempts.
 	defer g.metrics.RecordDone()
 	requestID := beginRequest(w)
-	diagnostics := newRequestDiagnostics(requestID, "")
+	diagnostics := newRequestDiagnostics(requestID, "", g.failures)
 	mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "multipart/form-data" || params["boundary"] == "" {
 		diagnostics.write(w, http.StatusBadRequest, "multipart/form-data with a boundary is required", "invalid_request")
@@ -550,16 +558,6 @@ func deferOnLast(always bool, index int, candidates []catalog.Model) bool {
 	return always || index == len(candidates)-1
 }
 
-// beginRequest stamps the response with a correlation id so a caller can quote
-// one value when reporting a failure, and returns it for the error body.
-func beginRequest(w http.ResponseWriter) string {
-	requestID := newRequestID()
-	if requestID != "" {
-		w.Header().Set("X-Request-Id", requestID)
-	}
-	return requestID
-}
-
 // tryCandidate preserves the internal compatibility seam while delegating all
 // upstream execution policy to AttemptExecutor. deferErrorWrite is forwarded
 // to Execute so callers running a higher-level fallback (e.g. chat-tools ->
@@ -637,68 +635,6 @@ func (g *Gateway) writeCandidateUnavailable(w http.ResponseWriter, requested str
 	g.metrics.RecordFailure(0, http.StatusServiceUnavailable)
 }
 
-func multipartModel(body []byte, boundary string) (string, error) {
-	reader := multipart.NewReader(bytes.NewReader(body), boundary)
-	for {
-		part, err := reader.NextPart()
-		if err == io.EOF {
-			return "", nil
-		}
-		if err != nil {
-			return "", err
-		}
-		if part.FormName() == "model" {
-			value, err := io.ReadAll(io.LimitReader(part, 16<<10))
-			part.Close()
-			return strings.TrimSpace(string(value)), err
-		}
-		part.Close()
-	}
-}
-
-func rewriteMultipartModel(body []byte, boundary, model string) ([]byte, string, error) {
-	reader := multipart.NewReader(bytes.NewReader(body), boundary)
-	var output bytes.Buffer
-	writer := multipart.NewWriter(&output)
-	if err := writer.SetBoundary(boundary); err != nil {
-		return nil, "", err
-	}
-	found := false
-	for {
-		part, err := reader.NextPart()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, "", err
-		}
-		target, err := writer.CreatePart(part.Header)
-		if err != nil {
-			part.Close()
-			return nil, "", err
-		}
-		if part.FormName() == "model" {
-			_, err = io.WriteString(target, model)
-			found = true
-		} else {
-			_, err = io.Copy(target, part)
-		}
-		part.Close()
-		if err != nil {
-			return nil, "", err
-		}
-	}
-	if !found {
-		if err := writer.WriteField("model", model); err != nil {
-			return nil, "", err
-		}
-	}
-	if err := writer.Close(); err != nil {
-		return nil, "", err
-	}
-	return output.Bytes(), writer.FormDataContentType(), nil
-}
-
 func (g *Gateway) candidates(requested, capability string, needsTools bool, sessionSeed uint64) ([]catalog.Model, bool) {
 	return g.planner.CandidatesSeeded(requested, capability, needsTools, sessionSeed)
 }
@@ -752,211 +688,4 @@ func parseRetryAfter(value string) time.Duration {
 		}
 	}
 	return 0
-}
-
-func (g *Gateway) forward(original *http.Request, model catalog.Model, body []byte, endpoint, contentType string) (*http.Response, error) {
-	spec, ok := g.registry.Get(model.Provider)
-	if !ok {
-		return nil, fmt.Errorf("provider %s is not configured", model.Provider)
-	}
-
-	limiterAny, ok := g.limiters.Load(model.Provider)
-	if !ok {
-		// LoadOrStore only evaluates newLimiter when the provider is
-		// missing, so we do not leak a discarded Limiter (and its
-		// token-refill goroutine) on every request.
-		limiterAny, _ = g.limiters.LoadOrStore(model.Provider, g.newLimiter(spec))
-	}
-	limiter := limiterAny.(*transport.Limiter)
-
-	if err := limiter.Acquire(original.Context()); err != nil {
-		return nil, err
-	}
-	defer limiter.Release()
-
-	providerAdapter := g.adapters.Resolve(spec)
-	reqHeaders := make(map[string]string)
-	if accept := original.Header.Get("Accept"); accept != "" {
-		reqHeaders["Accept"] = accept
-	}
-
-	req, err := providerAdapter.BuildRequest(adapter.Request{
-		Context:     original.Context(),
-		Method:      http.MethodPost,
-		Endpoint:    endpoint,
-		Model:       model,
-		Provider:    spec,
-		Body:        body,
-		ContentType: contentType,
-		Headers:     reqHeaders,
-		Stream:      original.Header.Get("Accept") == "text/event-stream" || strings.Contains(original.Header.Get("Accept"), "event-stream"),
-		Function:    endpoint,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return g.client.Do(req)
-}
-
-func (g *Gateway) newLimiter(spec provider.Spec) *transport.Limiter {
-	config := transport.NewRateLimitConfig()
-	if spec.MaxConcurrent > 0 {
-		config.MaxConcurrentRequests = spec.MaxConcurrent
-	}
-	if spec.RateLimitPerSecond > 0 {
-		config.RateLimitPerSecond = spec.RateLimitPerSecond
-	}
-	if spec.QueueSize > 0 {
-		config.QueueSize = spec.QueueSize
-	}
-	return transport.NewLimiter(config)
-}
-
-type StreamResult struct {
-	Complete        bool
-	BytesWritten    int64
-	Error           error
-	DownstreamError bool
-	TTFB            time.Duration
-	Usage           *statistics.Usage
-	UsageExpected   bool
-}
-
-// stallTimeout bounds how long a body read may sit without producing data.
-// The gateway client only sets ResponseHeaderTimeout, so an upstream that
-// sends headers and then stalls would otherwise pin the connection, the
-// handler goroutine and the metrics concurrency slot forever.
-const stallTimeout = 5 * time.Minute
-
-// stallTimeoutReader closes the underlying body when no data has been read
-// for the configured interval. Closing from another goroutine unblocks a
-// pending Read, so copyStream terminates instead of hanging.
-type stallTimeoutReader struct {
-	r     io.ReadCloser
-	delay time.Duration
-	timer *time.Timer
-	mu    sync.Mutex
-	done  bool
-}
-
-func newStallTimeoutReader(r io.ReadCloser, delay time.Duration) *stallTimeoutReader {
-	s := &stallTimeoutReader{r: r, delay: delay}
-	s.timer = time.AfterFunc(delay, s.timeout)
-	return s
-}
-
-func (s *stallTimeoutReader) timeout() {
-	s.mu.Lock()
-	s.done = true
-	s.mu.Unlock()
-	_ = s.r.Close()
-}
-
-func (s *stallTimeoutReader) Read(p []byte) (int, error) {
-	s.mu.Lock()
-	if !s.done {
-		if !s.timer.Stop() {
-			// The timer already fired (or is about to): the timeout
-			// goroutine is closing the body, so this Read will fail
-			// shortly. Reset would schedule a second callback; do not.
-			s.mu.Unlock()
-			return s.r.Read(p)
-		}
-		s.timer.Reset(s.delay)
-	}
-	s.mu.Unlock()
-	return s.r.Read(p)
-}
-
-func (s *stallTimeoutReader) Close() error {
-	s.mu.Lock()
-	s.done = true
-	s.mu.Unlock()
-	s.timer.Stop()
-	return s.r.Close()
-}
-
-func copyResponse(w http.ResponseWriter, resp *http.Response, model catalog.Model, started time.Time) StreamResult {
-	body := newStallTimeoutReader(resp.Body, stallTimeout)
-	defer body.Close()
-	for key, values := range resp.Header {
-		if isHopByHop(key) {
-			continue
-		}
-		for _, value := range values {
-			w.Header().Add(key, value)
-		}
-	}
-	w.Header().Set("X-Free-Router-Provider", model.Provider)
-	w.Header().Set("X-Free-Router-Model", model.UpstreamID)
-	w.WriteHeader(resp.StatusCode)
-	contentType := resp.Header.Get("Content-Type")
-	eventStream := strings.Contains(contentType, "text/event-stream")
-	result := copyBody(w, body, started, eventStream)
-	result.UsageExpected = responseMayReportUsage(contentType)
-	return result
-}
-
-func copyBody(w http.ResponseWriter, body io.Reader, started time.Time, flush bool) StreamResult {
-	buffer := make([]byte, 32*1024)
-	flusher, canFlush := w.(http.Flusher)
-	var totalWritten int64
-	var ttfb time.Duration
-	collector := &usageCollector{}
-	headerTTFB := time.Since(started)
-	for {
-		read, err := body.Read(buffer)
-		if read > 0 {
-			collector.Write(buffer[:read])
-			if ttfb == 0 {
-				ttfb = time.Since(started)
-			}
-			n, writeErr := w.Write(buffer[:read])
-			totalWritten += int64(n)
-			if writeErr != nil {
-				return StreamResult{
-					Complete:        false,
-					BytesWritten:    totalWritten,
-					Error:           writeErr,
-					DownstreamError: true,
-					TTFB:            ttfb,
-					Usage:           collector.Usage(flush),
-				}
-			}
-			if flush && canFlush {
-				flusher.Flush()
-			}
-		}
-		if err != nil {
-			if ttfb == 0 {
-				ttfb = headerTTFB
-			}
-			return StreamResult{
-				Complete:     err == io.EOF,
-				BytesWritten: totalWritten,
-				Error:        err,
-				TTFB:         ttfb,
-				Usage:        collector.Usage(flush),
-			}
-		}
-	}
-}
-
-func isHopByHop(header string) bool {
-	switch textproto.CanonicalMIMEHeaderKey(header) {
-	case "Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization", "Te", "Trailer", "Transfer-Encoding", "Upgrade":
-		return true
-	default:
-		return false
-	}
-}
-
-func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]any{"error": map[string]any{"message": message, "type": "free_router_error"}})
-}
-
-func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
 }

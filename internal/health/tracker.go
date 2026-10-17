@@ -79,6 +79,22 @@ type Tracker struct {
 	credentialCooldownBase time.Duration
 	credentialCooldownMax  time.Duration
 	path                   string
+
+	// Persistence is deliberately kept off the state lock. Serialising the
+	// whole state and writing it to disk while holding mu blocked every
+	// concurrent Available/TryAcquire/Healthy call — including the ones in
+	// flight for healthy providers — for the duration of a filesystem write,
+	// which is exactly when a free pool is having its worst moment (a 429
+	// storm produces one write per failed attempt).
+	//
+	// seq is advanced under mu for every snapshot; persistMu serialises the
+	// writers and persistSeq records the newest snapshot already on disk so a
+	// slower, older snapshot can never overwrite a newer one.
+	// A monotonic snapshot sequence, advanced under the read lock by
+	// snapshotLocked; see persist for how it prevents stale writes.
+	seq        atomic.Uint64
+	persistMu  sync.Mutex
+	persistSeq uint64
 }
 
 type persistedState struct {
@@ -241,11 +257,19 @@ func (t *Tracker) checkAndTransition(state *State) {
 }
 
 func (t *Tracker) Success(model, capability string, latency time.Duration, status int) {
+	var persistRecovery bool
 	t.mu.Lock()
+	// persist runs after Unlock (deferred calls are LIFO), so the file write
+	// never happens while the state lock is held.
+	defer func() {
+		if persistRecovery {
+			t.persist()
+		}
+	}()
 	defer t.mu.Unlock()
 
 	existing := t.states[stateKey(model, capability)]
-	persistRecovery := existing != nil && (existing.Status != StatusHealthy || existing.LastError != "")
+	persistRecovery = existing != nil && (existing.Status != StatusHealthy || existing.LastError != "")
 	provider := providerFromModel(model)
 	if provider != "" {
 		pState := t.providerStates[provider]
@@ -273,16 +297,15 @@ func (t *Tracker) Success(model, capability string, latency time.Duration, statu
 		atomic.StoreInt32(&pState.InFlight, 0)
 	}
 	// Failures are persisted eagerly, so a successful request only needs to
-	// write when it clears a previously persisted model or provider failure.
-	if persistRecovery {
-		t.persistLocked()
-	}
+	// write when it clears a previously persisted model or provider failure;
+	// the deferred persist above performs that write.
 }
 
 func (t *Tracker) Failure(model, capability string, latency time.Duration, status int, message string, retryAfter time.Duration) {
 	t.mu.Lock()
+	// Deferred calls run LIFO: Unlock first, then the disk write.
+	defer t.persist()
 	defer t.mu.Unlock()
-	defer t.persistLocked()
 
 	errType := classifyError(status)
 	if errType == ErrorClient {
@@ -355,8 +378,9 @@ func (t *Tracker) Failure(model, capability string, latency time.Duration, statu
 
 func (t *Tracker) ProbeSuccess(model, capability string, latency time.Duration) {
 	t.mu.Lock()
+	// Deferred calls run LIFO: Unlock first, then the disk write.
+	defer t.persist()
 	defer t.mu.Unlock()
-	defer t.persistLocked()
 
 	state := t.state(model, capability)
 	state.Checks++
@@ -398,8 +422,9 @@ func (t *Tracker) RestoreProbeSuccess(model, capability string, checkedAt time.T
 
 func (t *Tracker) ProbeFailure(model, capability string, latency time.Duration, status int, message string) {
 	t.mu.Lock()
+	// Deferred calls run LIFO: Unlock first, then the disk write.
+	defer t.persist()
 	defer t.mu.Unlock()
-	defer t.persistLocked()
 
 	state := t.state(model, capability)
 	state.Checks++
@@ -498,8 +523,9 @@ func (t *Tracker) Summary() Summary {
 
 func (t *Tracker) Reset(model, capability string) {
 	t.mu.Lock()
+	// Deferred calls run LIFO: Unlock first, then the disk write.
+	defer t.persist()
 	defer t.mu.Unlock()
-	defer t.persistLocked()
 
 	if capability != "" {
 		delete(t.states, stateKey(model, capability))
@@ -566,10 +592,11 @@ func (t *Tracker) backupInvalidState(cause error) error {
 	return nil
 }
 
-func (t *Tracker) persistLocked() {
-	if t.path == "" {
-		return
-	}
+// snapshotLocked copies the persistable state and advances the snapshot
+// sequence. The caller must hold mu (a read lock is enough). It is pure memory
+// work, so it can run under the lock; encoding and the filesystem write happen
+// in persist, outside it.
+func (t *Tracker) snapshotLocked() (persistedState, uint64) {
 	persisted := persistedState{SchemaVersion: 1}
 	for _, state := range t.states {
 		copy := *state
@@ -588,6 +615,34 @@ func (t *Tracker) persistLocked() {
 		return persisted.Models[i].Model < persisted.Models[j].Model
 	})
 	sort.Slice(persisted.Providers, func(i, j int) bool { return persisted.Providers[i].Model < persisted.Providers[j].Model })
+	return persisted, t.seq.Add(1)
+}
+
+// persist writes the current state to disk *without* holding the state lock.
+// Callers register it as a deferred call so every exit path saves exactly once.
+//
+// Two requests can reach this point concurrently. persistMu serialises the
+// writers, and the snapshot sequence keeps the file monotonic: if a newer
+// snapshot was already written, an older one is dropped instead of rolling the
+// file back to stale state.
+func (t *Tracker) persist() {
+	if t.path == "" {
+		return
+	}
+	t.mu.RLock()
+	snapshot, seq := t.snapshotLocked()
+	t.mu.RUnlock()
+
+	t.persistMu.Lock()
+	defer t.persistMu.Unlock()
+	if seq <= t.persistSeq {
+		return
+	}
+	t.persistSeq = seq
+	t.writeSnapshot(snapshot)
+}
+
+func (t *Tracker) writeSnapshot(persisted persistedState) {
 	content, err := json.MarshalIndent(persisted, "", "  ")
 	if err != nil {
 		slog.Error("encode health state", "path", t.path, "error", err)

@@ -7,8 +7,10 @@ import (
 	"errors"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1406,6 +1408,76 @@ func TestNonIdempotentGenerationDoesNotFallbackAfterUpstreamDisconnect(t *testin
 	}
 	if firstCalls.Load() != 1 || secondCalls.Load() != 0 {
 		t.Fatalf("generation calls: first=%d second=%d", firstCalls.Load(), secondCalls.Load())
+	}
+}
+
+// A generation request whose provider could not even be connected to never
+// reached that provider, so replaying it against another free source cannot
+// duplicate any work — and turns a dead provider into a served request.
+func TestNonIdempotentGenerationFallsBackWhenNeverSent(t *testing.T) {
+	clearBuiltinKeys(t)
+	var firstCalls atomic.Int64
+	var secondCalls atomic.Int64
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/models":
+			model := "image-a"
+			if request.URL.Host == "b.invalid" {
+				model = "image-b"
+			}
+			return testResponse(http.StatusOK, `{"data":[{"id":"`+model+`","type":"image"}]}`), nil
+		case "/images/generations":
+			if request.URL.Host == "a.invalid" {
+				firstCalls.Add(1)
+				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+			}
+			secondCalls.Add(1)
+			return testResponse(http.StatusOK, `{"data":[{"url":"https://example.invalid/image.png"}]}`), nil
+		default:
+			return testResponse(http.StatusNotFound, `{}`), nil
+		}
+	})}
+	registry, err := provider.NewRegistry(`[
+		{"id":"a","base_url":"https://a.invalid","no_auth":true},
+		{"id":"b","base_url":"https://b.invalid","no_auth":true}
+	]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), client)
+	discoverModelsForTest(t, store)
+	handler := New(store, registry, Config{MaxAttempts: 2}, client)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"model":"image-generation","prompt":"one billed image"}`)))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if firstCalls.Load() != 1 || secondCalls.Load() != 1 {
+		t.Fatalf("generation calls: first=%d second=%d", firstCalls.Load(), secondCalls.Load())
+	}
+}
+
+func TestRequestNeverReachedUpstreamClassification(t *testing.T) {
+	dialErr := &url.Error{Op: "Post", URL: "https://a.invalid", Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}}
+	dnsErr := &url.Error{Op: "Post", URL: "https://a.invalid", Err: &net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "no such host", Name: "a.invalid"}}}
+	readErr := &url.Error{Op: "Post", URL: "https://a.invalid", Err: io.ErrUnexpectedEOF}
+	reset := &net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset")}
+
+	if !requestNeverReachedUpstream(dialErr) {
+		t.Error("dial failure must be treated as never sent")
+	}
+	if !requestNeverReachedUpstream(dnsErr) {
+		t.Error("dns failure must be treated as never sent")
+	}
+	if requestNeverReachedUpstream(readErr) {
+		t.Error("read failure may have reached the upstream and must not be replayed")
+	}
+	if requestNeverReachedUpstream(reset) {
+		t.Error("a non-url error must not be treated as never sent")
+	}
+	if requestNeverReachedUpstream(nil) {
+		t.Error("nil error must not be treated as never sent")
 	}
 }
 

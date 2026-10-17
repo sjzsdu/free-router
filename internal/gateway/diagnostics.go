@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/sjzsdu/free-router/internal/catalog"
@@ -19,7 +20,7 @@ const (
 	phaseLoose  = "loose"
 )
 
-// attemptRecord is one upstream attempt that failed while serving a single
+// AttemptRecord is one upstream attempt that failed while serving a single
 // downstream request.
 //
 // Free providers fail for very different reasons — a revoked key, a spent
@@ -28,7 +29,7 @@ const (
 // free-tier pool look like the caller's own credentials problem, which is the
 // single most expensive misunderstanding for an OpenAI-compatible router. The
 // records below let the final error explain every upstream that was tried.
-type attemptRecord struct {
+type AttemptRecord struct {
 	Provider   string `json:"provider"`
 	Model      string `json:"model"`
 	Capability string `json:"capability,omitempty"`
@@ -45,13 +46,75 @@ type attemptRecord struct {
 	LatencyMS int64 `json:"latency_ms,omitempty"`
 }
 
-// skippedRecord explains a configured candidate that was never attempted, for
+// SkippedRecord explains a configured candidate that was never attempted, for
 // example because its health tracker had no in-flight slot left. Without it a
 // "no acquirable models" response looks like a configuration mistake.
-type skippedRecord struct {
+type SkippedRecord struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
 	Reason   string `json:"reason"`
+}
+
+// FailureRecord is one request whose every candidate failed, kept in a bounded
+// in-memory log so the admin UI can answer "why did that just fail?" without a
+// caller having to quote a request id from their client logs. It is the same
+// information the error body carries, retained for offline inspection.
+type FailureRecord struct {
+	At        time.Time       `json:"at"`
+	RequestID string          `json:"request_id,omitempty"`
+	Route     string          `json:"route,omitempty"`
+	Status    int             `json:"status"`
+	Code      string          `json:"code"`
+	Message   string          `json:"message"`
+	ElapsedMS int64           `json:"elapsed_ms,omitempty"`
+	Attempts  []AttemptRecord `json:"attempts,omitempty"`
+	Skipped   []SkippedRecord `json:"skipped,omitempty"`
+}
+
+// failureLog is a fixed-size ring of the most recent pool-wide failures. It
+// intentionally lives in memory only: it is a diagnostic convenience, and the
+// persisted statistics already cover the durable aggregates.
+type failureLog struct {
+	mu      sync.Mutex
+	records []FailureRecord
+	next    int
+}
+
+func newFailureLog(capacity int) *failureLog {
+	if capacity <= 0 {
+		capacity = defaultFailureLogCapacity
+	}
+	return &failureLog{records: make([]FailureRecord, capacity)}
+}
+
+const defaultFailureLogCapacity = 50
+
+func (l *failureLog) add(record FailureRecord) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.records[l.next] = record
+	l.next = (l.next + 1) % len(l.records)
+}
+
+// List returns the recorded failures, newest first, skipping unused slots.
+func (l *failureLog) List() []FailureRecord {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	result := make([]FailureRecord, 0, len(l.records))
+	for offset := 1; offset <= len(l.records); offset++ {
+		record := l.records[(l.next-offset+len(l.records))%len(l.records)]
+		if record.At.IsZero() {
+			continue
+		}
+		result = append(result, record)
+	}
+	return result
 }
 
 // requestDiagnostics accumulates what happened to one downstream request so
@@ -59,15 +122,17 @@ type skippedRecord struct {
 type requestDiagnostics struct {
 	RequestID string
 	Route     string
-	Attempts  []attemptRecord
-	Skipped   []skippedRecord
+	Attempts  []AttemptRecord
+	Skipped   []SkippedRecord
 	// StartedAt measures the whole request, so the caller can tell whether the
 	// gateway spent its time trying providers or simply failed fast.
 	StartedAt time.Time
+	// sink, when set, retains the terminal diagnosis for the admin UI.
+	sink *failureLog
 }
 
-func newRequestDiagnostics(requestID, route string) *requestDiagnostics {
-	return &requestDiagnostics{RequestID: requestID, Route: route, StartedAt: time.Now()}
+func newRequestDiagnostics(requestID, route string, sink *failureLog) *requestDiagnostics {
+	return &requestDiagnostics{RequestID: requestID, Route: route, StartedAt: time.Now(), sink: sink}
 }
 
 // recordAttempt keeps the failure carried by a non-terminal or terminal
@@ -77,7 +142,7 @@ func (d *requestDiagnostics) recordAttempt(model catalog.Model, capability, phas
 	if d == nil || result.LastError == nil {
 		return
 	}
-	d.Attempts = append(d.Attempts, attemptRecord{
+	d.Attempts = append(d.Attempts, AttemptRecord{
 		Provider:   model.Provider,
 		Model:      model.UpstreamID,
 		Capability: capability,
@@ -95,7 +160,7 @@ func (d *requestDiagnostics) skip(model catalog.Model, reason string) {
 	if d == nil {
 		return
 	}
-	d.Skipped = append(d.Skipped, skippedRecord{Provider: model.Provider, Model: model.UpstreamID, Reason: reason})
+	d.Skipped = append(d.Skipped, SkippedRecord{Provider: model.Provider, Model: model.UpstreamID, Reason: reason})
 }
 
 // failureSummary is the single downstream-facing verdict for a request whose
@@ -124,7 +189,7 @@ type failureSummary struct {
 //     caller's own credentials are fine, the pool is simply unusable.
 //  5. Every failure being a timeout/transport error becomes 504.
 //  6. Anything else is a plain 502 upstream failure.
-func summarizeAttempts(attempts []attemptRecord) failureSummary {
+func summarizeAttempts(attempts []AttemptRecord) failureSummary {
 	if len(attempts) == 0 {
 		return failureSummary{Status: http.StatusServiceUnavailable, Message: "all configured free providers failed", Code: "upstream_failed"}
 	}
@@ -185,7 +250,7 @@ func summarizeAttempts(attempts []attemptRecord) failureSummary {
 	}
 }
 
-func isClientRepairable(record attemptRecord) bool {
+func isClientRepairable(record AttemptRecord) bool {
 	if record.Retryable {
 		return false
 	}
@@ -203,7 +268,7 @@ func isTimeoutStatus(status int) bool {
 	return status == 0 || status == http.StatusRequestTimeout || status == http.StatusGatewayTimeout
 }
 
-func codeForAttempt(record attemptRecord) string {
+func codeForAttempt(record AttemptRecord) string {
 	switch {
 	case record.RateLimit || record.Status == http.StatusTooManyRequests:
 		return "rate_limited"
@@ -225,6 +290,22 @@ func codeForAttempt(record attemptRecord) string {
 func (d *requestDiagnostics) writeFailure(w http.ResponseWriter, summary failureSummary) {
 	if summary.RetryAfter > 0 {
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", summary.RetryAfter))
+	}
+	// Retain the terminal diagnosis for the admin UI before writing it out: the
+	// caller sees the body, the operator sees the same record later without
+	// having to reproduce the failure.
+	if d != nil && d.sink != nil {
+		d.sink.add(FailureRecord{
+			At:        time.Now(),
+			RequestID: d.RequestID,
+			Route:     d.Route,
+			Status:    summary.Status,
+			Code:      summary.Code,
+			Message:   summary.Message,
+			ElapsedMS: time.Since(d.StartedAt).Milliseconds(),
+			Attempts:  append([]AttemptRecord(nil), d.Attempts...),
+			Skipped:   append([]SkippedRecord(nil), d.Skipped...),
+		})
 	}
 	d.write(w, summary.Status, summary.Message, summary.Code)
 }

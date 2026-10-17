@@ -140,6 +140,7 @@ function App() {
   const stateQuery = useQuery({ queryKey: ['state'], queryFn: api.state, refetchInterval: 5000 })
   const runtimeQuery = useQuery({ queryKey: ['runtime'], queryFn: api.runtime, refetchInterval: 5000, retry: false })
   const statisticsQuery = useQuery({ queryKey: ['statistics'], queryFn: api.statistics, refetchInterval: 5000 })
+  const failuresQuery = useQuery({ queryKey: ['failures'], queryFn: api.failures, refetchInterval: 5000, retry: false })
   const { draft, setDraft, dirty, acceptSaved, reset } = useConfigDraft(stateQuery.data?.config)
 
   useEffect(() => {
@@ -225,7 +226,7 @@ function App() {
         {page === 'routes' && <RoutesPage config={draft} setConfig={setDraft} models={models} healthMap={healthMap} providerHealthMap={providerHealthMap} />}
         {page === 'models' && <ModelsPage config={draft} setConfig={setDraft} models={models} healthMap={healthMap} probe={state.health_probe} providers={state.providers} />}
         {page === 'providers' && <ProvidersPage state={state} onToast={setToast} />}
-        {page === 'statistics' && <StatisticsPage snapshot={statisticsQuery.data} loading={statisticsQuery.isLoading} error={statisticsQuery.error as Error | null} />}
+        {page === 'statistics' && <StatisticsPage snapshot={statisticsQuery.data} failures={failuresQuery.data?.failures || []} loading={statisticsQuery.isLoading} error={statisticsQuery.error as Error | null} />}
         {page === 'system' && <SystemPage state={state} runtime={runtime} offline={runtimeQuery.isError} />}
       </div>
 

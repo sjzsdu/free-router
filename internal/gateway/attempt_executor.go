@@ -70,6 +70,17 @@ func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model 
 		e.gateway.tracker.Failure(model.ID, capability, time.Since(started), 0, err.Error(), 0)
 		slog.Warn("provider request failed", "provider", model.Provider, "model", model.UpstreamID, "error", err)
 		decision := e.gateway.shouldRetry(model, capability, 0, false, index)
+		// A non-idempotent request is normally never replayed, because the
+		// upstream may already have accepted it and generating an image twice
+		// is not free. A connect-phase failure (refused connection, DNS
+		// failure, unreachable host) is the exception the policy cannot see:
+		// the request body never left this machine, so another provider can
+		// serve it without any risk of duplicate work. This turns the most
+		// common generation failure — one dead provider — into a success.
+		if !decision.ShouldRetry && index+1 < len(candidates) && requestNeverReachedUpstream(err) {
+			decision = RetryDecision{ShouldRetry: true, Reason: "request never reached the upstream"}
+			slog.Info("non-idempotent request was never sent; safe to fall back", "provider", model.Provider, "model", model.UpstreamID, "nextIndex", index+1)
+		}
 		slog.Debug("connection error retry decision", "provider", model.Provider, "model", model.UpstreamID, "shouldRetry", decision.ShouldRetry, "reason", decision.Reason, "index", index, "candidatesLeft", len(candidates)-index-1)
 		if decision.ShouldRetry && index+1 < len(candidates) {
 			e.record(model, capability, false, 0, time.Since(started), nil, false)
