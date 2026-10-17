@@ -20,6 +20,11 @@ var ErrConfigConflict = errors.New("route configuration was changed by another r
 const (
 	StrategyOrdered    = "ordered"
 	StrategyRoundRobin = "round-robin"
+	// StrategyBestQuality sorts the configured candidates by their maintained
+	// quality score instead of trusting the hand-written order. Unscored
+	// models keep their configured position after the scored ones, so a stale
+	// or missing ranking can only reorder the pool, never empty it.
+	StrategyBestQuality = "best-quality"
 )
 
 type Route struct {
@@ -350,8 +355,8 @@ func validate(config *Config) error {
 		if route.Strategy == "" {
 			route.Strategy = StrategyOrdered
 		}
-		if route.Strategy != StrategyOrdered && route.Strategy != StrategyRoundRobin {
-			return fmt.Errorf("route %q strategy must be %q or %q", alias, StrategyOrdered, StrategyRoundRobin)
+		if route.Strategy != StrategyOrdered && route.Strategy != StrategyRoundRobin && route.Strategy != StrategyBestQuality {
+			return fmt.Errorf("route %q strategy must be %q, %q or %q", alias, StrategyOrdered, StrategyRoundRobin, StrategyBestQuality)
 		}
 		seen := make(map[string]bool)
 		cleaned := make([]string, 0, len(route.Models))

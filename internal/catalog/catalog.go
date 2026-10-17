@@ -72,6 +72,21 @@ type Model struct {
 	SupportedEndpoints  []string     `json:"supported_endpoints,omitempty"`
 	Capabilities        Capabilities `json:"capabilities"`
 	Pricing             Pricing      `json:"pricing,omitempty"`
+	// Quality is the maintained capability score for this model. Nil means
+	// "not scored", which is the common case and must never be treated as a
+	// low score: an unscored model keeps its configured position.
+	Quality *Quality `json:"quality,omitempty"`
+}
+
+// Quality mirrors provider.DiscoveredQuality. It is duplicated here because
+// the catalog is the runtime projection and must not grow a dependency back
+// onto the manifest package.
+type Quality struct {
+	Source     string  `json:"source"`
+	Score      float64 `json:"score"`
+	Rank       int     `json:"rank,omitempty"`
+	ObservedAt string  `json:"observed_at,omitempty"`
+	URL        string  `json:"url,omitempty"`
 }
 
 type Capabilities struct {
@@ -468,6 +483,7 @@ func modelsFromDiscovery(spec provider.Spec) []Model {
 			Pricing: Pricing{
 				Prompt: candidate.Pricing.Prompt, Completion: candidate.Pricing.Completion,
 			},
+			Quality: qualityFromDiscovery(candidate.Quality),
 		})
 	}
 	if len(models) == 0 {
@@ -1348,6 +1364,10 @@ func modelFingerprint(model Model) string {
 		SupportedEndpoints  []string `json:"supported_endpoints"`
 		Pricing             Pricing  `json:"pricing"`
 	}
+	// Quality is deliberately absent: a re-score changes which model is tried
+	// first, not whether the upstream can be called, so it must not invalidate
+	// quarantine or probe evidence. The catalog fingerprint below watches the
+	// scores separately, which is what forces the cache to be rebuilt.
 	data, _ := json.Marshal(fingerprint{
 		ID: model.ID, Type: model.Type, Functions: sortedStrings(model.Functions),
 		ContextLength: model.ContextLength, MaxOutputTokens: model.MaxOutputTokens,
@@ -1358,21 +1378,48 @@ func modelFingerprint(model Model) string {
 	return fmt.Sprintf("%x", sha256.Sum256(data))
 }
 
+// qualityFromDiscovery converts the manifest record into the runtime value,
+// returning nil rather than a zero value so "unscored" stays distinguishable
+// from "scored zero".
+func qualityFromDiscovery(quality *provider.DiscoveredQuality) *Quality {
+	if quality == nil || quality.Score <= 0 {
+		return nil
+	}
+	return &Quality{
+		Source: quality.Source, Score: quality.Score, Rank: quality.Rank,
+		ObservedAt: quality.ObservedAt, URL: quality.URL,
+	}
+}
+
 func (s *Store) catalogFingerprint() string {
 	type catalogEntry struct {
 		Provider string   `json:"provider"`
 		Models   []string `json:"models"`
+		// Quality is tracked here rather than in modelFingerprint: a score
+		// change must rebuild the catalog (so the new order is used) without
+		// discarding the health evidence that is keyed by modelFingerprint.
+		Quality []string `json:"quality"`
 	}
 	entries := make([]catalogEntry, 0)
 	for _, spec := range s.registry.CatalogAll() {
 		entry := catalogEntry{Provider: spec.ID}
 		for _, model := range modelsFromDiscovery(spec) {
 			entry.Models = append(entry.Models, modelFingerprint(model))
+			entry.Quality = append(entry.Quality, qualityKey(model))
 		}
 		entries = append(entries, entry)
 	}
 	data, _ := json.Marshal(entries)
 	return fmt.Sprintf("%x", sha256.Sum256(data))
+}
+
+// qualityKey is the cache-fingerprint representation of a score. It is a plain
+// string so the comparison is exact and independent of float formatting.
+func qualityKey(model Model) string {
+	if model.Quality == nil {
+		return model.ID
+	}
+	return fmt.Sprintf("%s|%s|%v|%d|%s", model.ID, model.Quality.Source, model.Quality.Score, model.Quality.Rank, model.Quality.ObservedAt)
 }
 
 func sortedStrings(values []string) []string {

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -819,5 +820,59 @@ func discoverForTest(t *testing.T, store *Store) {
 	models, failures := store.DiscoverFromProviders(context.Background())
 	if len(failures) > 0 || len(models) == 0 {
 		t.Fatalf("models=%d failures=%#v", len(models), failures)
+	}
+}
+
+func TestModelsFromDiscoveryCarriesQuality(t *testing.T) {
+	models := modelsFromDiscovery(provider.Spec{ID: "test", DiscoveredModels: []provider.DiscoveredModel{
+		{ID: "scored", Functions: []string{FunctionChat}, Quality: &provider.DiscoveredQuality{Source: "lmarena", Score: 82.5, Rank: 4, ObservedAt: "2026-10-01", URL: "https://example.com/board"}},
+		{ID: "unscored", Functions: []string{FunctionChat}},
+		{ID: "zero", Functions: []string{FunctionChat}, Quality: &provider.DiscoveredQuality{Source: "lmarena", Score: 0}},
+	}})
+	byID := map[string]Model{}
+	for _, model := range models {
+		byID[model.UpstreamID] = model
+	}
+	scored := byID["scored"]
+	if scored.Quality == nil || scored.Quality.Source != "lmarena" || scored.Quality.Score != 82.5 || scored.Quality.Rank != 4 {
+		t.Fatalf("quality not projected into the catalog: %#v", scored.Quality)
+	}
+	if byID["unscored"].Quality != nil {
+		t.Fatalf("unscored model gained a quality value: %#v", byID["unscored"].Quality)
+	}
+	if byID["zero"].Quality != nil {
+		t.Fatalf("zero score should stay unscored, got %#v", byID["zero"].Quality)
+	}
+}
+
+// A re-score reorders candidates; it does not make the upstream less callable,
+// so the health evidence keyed by modelFingerprint must survive it.
+func TestModelFingerprintIgnoresQuality(t *testing.T) {
+	plain := Model{ID: "test/a", Functions: []string{FunctionChat}}
+	scored := plain
+	scored.Quality = &Quality{Source: "lmarena", Score: 80}
+	if modelFingerprint(plain) != modelFingerprint(scored) {
+		t.Fatal("quality must not change the model fingerprint")
+	}
+}
+
+func TestCatalogFingerprintChangesWithQuality(t *testing.T) {
+	manifestWith := func(score float64) string {
+		return `{"schema_version":2,"providers":{"test":{"source_urls":["https://example.com"],"models":[{"id":"a","functions":["chat"],"quality":{"source":"lmarena","score":` + strconv.FormatFloat(score, 'f', -1, 64) + `}}]}}}`
+	}
+	fingerprintFor := func(score float64) string {
+		path := filepath.Join(t.TempDir(), "free-models.json")
+		if err := os.WriteFile(path, []byte(manifestWith(score)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		registry, err := provider.NewRegistryWithManifest(`[{"id":"test","base_url":"https://test.invalid","no_auth":true}]`, provider.DefaultEnvMap(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store := New(registry, filepath.Join(t.TempDir(), "models.json"), http.DefaultClient)
+		return store.catalogFingerprint()
+	}
+	if fingerprintFor(80) == fingerprintFor(90) {
+		t.Fatal("a score change must force a catalog rebuild so the new order takes effect")
 	}
 }
