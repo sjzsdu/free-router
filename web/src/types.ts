@@ -28,6 +28,16 @@ export interface Model {
   supported_parameters?: string[]
   supported_endpoints?: string[]
   capabilities: Capabilities
+  quality?: ModelQuality
+}
+
+/** Maintained capability score. Scores are only comparable within a source. */
+export interface ModelQuality {
+  source: string
+  score: number
+  rank?: number
+  observed_at?: string
+  url?: string
 }
 
 export interface ModelOverride {
@@ -41,7 +51,7 @@ export interface ModelOverride {
 export interface Route {
   _comment?: string
   capability: RouteType
-  strategy?: 'ordered' | 'round-robin'
+  strategy?: 'ordered' | 'round-robin' | 'best-quality'
   require_tool?: boolean
   models: string[]
 }

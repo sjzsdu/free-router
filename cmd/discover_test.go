@@ -209,3 +209,28 @@ func TestDiscoverModelDataReportsOnlyActuallyMissingConfiguration(t *testing.T) 
 		})
 	}
 }
+
+// discoverModelData rewrites the maintained manifest from a provider's catalog
+// endpoint, which knows nothing about ranking. Scores must survive that
+// rewrite, otherwise one maintenance run silently erases every curation.
+func TestMaintainedQualityIndexesExistingManifest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "free-models.json")
+	content := `{"schema_version":2,"providers":{"groq":{"source_urls":["https://example.com"],"models":[
+		{"id":"chat-a","functions":["chat"],"quality":{"source":"lmarena","score":77.5,"rank":2,"observed_at":"2026-10-01"}},
+		{"id":"chat-b","functions":["chat"]}
+	]}}}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	quality := maintainedQuality(path)
+	scored, ok := quality["groq/chat-a"]
+	if !ok || scored == nil || scored.Score != 77.5 || scored.Source != "lmarena" || scored.Rank != 2 {
+		t.Fatalf("maintained quality = %#v", quality)
+	}
+	if _, ok := quality["groq/chat-b"]; ok {
+		t.Fatal("unscored model should not appear in the quality index")
+	}
+	if got := maintainedQuality(filepath.Join(t.TempDir(), "missing.json")); len(got) != 0 {
+		t.Fatalf("missing manifest should yield no scores, got %#v", got)
+	}
+}

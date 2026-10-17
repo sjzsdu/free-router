@@ -316,7 +316,7 @@ function RoutesPage({ config, setConfig, models, healthMap, providerHealthMap }:
     if (isModelAlreadySelected(id, route.models)) return
     updateModels([...route.models, id])
   }
-  const updateStrategy = (strategy: 'ordered' | 'round-robin') => {
+  const updateStrategy = (strategy: 'ordered' | 'round-robin' | 'best-quality') => {
     const next = cloneConfig(config); next.routes[selected].strategy = strategy; setConfig(next)
   }
   const onDragEnd = ({ active, over }: DragEndEvent) => {
@@ -329,8 +329,8 @@ function RoutesPage({ config, setConfig, models, healthMap, providerHealthMap }:
     <aside className="route-nav panel"><div className="route-nav-heading"><span>固定能力</span><small>{Object.keys(config.routes).length} 条路由</small></div>{routeOrder.filter(alias => config.routes[alias]).map(alias => { const item = config.routes[alias]; return <button key={alias} className={selected === alias ? 'active' : ''} onClick={() => setSelected(alias)}><div className="route-glyph"><Blocks size={16} /></div><div><strong>{routeLabels[alias]?.title || alias}</strong><small>{item.models.length ? `${item.models.length} 个固定模型` : '自动选择'}</small></div><ChevronRight size={15} /></button> })}</aside>
 
     <section className="route-chain panel"><div className="route-chain-heading"><div><span className="eyebrow">FALLBACK CHAIN</span><h2>{routeLabels[selected]?.title || selected}</h2><p>{routeLabels[selected]?.description}</p></div><span className="model-alias"><code>model: {selected}</code></span></div>
-      <div className="route-strategy"><button className={(route.strategy || 'ordered') === 'ordered' ? 'active' : ''} onClick={() => updateStrategy('ordered')}><ArrowDownUp size={16} /><span><strong>按顺序</strong><small>从首个健康项开始</small></span></button><button className={route.strategy === 'round-robin' ? 'active' : ''} onClick={() => updateStrategy('round-robin')}><RefreshCw size={16} /><span><strong>雨露均沾</strong><small>健康模型轮流首选</small></span></button></div>
-      <div className="chain-explainer"><ArrowDownUp size={16} /><span>{route.strategy === 'round-robin' ? '每次轮换首选模型；失败后继续尝试环中的下一个。' : '严格从上到下尝试。拖动可排序，也支持键盘操作。'}</span></div>
+      <div className="route-strategy"><button className={(route.strategy || 'ordered') === 'ordered' ? 'active' : ''} onClick={() => updateStrategy('ordered')}><ArrowDownUp size={16} /><span><strong>按顺序</strong><small>从首个健康项开始</small></span></button><button className={route.strategy === 'round-robin' ? 'active' : ''} onClick={() => updateStrategy('round-robin')}><RefreshCw size={16} /><span><strong>雨露均沾</strong><small>健康模型轮流首选</small></span></button><button className={route.strategy === 'best-quality' ? 'active' : ''} onClick={() => updateStrategy('best-quality')}><Sparkles size={16} /><span><strong>高分优先</strong><small>按清单评分排序</small></span></button></div>
+      <div className="chain-explainer"><ArrowDownUp size={16} /><span>{route.strategy === 'round-robin' ? '每次轮换首选模型；失败后继续尝试环中的下一个。' : route.strategy === 'best-quality' ? '按清单中的 quality.score 从高到低尝试；没有评分的模型保持原顺序排在后面，仍然可以兜底。' : '严格从上到下尝试。拖动可排序，也支持键盘操作。'}</span></div>
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}><SortableContext items={route.models} strategy={verticalListSortingStrategy}><div className="fallback-chain">
         {route.models.map((id, index) => { const model = modelMap.get(id); return <SortableModel key={id} id={id} index={index} model={model} health={model ? routeHealth(model) : healthMap.get(healthKey(id, route.capability))} remove={() => updateModels(route.models.filter(item => item !== id))} /> })}
         {!route.models.length && <div className="empty-chain"><Sparkles size={24} /><strong>当前使用完全自动路由</strong><p>可以从右侧加入固定优先模型，或继续让系统按能力与健康状态选择。</p></div>}
@@ -348,7 +348,7 @@ function SortableModel({ id, index, model, health, remove }: { id: string; index
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
   const unavailable = !model || model.disabled
   return <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={cx('fallback-item', isDragging && 'dragging', unavailable && 'unavailable')}>
-    <div className="priority-index">{index + 1}</div><button className="drag-handle" {...attributes} {...listeners} aria-label={`拖动 ${id} 调整优先级`}><GripVertical size={17} /></button><div className="fallback-model"><strong>{id}</strong><div>{model ? <><span>{model.provider}</span><CapabilityPills model={model} /></> : <span className="danger-text">模型不在当前缓存中</span>}</div></div><div className="fallback-health"><StatusBadge status={health?.status || 'unknown'} />{health?.average_latency_ms ? <small>{Math.round(health.average_latency_ms)}ms</small> : null}</div><IconButton label="从优先级移除" onClick={remove}><Trash2 size={15} /></IconButton>
+    <div className="priority-index">{index + 1}</div><button className="drag-handle" {...attributes} {...listeners} aria-label={`拖动 ${id} 调整优先级`}><GripVertical size={17} /></button><div className="fallback-model"><strong>{id}</strong><div>{model ? <><span>{model.provider}</span><CapabilityPills model={model} />{model.quality ? <span title={`来源：${model.quality.source}${model.quality.observed_at ? ` · ${model.quality.observed_at}` : ''}`}>评分 {model.quality.score}</span> : null}</> : <span className="danger-text">模型不在当前缓存中</span>}</div></div><div className="fallback-health"><StatusBadge status={health?.status || 'unknown'} />{health?.average_latency_ms ? <small>{Math.round(health.average_latency_ms)}ms</small> : null}</div><IconButton label="从优先级移除" onClick={remove}><Trash2 size={15} /></IconButton>
   </div>
 }
 

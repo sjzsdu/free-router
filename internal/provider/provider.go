@@ -77,6 +77,25 @@ type DiscoveredModel struct {
 	SourceURLs          []string          `json:"source_urls,omitempty"`
 	VerifiedAt          string            `json:"verified_at,omitempty"`
 	Pricing             DiscoveredPricing `json:"pricing,omitempty"`
+	// Quality is an externally sourced capability score. It is optional by
+	// design: no ranking site offers a stable free API, so the router must
+	// keep working when scores are absent, stale, or missing for one provider.
+	Quality *DiscoveredQuality `json:"quality,omitempty"`
+}
+
+// DiscoveredQuality is one model's measured capability relative to its peers.
+//
+// Score is normalized to 0-100 so rankings with different scales (Elo, index
+// points, win rates) can share a field; Source names where the number came
+// from and ObservedAt says when. Scores are only strictly comparable within
+// the same Source, which is why the source is part of the record rather than
+// a global constant.
+type DiscoveredQuality struct {
+	Source     string  `json:"source"`
+	Score      float64 `json:"score"`
+	Rank       int     `json:"rank,omitempty"`
+	ObservedAt string  `json:"observed_at,omitempty"`
+	URL        string  `json:"url,omitempty"`
 }
 
 type DiscoveredPricing struct {
@@ -308,6 +327,21 @@ func ValidateFreeModelManifest(manifest FreeModelManifest) error {
 			}
 			if len(model.SourceURLs) == 0 && len(entry.SourceURLs) == 0 {
 				return fmt.Errorf("provider %s model %s has no evidence source", providerID, model.ID)
+			}
+			// A quality score without a source is unfalsifiable, and a score
+			// outside the normalized range would silently dominate every
+			// cross-provider comparison, so both are rejected rather than
+			// clamped.
+			if quality := model.Quality; quality != nil {
+				if strings.TrimSpace(quality.Source) == "" {
+					return fmt.Errorf("provider %s model %s quality has no source", providerID, model.ID)
+				}
+				if quality.Score <= 0 || quality.Score > 100 {
+					return fmt.Errorf("provider %s model %s quality score %v is outside (0, 100]", providerID, model.ID, quality.Score)
+				}
+				if quality.Rank < 0 {
+					return fmt.Errorf("provider %s model %s quality rank must not be negative", providerID, model.ID)
+				}
 			}
 		}
 	}

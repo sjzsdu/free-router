@@ -54,6 +54,27 @@ func addDiscoveryCommand(root *cobra.Command, opts *options) {
 	})
 }
 
+// maintainedQuality indexes the existing manifest by catalog model id
+// (provider/upstream). A missing manifest is not an error here: discovery must
+// keep working on a fresh checkout before any scores exist.
+func maintainedQuality(manifestPath string) map[string]*provider.DiscoveredQuality {
+	manifest, err := provider.LoadFreeModelManifest(manifestPath)
+	if err != nil {
+		return nil
+	}
+	quality := make(map[string]*provider.DiscoveredQuality)
+	for providerID, entry := range manifest.Providers {
+		for _, model := range entry.Models {
+			if model.Quality == nil {
+				continue
+			}
+			copied := *model.Quality
+			quality[providerID+"/"+model.ID] = &copied
+		}
+	}
+	return quality
+}
+
 func discoverModelData(ctx context.Context, opts options, target string, output io.Writer) error {
 	vault := credentials.New(opts.credentials)
 	envMap, err := configuredEnvMap(opts)
@@ -98,6 +119,11 @@ func discoverModelData(ctx context.Context, opts options, target string, output 
 			checked = append(checked, spec.ID)
 		}
 	}
+	// Discovery only knows what the provider's catalog endpoint reports; it
+	// has no opinion about model quality. Carry the maintained scores over
+	// from the existing manifest so redirecting this output into free-models/
+	// cannot silently wipe every ranking a maintainer curated.
+	quality := maintainedQuality(opts.freeModels)
 	byProvider := make(map[string][]provider.DiscoveredModel)
 	for _, model := range models {
 		byProvider[model.Provider] = append(byProvider[model.Provider], provider.DiscoveredModel{
@@ -107,6 +133,7 @@ func discoverModelData(ctx context.Context, opts options, target string, output 
 			OutputModalities: model.OutputModalities, SupportedParameters: model.SupportedParameters,
 			SupportedEndpoints: model.SupportedEndpoints,
 			Pricing:            provider.DiscoveredPricing{Prompt: model.Pricing.Prompt, Completion: model.Pricing.Completion},
+			Quality:            quality[model.ID],
 		})
 	}
 	providers := make([]discoveredProvider, 0, len(byProvider))
