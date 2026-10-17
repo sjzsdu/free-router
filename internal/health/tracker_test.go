@@ -1,6 +1,7 @@
 package health
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -153,6 +154,52 @@ func TestQuotaErrorQuarantinesProvider(t *testing.T) {
 	tracker.Failure("provider/model", "chat", 0, 402, "quota exhausted", 0)
 	if tracker.Available("provider/other", "chat") {
 		t.Fatal("account quota error should quarantine all models from same provider")
+	}
+}
+
+// A revoked key or a spent allowance cannot be fixed by retrying, so the
+// provider must stay out of the candidate pool long enough that it stops
+// consuming an attempt slot on every request. The transient curve bottoms out
+// at 30s, which made a dead provider look permanently half-healthy.
+func TestCredentialFailureQuarantinesProviderForLongerThanTransientFailures(t *testing.T) {
+	for _, status := range []int{401, 402} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			tracker := New()
+			now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
+			tracker.now = func() time.Time { return now }
+
+			tracker.Failure("provider/model", "chat", 0, status, "account unavailable", 0)
+			provider := tracker.ProviderSnapshot()[0]
+			quarantine := provider.CooldownUntil.Sub(now)
+			if quarantine < DefaultCredentialCoolDownBase {
+				t.Fatalf("quarantine = %v, want at least %v", quarantine, DefaultCredentialCoolDownBase)
+			}
+			// Still self-healing: it must come back on its own rather than
+			// require a restart.
+			if quarantine > DefaultCredentialCoolDownMax+DefaultCredentialCoolDownMax/2 {
+				t.Fatalf("quarantine = %v, want at most %v (plus jitter)", quarantine, DefaultCredentialCoolDownMax)
+			}
+
+			now = now.Add(DefaultCoolDownMax)
+			if tracker.Available("provider/other", "chat") {
+				t.Fatal("provider should still be quarantined after the transient cooldown elapsed")
+			}
+		})
+	}
+}
+
+// 403 is ambiguous — a suspended account or one model the key may not call —
+// so it keeps the short curve and must not freeze the provider's siblings for
+// minutes.
+func TestForbiddenKeepsShortCooldown(t *testing.T) {
+	tracker := New()
+	now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
+	tracker.now = func() time.Time { return now }
+
+	tracker.Failure("provider/model", "chat", 0, 403, "forbidden", 0)
+	provider := tracker.ProviderSnapshot()[0]
+	if quarantine := provider.CooldownUntil.Sub(now); quarantine > DefaultCoolDownMax+DefaultCoolDownMax/2 {
+		t.Fatalf("403 quarantine = %v, want the transient curve (<= %v plus jitter)", quarantine, DefaultCoolDownMax)
 	}
 }
 

@@ -208,8 +208,10 @@ func (a *OpenAICompatibleAdapter) ClassifyError(statusCode int, body []byte) Err
 		err.Message = a.parseErrorMessage(statusCode, body)
 		// Preserve normal client-validation semantics (for example, an
 		// invalid messages array) while recognizing the generic envelope from
-		// providers that have lost a model/session.
-		err.Retryable = err.Message == "HTTP 400"
+		// providers that have lost a model/session, and the capability-shaped
+		// messages ("model not found", "tools not supported", ...) that mean
+		// *this* upstream cannot serve the request at all.
+		err.Retryable = err.Message == "HTTP 400" || a.isProviderCapabilityError(err.Message)
 	case statusCode >= 400:
 		err.Message = a.parseErrorMessage(statusCode, body)
 		// Make certain 4xx errors retryable to enable fallback for availability.

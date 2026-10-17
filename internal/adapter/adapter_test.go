@@ -42,10 +42,11 @@ func TestClassifyError(t *testing.T) {
 		{"402 quota exhausted", 402, []byte(`{"error":{"message":"quota exhausted"}}`), "provider account unavailable", true, false},
 		{"403 account disabled", 403, []byte(`{"error":{"message":"forbidden"}}`), "provider account unavailable", true, false},
 		{"404 model removed", 404, []byte(`{"error":{"message":"missing model"}}`), "upstream model unavailable", true, false},
-<<<<<<< HEAD
+		// A bare/generic 400 usually means the provider lost the model or
+		// session, so it stays retryable (f49ca55). Capability-shaped messages
+		// below are retryable for the same reason; genuine client-validation
+		// messages stay terminal.
 		{"400 error without message", 400, []byte(`{}`), "HTTP 400", true, false},
-=======
-		{"400 error without message", 400, []byte(`{}`), "HTTP 400", false, false},
 		// Capability-related 400 errors should be retryable for fallback
 		{"400 model not found", 400, []byte(`{"error":{"message":"model not found"}}`), "model not found", true, false},
 		{"400 invalid model", 400, []byte(`{"error":{"message":"invalid model"}}`), "invalid model", true, false},
@@ -61,7 +62,6 @@ func TestClassifyError(t *testing.T) {
 		{"400 malformed json", 400, []byte(`{"error":{"message":"malformed json"}}`), "malformed json", false, false},
 		{"400 invalid parameter", 400, []byte(`{"error":{"message":"invalid parameter 'foo'"}}`), "invalid parameter 'foo'", false, false},
 		{"400 missing required field", 400, []byte(`{"error":{"message":"missing required field: messages"}}`), "missing required field: messages", false, false},
->>>>>>> b5331af (fix(adapter): handle 4xx errors indicating provider/model capabilities)
 	}
 
 	for _, tt := range tests {

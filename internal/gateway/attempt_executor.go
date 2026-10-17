@@ -19,6 +19,13 @@ type AttemptResult struct {
 	// Terminal is false and the caller asked to defer writing it (so a higher
 	// layer can run a loose fallback before giving up).
 	LastError *adapter.Error
+	// RetryAfter is the upstream Retry-After hint (seconds) that arrived with
+	// LastError, so request-level diagnostics can forward it to the caller.
+	RetryAfter int
+	// Latency is how long this attempt took, so request-level diagnostics can
+	// report *when* a provider failed, not only that it did: an instant 401
+	// and a 30s timeout call for completely different remedies.
+	Latency time.Duration
 }
 
 // AttemptExecutor owns one normalized provider attempt: transport execution,
@@ -37,9 +44,12 @@ func NewAttemptExecutor(gateway *Gateway) *AttemptExecutor {
 // AttemptResult{Terminal:false, LastError:...} so the caller can run a
 // higher-level fallback (e.g. chat-tools -> plain chat with tools stripped)
 // before deciding what to send downstream.
-func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model catalog.Model, capability, endpoint string, payload []byte, contentType string, index int, candidates []catalog.Model, deferErrorWrite bool) AttemptResult {
+func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model catalog.Model, capability, endpoint string, payload []byte, contentType string, index int, candidates []catalog.Model, deferErrorWrite bool) (attempt AttemptResult) {
 
 	started := time.Now()
+	// Every exit path, including terminal ones, carries the attempt latency so
+	// request-level diagnostics can show how long each provider took to fail.
+	defer func() { attempt.Latency = time.Since(started) }()
 	slog.Debug("attempt start", "provider", model.Provider, "model", model.UpstreamID, "index", index, "total_candidates", len(candidates), "capability", capability, "deferErrorWrite", deferErrorWrite)
 	resp, err := e.gateway.forward(r, model, payload, endpoint, contentType)
 	if err != nil {
@@ -65,14 +75,15 @@ func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model 
 			e.record(model, capability, false, 0, time.Since(started), nil, false)
 			e.gateway.metrics.RecordFallback()
 			slog.Info("fallback after connection error", "provider", model.Provider, "model", model.UpstreamID, "nextIndex", index+1)
-			return AttemptResult{Terminal: false}
+			classified := adapter.Error{StatusCode: http.StatusBadGateway, Message: err.Error(), Retryable: true}
+			return AttemptResult{Terminal: false, LastError: &classified}
 		}
 		if deferErrorWrite {
-			err := adapter.Error{StatusCode: http.StatusBadGateway, Message: "all configured free providers failed", Retryable: true}
+			classified := adapter.Error{StatusCode: http.StatusBadGateway, Message: err.Error(), Retryable: true}
 			e.gateway.metrics.RecordFailure(time.Since(started), 0)
 			e.record(model, capability, false, 0, time.Since(started), nil, false)
 			slog.Debug("defer error write after connection error", "provider", model.Provider, "model", model.UpstreamID)
-			return AttemptResult{Terminal: false, LastError: &err}
+			return AttemptResult{Terminal: false, LastError: &classified}
 		}
 		writeError(w, http.StatusBadGateway, "all configured free providers failed")
 		e.gateway.metrics.RecordFailure(time.Since(started), 0)
@@ -87,17 +98,48 @@ func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model 
 		resp.Body.Close()
 		e.gateway.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, err.Error(), 0)
 		slog.Debug("normalize response failed", "provider", model.Provider, "model", model.UpstreamID, "status", resp.StatusCode, "error", err)
-		writeError(w, http.StatusBadGateway, err.Error())
 		e.gateway.metrics.RecordFailure(time.Since(started), resp.StatusCode)
 		e.record(model, capability, false, resp.StatusCode, time.Since(started), nil, false)
+		// An unreadable upstream response is an upstream fault, so it is
+		// fallback-eligible instead of terminal: another free provider may
+		// still answer the same request.
+		classified := adapter.Error{StatusCode: http.StatusBadGateway, Message: err.Error(), Retryable: true}
+		if deferErrorWrite {
+			return AttemptResult{Terminal: false, LastError: &classified}
+		}
+		writeError(w, classified.StatusCode, classified.Message)
 		return AttemptResult{Terminal: true}
 	}
-	slog.Debug("normalized response", "provider", model.Provider, "model", model.UpstreamID, "status", normalizedResp.StatusCode, "hasError", normalizedResp.Error != nil, "errorMsg", func() string { if normalizedResp.Error != nil { return normalizedResp.Error.Message } else { return "" } }(), "errorRetryable", func() bool { if normalizedResp.Error != nil { return normalizedResp.Error.Retryable } else { return false } }(), "errorRateLimit", func() bool { if normalizedResp.Error != nil { return normalizedResp.Error.RateLimit } else { return false } }(), "bodyLen", len(normalizedResp.Body))
+	slog.Debug("normalized response", "provider", model.Provider, "model", model.UpstreamID, "status", normalizedResp.StatusCode, "hasError", normalizedResp.Error != nil, "errorMsg", func() string {
+		if normalizedResp.Error != nil {
+			return normalizedResp.Error.Message
+		} else {
+			return ""
+		}
+	}(), "errorRetryable", func() bool {
+		if normalizedResp.Error != nil {
+			return normalizedResp.Error.Retryable
+		} else {
+			return false
+		}
+	}(), "errorRateLimit", func() bool {
+		if normalizedResp.Error != nil {
+			return normalizedResp.Error.RateLimit
+		} else {
+			return false
+		}
+	}(), "bodyLen", len(normalizedResp.Body))
 	decision := RetryDecision{}
 	if normalizedResp.Error != nil && normalizedResp.Error.Retryable {
 		decision = e.gateway.shouldRetry(model, capability, normalizedResp.Error.StatusCode, len(normalizedResp.Body) > 0, index)
 	}
-	slog.Debug("retry decision", "provider", model.Provider, "model", model.UpstreamID, "shouldRetry", decision.ShouldRetry, "reason", decision.Reason, "errorRetryable", func() bool { if normalizedResp.Error != nil { return normalizedResp.Error.Retryable } else { return false } }(), "index", index, "candidatesLeft", len(candidates)-index-1)
+	slog.Debug("retry decision", "provider", model.Provider, "model", model.UpstreamID, "shouldRetry", decision.ShouldRetry, "reason", decision.Reason, "errorRetryable", func() bool {
+		if normalizedResp.Error != nil {
+			return normalizedResp.Error.Retryable
+		} else {
+			return false
+		}
+	}(), "index", index, "candidatesLeft", len(candidates)-index-1)
 	if decision.ShouldRetry && index+1 < len(candidates) {
 		retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
 		e.gateway.tracker.Failure(model.ID, capability, time.Since(started), resp.StatusCode, resp.Status, retryAfter)
@@ -109,8 +151,12 @@ func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model 
 		if resp.StatusCode == http.StatusTooManyRequests {
 			e.gateway.metrics.RecordRateLimit()
 		}
-		sleepBackoff(r.Context(), effectiveDelay(decision.Delay, retryAfter))
-		return AttemptResult{Terminal: false}
+		sleepBackoff(r.Context(), fallbackDelay(candidates, index, decision.Delay, retryAfter))
+		// Report the failure even though the request continues: request-level
+		// diagnostics must be able to name every provider that was tried, not
+		// only the one that happened to fail last.
+		classified := *normalizedResp.Error
+		return AttemptResult{Terminal: false, LastError: &classified, RetryAfter: int(retryAfter / time.Second)}
 	}
 	if normalizedResp.Error != nil {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
@@ -120,8 +166,8 @@ func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model 
 		e.record(model, capability, false, normalizedResp.Error.StatusCode, time.Since(started), nil, false)
 		slog.Debug("non-retryable error, deferErrorWrite=%v", "provider", model.Provider, "model", model.UpstreamID, "status", normalizedResp.Error.StatusCode, "message", normalizedResp.Error.Message, "deferErrorWrite", deferErrorWrite)
 		if deferErrorWrite {
-			err := *normalizedResp.Error
-			return AttemptResult{Terminal: false, LastError: &err}
+			classified := *normalizedResp.Error
+			return AttemptResult{Terminal: false, LastError: &classified, RetryAfter: int(parseRetryAfter(resp.Header.Get("Retry-After")) / time.Second)}
 		}
 		writeError(w, normalizedResp.Error.StatusCode, normalizedResp.Error.Message)
 		return AttemptResult{Terminal: true}

@@ -266,15 +266,20 @@ func (g *Gateway) routeAvailable(route routing.Route) bool {
 
 func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, defaultAlias string) {
 	g.metrics.RecordRequest()
+	// Pair the concurrency gauge with the request itself, not with each
+	// upstream attempt: a fallback would otherwise leak a slot per retry.
+	defer g.metrics.RecordDone()
+	requestID := beginRequest(w)
+	diagnostics := newRequestDiagnostics(requestID, "")
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 32<<20))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "request body is too large or unreadable")
+		diagnostics.write(w, http.StatusBadRequest, "request body is too large or unreadable", "invalid_request")
 		g.metrics.RecordFailure(0, http.StatusBadRequest)
 		return
 	}
 	var request map[string]any
 	if err := json.Unmarshal(body, &request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		diagnostics.write(w, http.StatusBadRequest, "invalid JSON body", "invalid_request")
 		g.metrics.RecordFailure(0, http.StatusBadRequest)
 		return
 	}
@@ -291,12 +296,13 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 	} else if requested == "auto" || requested == "free" {
 		requested = defaultAlias
 	}
+	diagnostics.Route = requested
 	capability := g.requestCapability(requested, defaultAlias)
 	if defaultAlias == catalog.FunctionChat && needsTools {
 		capability = catalog.FunctionChatTools
 	}
 	if !endpointSupports(defaultAlias, capability) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("model capability %q is not compatible with this OpenAI endpoint", capability))
+		diagnostics.write(w, http.StatusBadRequest, fmt.Sprintf("model capability %q is not compatible with this OpenAI endpoint", capability), "unsupported_capability")
 		g.metrics.RecordFailure(0, http.StatusBadRequest)
 		return
 	}
@@ -315,15 +321,9 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 	}())
 	g.runBeforeCandidateAcquire()
 
-	// lastError accumulates the most recent deferred upstream error so the
-	// gateway can surface it after every fallback path has been exhausted
-	// (instead of a generic 503). It is only populated when deferErrorWrite
-	// asked Execute to skip writing the response itself.
-	var lastError *adapter.Error
-
 	for index, model := range candidates {
 		if !g.tracker.TryAcquire(model.ID, capability) {
-			slog.Debug("candidate not acquirable, skipping", "provider", model.Provider, "model", model.UpstreamID)
+			diagnostics.skip(model, "no acquirable in-flight slot; the model is cooling down after recent failures")
 			continue
 		}
 		// Release the in-flight slot on every exit path (including panics)
@@ -332,19 +332,18 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 		request["model"] = model.UpstreamID
 		payload, err := json.Marshal(request)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "could not encode request")
+			diagnostics.write(w, http.StatusBadRequest, "could not encode request", "invalid_request")
 			g.metrics.RecordFailure(0, http.StatusBadRequest)
 			return
 		}
-		// Defer the final 4xx/5xx write only on the tool-aliased route: a
-		// plain chat request has no higher-level fallback and should keep
-		// the original behaviour of writing the upstream error immediately.
-		result := g.tryCandidate(w, r, model, capability, endpoint, payload, "application/json", index, candidates, needsTools && fallback)
+		// Defer the error write on the tool-aliased route so the loose
+		// fallback can run, and on the final candidate so the request-level
+		// diagnostics — not the last provider to answer — decide what the
+		// caller is told.
+		result := g.tryCandidate(w, r, model, capability, endpoint, payload, "application/json", index, candidates, deferOnLast(needsTools && fallback, index, candidates))
+		diagnostics.recordAttempt(model, capability, phaseStrict, result)
 		if result.Terminal {
 			return
-		}
-		if result.LastError != nil {
-			lastError = result.LastError
 		}
 	}
 
@@ -368,50 +367,46 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 			looseCapability := catalog.FunctionChat
 			for index, model := range looseCandidates {
 				if !g.tracker.TryAcquire(model.ID, looseCapability) {
-					slog.Debug("loose candidate not acquirable, skipping", "provider", model.Provider, "model", model.UpstreamID)
+					diagnostics.skip(model, "no acquirable in-flight slot for the plain-chat fallback")
 					continue
 				}
 				defer g.tracker.Release(model.ID, looseCapability)
 				looseRequest["model"] = model.UpstreamID
 				payload, err := json.Marshal(looseRequest)
 				if err != nil {
-					writeError(w, http.StatusBadRequest, "could not encode request")
+					diagnostics.write(w, http.StatusBadRequest, "could not encode request", "invalid_request")
 					g.metrics.RecordFailure(0, http.StatusBadRequest)
 					return
 				}
 				// Continue deferring so the loose loop can try every plain
 				// chat candidate; the final error (if any) is written below.
 				result := g.tryCandidate(w, r, model, looseCapability, endpoint, payload, "application/json", index, looseCandidates, true)
+				diagnostics.recordAttempt(model, looseCapability, phaseLoose, result)
 				if result.Terminal {
 					return
-				}
-				if result.LastError != nil {
-					lastError = result.LastError
 				}
 			}
 		}
 	}
 
-	// Surface the last deferred upstream error verbatim now that every
-	// fallback path has been tried. Without this the caller would see a
-	// generic "no acquirable models" 503 even though an upstream did speak
-	// (e.g. "provider account unavailable"), which hides the real reason.
-	if lastError != nil {
-		slog.Debug("writing last deferred error", "status", lastError.StatusCode, "message", lastError.Message)
-		writeError(w, lastError.StatusCode, lastError.Message)
+	// Every candidate failed. Attribute the failure across the whole pool
+	// instead of echoing whichever provider happened to speak last: an
+	// exhausted free tier and a bad client request must not look alike.
+	if len(diagnostics.Attempts) > 0 {
+		diagnostics.writeFailure(w, summarizeAttempts(diagnostics.Attempts))
 		return
 	}
 
 	if len(candidates) == 0 {
 		if fallback {
-			writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("route %q has no healthy models; inspect failed models in the admin UI", requested))
+			diagnostics.write(w, http.StatusServiceUnavailable, fmt.Sprintf("route %q has no healthy models; inspect failed models in the admin UI", requested), "no_healthy_models")
 		} else {
-			writeError(w, http.StatusNotFound, fmt.Sprintf("free model %q was not found", requested))
+			diagnostics.write(w, http.StatusNotFound, fmt.Sprintf("free model %q was not found", requested), "unknown_route")
 		}
 		g.metrics.RecordFailure(0, http.StatusServiceUnavailable)
 		return
 	}
-	g.writeCandidateUnavailable(w, requested)
+	g.writeCandidateUnavailable(w, requested, diagnostics)
 }
 
 // sessionSeedFromRequest derives a stable 64-bit seed from the conversation's
@@ -472,39 +467,44 @@ func stripTools(request map[string]any) map[string]any {
 
 func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoint, defaultAlias string) {
 	g.metrics.RecordRequest()
+	// See proxyJSON: the gauge tracks downstream requests, not attempts.
+	defer g.metrics.RecordDone()
+	requestID := beginRequest(w)
+	diagnostics := newRequestDiagnostics(requestID, "")
 	mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "multipart/form-data" || params["boundary"] == "" {
-		writeError(w, http.StatusBadRequest, "multipart/form-data with a boundary is required")
+		diagnostics.write(w, http.StatusBadRequest, "multipart/form-data with a boundary is required", "invalid_request")
 		g.metrics.RecordFailure(0, http.StatusBadRequest)
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<20))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "request body is too large or unreadable")
+		diagnostics.write(w, http.StatusBadRequest, "request body is too large or unreadable", "invalid_request")
 		g.metrics.RecordFailure(0, http.StatusBadRequest)
 		return
 	}
 	requested, err := multipartModel(body, params["boundary"])
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid multipart body")
+		diagnostics.write(w, http.StatusBadRequest, "invalid multipart body", "invalid_request")
 		g.metrics.RecordFailure(0, http.StatusBadRequest)
 		return
 	}
 	if requested == "" || requested == "auto" || requested == "free" {
 		requested = defaultAlias
 	}
+	diagnostics.Route = requested
 	capability := g.requestCapability(requested, defaultAlias)
 	if !endpointSupports(defaultAlias, capability) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("model capability %q is not compatible with this OpenAI endpoint", capability))
+		diagnostics.write(w, http.StatusBadRequest, fmt.Sprintf("model capability %q is not compatible with this OpenAI endpoint", capability), "unsupported_capability")
 		g.metrics.RecordFailure(0, http.StatusBadRequest)
 		return
 	}
 	candidates, fallback := g.candidates(requested, capability, false, 0)
 	if len(candidates) == 0 {
 		if fallback {
-			writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("route %q has no healthy models; inspect failed models in the admin UI", requested))
+			diagnostics.write(w, http.StatusServiceUnavailable, fmt.Sprintf("route %q has no healthy models; inspect failed models in the admin UI", requested), "no_healthy_models")
 		} else {
-			writeError(w, http.StatusNotFound, fmt.Sprintf("free model %q was not found", requested))
+			diagnostics.write(w, http.StatusNotFound, fmt.Sprintf("free model %q was not found", requested), "unknown_route")
 		}
 		g.metrics.RecordFailure(0, http.StatusServiceUnavailable)
 		return
@@ -512,6 +512,7 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 	g.runBeforeCandidateAcquire()
 	for index, model := range candidates {
 		if !g.tracker.TryAcquire(model.ID, capability) {
+			diagnostics.skip(model, "no acquirable in-flight slot; the model is cooling down after recent failures")
 			continue
 		}
 		// Release the in-flight slot on every exit path (including panics)
@@ -519,17 +520,44 @@ func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoin
 		defer g.tracker.Release(model.ID, capability)
 		payload, contentType, err := rewriteMultipartModel(body, params["boundary"], model.UpstreamID)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "could not encode multipart request")
+			diagnostics.write(w, http.StatusBadRequest, "could not encode multipart request", "invalid_request")
 			g.metrics.RecordFailure(0, http.StatusBadRequest)
 			return
 		}
-		// Multipart endpoints (images/audio/etc.) have no higher-level
-		// fallback, so the executor writes the upstream error itself.
-		if g.tryCandidate(w, r, model, capability, endpoint, payload, contentType, index, candidates, false).Terminal {
+		// Multipart endpoints (images/audio/etc.) have no loose fallback, but
+		// the final candidate still defers so the pool-wide failure can be
+		// attributed across every provider that was tried.
+		result := g.tryCandidate(w, r, model, capability, endpoint, payload, contentType, index, candidates, deferOnLast(false, index, candidates))
+		diagnostics.recordAttempt(model, capability, phaseStrict, result)
+		if result.Terminal {
 			return
 		}
 	}
-	g.writeCandidateUnavailable(w, requested)
+	// Every multipart candidate failed; report the pool-wide reason rather
+	// than whichever upstream answered last.
+	if len(diagnostics.Attempts) > 0 {
+		diagnostics.writeFailure(w, summarizeAttempts(diagnostics.Attempts))
+		return
+	}
+	g.writeCandidateUnavailable(w, requested, diagnostics)
+}
+
+// deferOnLast reports whether an attempt should leave the terminal error write
+// to the caller. Doing this for the final candidate is what lets one request
+// end with a pool-wide diagnosis; `always` keeps the chat-tools behaviour where
+// a higher layer (the loose fallback) still has candidates to try.
+func deferOnLast(always bool, index int, candidates []catalog.Model) bool {
+	return always || index == len(candidates)-1
+}
+
+// beginRequest stamps the response with a correlation id so a caller can quote
+// one value when reporting a failure, and returns it for the error body.
+func beginRequest(w http.ResponseWriter) string {
+	requestID := newRequestID()
+	if requestID != "" {
+		w.Header().Set("X-Request-Id", requestID)
+	}
+	return requestID
 }
 
 // tryCandidate preserves the internal compatibility seam while delegating all
@@ -551,21 +579,37 @@ func localLimitError(err error) (int, string, bool) {
 	}
 }
 
-// maxFallbackDelay bounds how long a fallback waits before trying the next
-// candidate. An upstream Retry-After beyond this is effectively a long outage;
-// waiting for it would pin the handler goroutine for hours.
-const maxFallbackDelay = 5 * time.Minute
+// sameProviderFallbackDelay bounds the pause before retrying a *sibling model
+// of the provider that just failed. Two models of one provider share the same
+// API key and therefore the same quota bucket, so a short pause is useful
+// there.
+const sameProviderFallbackDelay = 2 * time.Second
 
-// effectiveDelay combines the retry backoff with any Retry-After hint from
-// the upstream, honouring the longer of the two, capped at maxFallbackDelay.
-func effectiveDelay(backoff, retryAfter time.Duration) time.Duration {
-	if retryAfter > backoff {
-		backoff = retryAfter
+// fallbackDelay decides how long to wait before the next candidate.
+//
+// A fallback normally switches provider, i.e. to a different account and a
+// different free quota. The failed provider's Retry-After describes *its*
+// limit; honouring it on the way to another provider buys nothing upstream and
+// adds the whole hint to the caller's latency — a 60s Retry-After turns a
+// 200ms fallback into a minute of waiting, which defeats the point of routing
+// across free sources. The failed model is already cooling down in the health
+// tracker, so it will not be selected again while its hint lasts.
+//
+// Only when the next candidate is another model of the *same* provider does a
+// pause still protect the shared quota, and even then it is capped so a long
+// hint cannot pin the handler goroutine.
+func fallbackDelay(candidates []catalog.Model, index int, backoff, retryAfter time.Duration) time.Duration {
+	if index+1 >= len(candidates) || candidates[index+1].Provider != candidates[index].Provider {
+		return 0
 	}
-	if backoff > maxFallbackDelay {
-		return maxFallbackDelay
+	delay := retryAfter
+	if backoff > delay {
+		delay = backoff
 	}
-	return backoff
+	if delay > sameProviderFallbackDelay {
+		return sameProviderFallbackDelay
+	}
+	return delay
 }
 
 // sleepBackoff waits for the retry delay, aborting early when the client
@@ -588,8 +632,8 @@ func (g *Gateway) runBeforeCandidateAcquire() {
 	}
 }
 
-func (g *Gateway) writeCandidateUnavailable(w http.ResponseWriter, requested string) {
-	writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("route %q has no currently acquirable models; retry shortly", requested))
+func (g *Gateway) writeCandidateUnavailable(w http.ResponseWriter, requested string, diagnostics *requestDiagnostics) {
+	diagnostics.write(w, http.StatusServiceUnavailable, fmt.Sprintf("route %q has no currently acquirable models; retry shortly", requested), "no_acquirable_models")
 	g.metrics.RecordFailure(0, http.StatusServiceUnavailable)
 }
 
