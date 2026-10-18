@@ -20,6 +20,9 @@ type StreamResult struct {
 	TTFB            time.Duration
 	Usage           *statistics.Usage
 	UsageExpected   bool
+	// Stream reports whether the response was a server-sent event stream, so
+	// the access log can tell a streaming call from a buffered one.
+	Stream bool
 }
 
 // stallTimeout bounds how long a body read may sit without producing data.
@@ -94,6 +97,7 @@ func copyResponse(w http.ResponseWriter, resp *http.Response, model catalog.Mode
 	eventStream := strings.Contains(contentType, "text/event-stream")
 	result := copyBody(w, body, started, eventStream)
 	result.UsageExpected = responseMayReportUsage(contentType)
+	result.Stream = eventStream
 	return result
 }
 

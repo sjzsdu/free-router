@@ -26,6 +26,10 @@ type AttemptResult struct {
 	// report *when* a provider failed, not only that it did: an instant 401
 	// and a 30s timeout call for completely different remedies.
 	Latency time.Duration
+	// Served describes the attempt that produced the downstream response. It
+	// is nil for every attempt that failed and for deferred ones, so the
+	// access log can name the provider that actually answered.
+	Served *ServedRecord
 }
 
 // AttemptExecutor owns one normalized provider attempt: transport execution,
@@ -185,11 +189,12 @@ func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model 
 	}
 	result := copyResponse(w, resp, model, started)
 	total := time.Since(started)
+	served := newServedRecord(model, capability, resp.StatusCode, total, result)
 	canceled := r.Context().Err() != nil || result.DownstreamError
 	if canceled {
 		e.gateway.metrics.RecordTransfer(false, total, result.TTFB, result.BytesWritten, 0, true)
 		e.record(model, capability, false, 0, total, result.Usage, false)
-		return AttemptResult{Terminal: true}
+		return AttemptResult{Terminal: true, Served: served}
 	}
 	if result.Complete && resp.StatusCode < http.StatusBadRequest {
 		e.gateway.tracker.Success(model.ID, capability, total, resp.StatusCode)
@@ -204,8 +209,25 @@ func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model 
 		e.gateway.metrics.RecordTransfer(false, total, result.TTFB, result.BytesWritten, resp.StatusCode, false)
 		e.record(model, capability, false, resp.StatusCode, total, result.Usage, false)
 	}
-	return AttemptResult{Terminal: true}
+	return AttemptResult{Terminal: true, Served: served}
+}
 
+// newServedRecord captures the attempt that produced the downstream response,
+// so the access log can name the provider and model behind a stable capability
+// alias.
+func newServedRecord(model catalog.Model, capability string, status int, latency time.Duration, result StreamResult) *ServedRecord {
+	return &ServedRecord{
+		Provider:     model.Provider,
+		Model:        model.UpstreamID,
+		Capability:   capability,
+		Status:       status,
+		TTFB:         result.TTFB,
+		Latency:      latency,
+		Bytes:        result.BytesWritten,
+		Stream:       result.Stream,
+		Usage:        result.Usage,
+		UsageMissing: result.UsageExpected && result.Usage == nil,
+	}
 }
 
 func (e *AttemptExecutor) record(model catalog.Model, capability string, success bool, status int, latency time.Duration, usage *statistics.Usage, missingUsage bool) {
