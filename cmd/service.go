@@ -4,11 +4,59 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/sjzsdu/free-router/internal/provider"
 	servicepkg "github.com/sjzsdu/free-router/internal/service"
 	"github.com/spf13/cobra"
 )
+
+// daemonEnvironment snapshots every setting the background service needs.
+//
+// launchd and systemd start the daemon with an empty environment, so anything
+// read from the environment in the foreground (provider keys, tokens, paths,
+// the attempt budget, log settings) has to be copied here explicitly. Settings
+// that were missing from this snapshot used to disappear silently the moment
+// the user installed the daemon.
+func daemonEnvironment(opts options) (map[string]string, error) {
+	envMap, err := configuredEnvMap(opts)
+	if err != nil {
+		return nil, err
+	}
+	environment := make(map[string]string)
+	for _, name := range provider.EnvironmentNames(envMap) {
+		if value := os.Getenv(name); value != "" {
+			environment[name] = value
+		}
+	}
+	environment["FREE_ROUTER_ADDR"] = opts.addr
+	environment["FREE_ROUTER_CACHE"] = opts.cache
+	if opts.freeModels != "" {
+		environment["FREE_ROUTER_FREE_MODELS"] = opts.freeModels
+	}
+	environment["FREE_ROUTER_CONFIG"] = opts.config
+	environment["FREE_ROUTER_CREDENTIALS"] = opts.credentials
+	environment["FREE_ROUTER_HEALTH"] = opts.health
+	environment["FREE_ROUTER_STATISTICS"] = opts.statistics
+	environment["FREE_ROUTER_MAX_ATTEMPTS"] = strconv.Itoa(opts.maxAttempts)
+	if opts.apiToken != "" {
+		environment["FREE_ROUTER_API_TOKEN"] = opts.apiToken
+	}
+	if opts.adminToken != "" {
+		environment["FREE_ROUTER_ADMIN_TOKEN"] = opts.adminToken
+	}
+	if opts.adminAllowRemote {
+		environment["FREE_ROUTER_ADMIN_ALLOW_REMOTE"] = "true"
+	}
+	// Logging settings must survive the jump into launchd/systemd, otherwise
+	// "I raised the level" silently does nothing in daemon mode.
+	environment["FREE_ROUTER_LOG_LEVEL"] = opts.logLevel
+	environment["FREE_ROUTER_LOG_FORMAT"] = opts.logFormat
+	if opts.providers != "" {
+		environment["FREE_ROUTER_PROVIDERS"] = opts.providers
+	}
+	return environment, nil
+}
 
 func addDaemonCommands(root *cobra.Command, opts *options) {
 	daemonCommand := &cobra.Command{
@@ -17,30 +65,9 @@ func addDaemonCommands(root *cobra.Command, opts *options) {
 	}
 
 	daemonCommand.AddCommand(daemonAction("install", "Install and start the background daemon", func(command *cobra.Command, manager *servicepkg.Manager) error {
-		envMap, err := configuredEnvMap(*opts)
+		environment, err := daemonEnvironment(*opts)
 		if err != nil {
 			return err
-		}
-		environment := make(map[string]string)
-		for _, name := range provider.EnvironmentNames(envMap) {
-			if value := os.Getenv(name); value != "" {
-				environment[name] = value
-			}
-		}
-		environment["FREE_ROUTER_ADDR"] = opts.addr
-		environment["FREE_ROUTER_CACHE"] = opts.cache
-		if opts.freeModels != "" {
-			environment["FREE_ROUTER_FREE_MODELS"] = opts.freeModels
-		}
-		environment["FREE_ROUTER_CONFIG"] = opts.config
-		environment["FREE_ROUTER_CREDENTIALS"] = opts.credentials
-		environment["FREE_ROUTER_HEALTH"] = opts.health
-		// Logging settings must survive the jump into launchd/systemd,
-		// otherwise "I raised the level" silently does nothing in daemon mode.
-		environment["FREE_ROUTER_LOG_LEVEL"] = opts.logLevel
-		environment["FREE_ROUTER_LOG_FORMAT"] = opts.logFormat
-		if opts.providers != "" {
-			environment["FREE_ROUTER_PROVIDERS"] = opts.providers
 		}
 		if err := manager.Install(command.Context(), environment); err != nil {
 			return err

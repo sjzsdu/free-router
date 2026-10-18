@@ -392,3 +392,28 @@ func TestRegistryConcurrentBackupRestoreIsolation(t *testing.T) {
 		t.Fatalf("rollback1 should restore v1, got %q", spec.APIKey)
 	}
 }
+
+func TestManifestQualityRequiresSourceAndNormalizedScore(t *testing.T) {
+	base := func(quality *DiscoveredQuality) FreeModelManifest {
+		return FreeModelManifest{SchemaVersion: 2, Providers: map[string]FreeProviderCatalog{
+			"groq": {SourceURLs: []string{"https://example.com"}, Models: []DiscoveredModel{
+				{ID: "chat", Functions: []string{"chat"}, Quality: quality},
+			}},
+		}}
+	}
+	if err := ValidateFreeModelManifest(base(&DiscoveredQuality{Score: 80})); err == nil {
+		t.Fatal("quality without a source was accepted")
+	}
+	if err := ValidateFreeModelManifest(base(&DiscoveredQuality{Source: "lmarena", Score: 0})); err == nil {
+		t.Fatal("zero quality score was accepted; omit the field instead")
+	}
+	if err := ValidateFreeModelManifest(base(&DiscoveredQuality{Source: "lmarena", Score: 120})); err == nil {
+		t.Fatal("out-of-range quality score was accepted")
+	}
+	if err := ValidateFreeModelManifest(base(&DiscoveredQuality{Source: "lmarena", Score: 82.5, Rank: 3, ObservedAt: "2026-10-01"})); err != nil {
+		t.Fatalf("valid quality rejected: %v", err)
+	}
+	if err := ValidateFreeModelManifest(base(nil)); err != nil {
+		t.Fatalf("model without quality rejected: %v", err)
+	}
+}

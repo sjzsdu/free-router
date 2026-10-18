@@ -81,6 +81,7 @@ func Execute() error {
 	addDaemonCommands(root, &opts)
 	addTrayCommand(root, &opts)
 	addOnboardCommand(root, &opts)
+	addDoctorCommand(root, &opts)
 	addDiscoveryCommand(root, &opts)
 	addModelValidationCommand(root, &opts)
 

@@ -213,12 +213,49 @@ OPENAI_API_KEY=任意非空字符串
 3. siliconflow/Qwen/Qwen3-8B
 ```
 
-每条路由可选择两种策略：
+每条路由可选择三种策略：
 
 - `ordered`（按顺序）：每次从数组中第一个健康模型开始，失败后严格向下 fallback；
-- `round-robin`（雨露均沾）：每次轮换一个健康模型作为首选，失败后继续沿数组 fallback，让免费额度和限流压力分散到多个来源。
+- `round-robin`（雨露均沾）：每次轮换一个健康模型作为首选，失败后继续沿数组 fallback，让免费额度和限流压力分散到多个来源；
+- `best-quality`（高分优先）：按清单里维护的 `quality.score` 从高到低尝试。**没有评分的模型不会被当成 0 分丢弃**，而是保持原有相对顺序排在已评分模型之后，仍然留在候选池里兜底。评分缺失、过期或只覆盖部分模型时，策略只会重排候选、不会缩小候选池。
 
-两种策略下，数组中的模型全部不可用后，路由器都会从没有出现在数组中的同路由类型健康模型里轮换选择一个作为最终兜底。列表为空时，则完全根据缓存的类型、能力和健康状态自动选择。
+三种策略下，数组中的模型全部不可用后，路由器都会从没有出现在数组中的同路由类型健康模型里轮换选择一个作为最终兜底。列表为空时，则完全根据缓存的类型、能力和健康状态自动选择。
+
+### 模型评分（`quality`）
+
+评分是**清单数据**，不是运行时判断：每个模型可以在 `free-models/<provider>.json` 里带一条可追溯的记录。
+
+```json
+{
+  "id": "openai/gpt-oss-120b",
+  "functions": ["chat", "chat-tools"],
+  "quality": {
+    "source": "lmarena",
+    "score": 82.5,
+    "rank": 4,
+    "observed_at": "2026-10-01",
+    "url": "https://example.com/leaderboard"
+  }
+}
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `source` | 评分来源标识（必填）。没有来源的分数无法核实，`validate-model-data` 会直接拒绝 |
+| `score` | 归一化到 0–100 的分数，越大越好；必须在 `(0, 100]` 区间内 |
+| `rank` | 可选，同一来源内的排名，分数相同时用它决定先后 |
+| `observed_at` | 可选，评分观测时间。榜单会变，评分不该被当成永久事实 |
+| `url` | 可选，来源链接，与 `source_urls` 同一条证据纪律 |
+
+关于可比性：不同榜单的量纲不同（Elo、指数分、胜率），`score` 只是各自归一化后的结果，**严格可比的范围是同一个 `source`**。跨来源混排是启发式，介意的场景请让同一路由里的评分来自同一来源。
+
+评分字段是可选、可缺、可人工覆盖的，并且：
+
+- `discover-model-data` 从不产生评分，但会**保留清单中已有的 `quality`**，避免一次目录刷新把评分洗掉；
+- 评分变化会改变模型指纹，从而让旧的探测证据失效并重建缓存，不会出现“评分变了但路由还用旧健康结论”；
+- Admin 的模型与路由页面会展示评分和来源，`GET /admin/api/state` 的每个模型也带 `quality` 字段。
+
+没有任何评分时，`best-quality` 会退化成 `ordered` 的行为（全部按原顺序）。
 
 稳定版会按“真实模型 + 固定能力”跟踪成功率、响应延迟、HTTP 状态和最近一次错误：
 
@@ -243,7 +280,7 @@ github-models/openai/gpt-4.1
 openrouter/openai/gpt-oss-20b:free
 ```
 
-指定完整 ID 时固定使用该源且不 fallback。使用固定能力名称时按照管理界面选择的 `ordered` 或 `round-robin` 策略调用，并在失败时 fallback。响应头会返回实际选择：
+指定完整 ID 时固定使用该源且不 fallback。使用固定能力名称时按照管理界面选择的 `ordered`、`round-robin` 或 `best-quality` 策略调用，并在失败时 fallback。响应头会返回实际选择：
 
 ```text
 X-Free-Router-Provider: groq
@@ -336,6 +373,40 @@ FREE_ROUTER_LOG_LEVEL=debug FREE_ROUTER_LOG_FORMAT=json free-router serve
 `--log-level` 与 `--log-format` 对应环境变量 `FREE_ROUTER_LOG_LEVEL` / `FREE_ROUTER_LOG_FORMAT`。守护进程模式下，`free-router daemon install` 会把当前值写进 daemon 环境快照，修改后需要重新执行 `free-router daemon install` 并重启；`free-router daemon logs --follow` 查看后台日志。
 
 写日志不改变路由行为：日志级别只影响可见性，不会因为调高到 `debug` 而让请求更慢或触发更多上游调用。
+
+## 诊断（doctor）
+
+「为什么今天不能用了」现在一条命令回答：
+
+```bash
+free-router doctor
+```
+
+```text
+ok   route configuration: ~/.free-router/config.json is valid (version 6, revision 13, 12 routes, 0 with an explicit fallback list)
+     hint: automatic routes are fine, but pinning a few models per route makes fallback order predictable
+ok   provider credentials: 15 of 21 providers configured (181 maintained models): openrouter, groq, gemini, …
+ok   local state: health: 417.5 KiB, …; statistics: 31.1 KiB, …
+ok   running service: http://127.0.0.1:1314/healthz is up: 15 providers, 178 maintained models, 181 catalog entries
+ok   recent failures: no request has exhausted the pool since startup
+ok   service log: ~/.free-router/free-router.log, 77.1 KiB, updated 2026-10-17T22:23:16+08:00
+```
+
+它完全只读，不发任何模型请求，按顺序检查六件事：
+
+| 检查 | 回答的问题 | 失败/警告时给出的下一步 |
+| --- | --- | --- |
+| `route configuration` | 配置文件能不能加载、有多少路由是显式 fallback | 修 JSON 或 `free-router onboard` 重新生成 |
+| `provider credentials` | 哪些源已配置、清单里有多少可路由模型 | `free-router setup <provider>` |
+| `local state` | 健康/统计文件是否存在、多大、多久没更新 | 异常膨胀时停止服务后清理 |
+| `running service` | `/healthz` 是否可达、有多少 provider 与模型 | `free-router serve` 或 `free-router daemon start` |
+| `recent failures` | 最近有没有整池失败，最新一次的归因码与 request id | 用 `--log-level debug` 复现，或在 Admin 健康页重置模型 |
+| `service log` | daemon 日志在哪、多大、最后写入时间 | 日志过大时停止 daemon 后归档 |
+
+- 有 `fail` 时退出码为 `1`，适合放进脚本或 CI；
+- `--json` 输出同样的内容，便于其他工具消费；
+- 服务要求 Admin Token 时，导出 `FREE_ROUTER_ADMIN_TOKEN` 才能读取失败列表，否则该项显示 `skipped` 并说明原因；
+- systemd 环境写 journald，日志检查会提示文件不存在而不是误报故障。
 
 ## 模型元数据
 
@@ -499,6 +570,7 @@ free-router serve --addr :9000    # 前台启动服务
 free-router serve --log-level debug   # 排查 fallback 时输出每个候选的决策
 free-router daemon install        # 安装并启动守护进程
 free-router daemon status         # 查看守护进程状态
+free-router doctor                # 只读诊断：配置/凭据/服务/最近失败/日志
 free-router providers             # 查看内置源及配置状态
 free-router models                # 只输出已配置 Provider 的清单模型
 free-router setup groq             # 交互式保存 API Key

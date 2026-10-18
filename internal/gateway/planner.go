@@ -84,12 +84,15 @@ func (p *CandidatePlanner) CandidatesSeeded(requested, capability string, needsT
 				}
 			}
 			result := p.strictlyAvailable(view, priority, effectiveRoute.Capability)
-			if route.Strategy == routing.StrategyRoundRobin {
+			switch route.Strategy {
+			case routing.StrategyRoundRobin:
 				if seed != 0 {
 					result = rotateCandidates(result, seed)
 				} else {
 					result = rotateCandidates(result, p.nextForRoute(requested))
 				}
+			case routing.StrategyBestQuality:
+				result = sortByQuality(result)
 			}
 			if remaining, ok := p.pickRemaining(view, effectiveRoute, configured, true); ok {
 				result = append(result, remaining...)
@@ -179,7 +182,7 @@ func (p *CandidatePlanner) dynamicCandidatesSeeded(view eligibility.Snapshot, ro
 		result = append(result, *preferred)
 	}
 	if len(providerIDs) == 0 || len(result) == p.maxAttempts {
-		return p.limitCandidates(p.availableCandidates(view, result, route.Capability))
+		return p.limitCandidates(p.orderByStrategy(p.availableCandidates(view, result, route.Capability), route.Strategy))
 	}
 	if seed == 0 {
 		seed = p.next.Add(1) - 1
@@ -203,7 +206,48 @@ func (p *CandidatePlanner) dynamicCandidatesSeeded(view eligibility.Snapshot, ro
 			break
 		}
 	}
-	return p.limitCandidates(p.availableCandidates(view, result, route.Capability))
+	return p.limitCandidates(p.orderByStrategy(p.availableCandidates(view, result, route.Capability), route.Strategy))
+}
+
+// orderByStrategy applies the score ordering before candidates are truncated
+// to maxAttempts: sorting afterwards would only reorder the slice that the
+// attempt budget already cut, i.e. the highest-scored model could be dropped
+// before it was ever considered.
+func (p *CandidatePlanner) orderByStrategy(models []catalog.Model, strategy string) []catalog.Model {
+	if strategy == routing.StrategyBestQuality {
+		return sortByQuality(models)
+	}
+	return models
+}
+
+// sortByQuality orders candidates by maintained score, highest first, and
+// keeps unscored models after the scored ones in their original order.
+//
+// "No score" is deliberately not treated as zero: providers added after the
+// last ranking snapshot, or models no ranking site covers, stay in the pool
+// instead of being frozen out by an absent number. Every candidate still
+// remains fallback-reachable — the strategy only decides who is tried first.
+func sortByQuality(models []catalog.Model) []catalog.Model {
+	scored := make([]catalog.Model, 0, len(models))
+	unscored := make([]catalog.Model, 0, len(models))
+	for _, model := range models {
+		if model.Quality != nil && model.Quality.Score > 0 {
+			scored = append(scored, model)
+			continue
+		}
+		unscored = append(unscored, model)
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		left, right := *scored[i].Quality, *scored[j].Quality
+		if left.Score != right.Score {
+			return left.Score > right.Score
+		}
+		if left.Rank != 0 && right.Rank != 0 && left.Rank != right.Rank {
+			return left.Rank < right.Rank
+		}
+		return false
+	})
+	return append(scored, unscored...)
 }
 
 // selectable gates a model on its health state. For chat-tools the gate is
