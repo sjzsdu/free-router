@@ -1,3 +1,6 @@
+# syntax=docker/dockerfile:1
+# check=skip=SecretsUsedInArgOrEnv
+
 FROM node:20-alpine AS frontend-build
 WORKDIR /src
 COPY web/package.json web/package-lock.json ./web/
@@ -21,6 +24,7 @@ RUN addgroup -S -g 65532 free-router \
 
 FROM runtime-base
 COPY --from=backend-build /out/free-router /usr/local/bin/free-router
+# FREE_ROUTER_CREDENTIALS is a data-file path, not secret content.
 ENV FREE_ROUTER_ADDR=0.0.0.0:1314 \
     FREE_ROUTER_PORT=1314 \
     FREE_ROUTER_CACHE=/data/models.json \
