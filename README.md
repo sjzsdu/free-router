@@ -86,11 +86,38 @@ export GITHUB_TOKEN=github_pat_xxx
 go run . serve
 ```
 
-容器默认监听 `0.0.0.0:1314`，因此必须显式提供推理 API Token；需要从宿主机访问管理页时，还要单独启用远程 Admin 并设置独立 Token：
+容器默认监听 `0.0.0.0:1314`，数据文件保存在 `/data`（Docker volume），端口、上游 provider 配置和密钥都通过环境变量传入。最小 `docker run` 示例：
+
+```bash
+docker run --rm --name free-router \
+  -p 127.0.0.1:1314:1314 \
+  -v free-router-data:/data \
+  -e FREE_ROUTER_API_TOKEN='替换为推理接口随机 Token' \
+  -e FREE_ROUTER_ADMIN_ALLOW_REMOTE=true \
+  -e FREE_ROUTER_ADMIN_TOKEN='替换为管理界面随机 Token' \
+  -e GROQ_API_KEY='可选的上游 Key' \
+  docker.io/your-dockerhub-user/free-router:latest
+```
+
+要通过 Traefik labels 部署，可直接复制 `deploy/docker-compose.traefik.yml`。先创建外部网络并设置必需变量：
+
+```bash
+docker network create traefik
+export DOCKERHUB_USERNAME=your-dockerhub-user
+export TRAEFIK_HOST=router.example.com
+export FREE_ROUTER_API_TOKEN='替换为推理接口随机 Token'
+export FREE_ROUTER_ADMIN_TOKEN='替换为管理界面随机 Token'
+docker compose -f deploy/docker-compose.traefik.yml up -d
+```
+
+Compose 文件将 `FREE_ROUTER_ADDR` 设为 `0.0.0.0:<端口>`，并把 Traefik 服务端口 label 指向同一容器端口。
+
+本地构建并运行镜像时，必须显式提供推理 API Token；需要从宿主机访问管理页时，还要单独启用远程 Admin 并设置独立 Token：
 
 ```bash
 docker build -t free-router .
 docker run --rm -p 127.0.0.1:1314:1314 \
+  -v free-router-data:/data \
   -e FREE_ROUTER_API_TOKEN='替换为推理接口随机 Token' \
   -e FREE_ROUTER_ADMIN_ALLOW_REMOTE=true \
   -e FREE_ROUTER_ADMIN_TOKEN='替换为管理界面随机 Token' \
@@ -644,3 +671,9 @@ checksums.txt
 也可以在 GitHub Actions 页面手动运行 `Release` 工作流，补建当前 `VERSION` 对应的 Release。
 
 项目借鉴 [OmniRoute](https://github.com/diegosouzapw/OmniRoute) 的动态目录和 fallback 思路，但保持单二进制、本地配置，不引入数据库、账号池和付费路由。
+
+## Docker 镜像与发布
+
+仓库根目录的 `Dockerfile` 使用前端、Go 编译和 Alpine 运行时三阶段构建，运行时以非 root 用户 `free-router` 启动，并对 `/healthz` 配置 Docker `HEALTHCHECK`。镜像支持 `linux/amd64` 与 `linux/arm64`，默认暴露 1314 端口；可用 `FREE_ROUTER_ADDR`、`FREE_ROUTER_*` 和各 provider 的环境变量覆盖监听地址、持久化路径、上游配置及密钥。
+
+`.github/workflows/docker-publish.yml` 的行为如下：Pull Request 仅用 Buildx 构建 amd64/arm64，不推送；`main` 推送发布 `latest` 与 `sha-<commit>`；`vX.Y.Z` tag 推送 semver、`latest`（仅 main）和 sha tags。发布前需要在 GitHub 仓库手工配置 Actions secrets：`DOCKERHUB_USERNAME`（Docker Hub 用户名）和 `DOCKERHUB_TOKEN`（Docker Hub access token）。镜像仓库名为 `${DOCKERHUB_USERNAME}/free-router`。

@@ -1,0 +1,39 @@
+services:
+  free-router:
+    image: ${FREE_ROUTER_IMAGE:-docker.io/${DOCKERHUB_USERNAME:-your-dockerhub-user}/free-router:latest}
+    restart: unless-stopped
+    environment:
+      FREE_ROUTER_ADDR: 0.0.0.0:${FREE_ROUTER_CONTAINER_PORT:-1314}
+      FREE_ROUTER_PORT: ${FREE_ROUTER_CONTAINER_PORT:-1314}
+      FREE_ROUTER_API_TOKEN: ${FREE_ROUTER_API_TOKEN:?set FREE_ROUTER_API_TOKEN}
+      FREE_ROUTER_ADMIN_ALLOW_REMOTE: ${FREE_ROUTER_ADMIN_ALLOW_REMOTE:-true}
+      FREE_ROUTER_ADMIN_TOKEN: ${FREE_ROUTER_ADMIN_TOKEN:?set FREE_ROUTER_ADMIN_TOKEN}
+      FREE_ROUTER_PROVIDERS: ${FREE_ROUTER_PROVIDERS:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
+    expose:
+      - "${FREE_ROUTER_CONTAINER_PORT:-1314}"
+    volumes:
+      - free-router-data:/data
+    networks:
+      - traefik
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "traefik"
+      traefik.http.routers.free-router.rule: "Host(`${TRAEFIK_HOST:-router.example.com}`)"
+      traefik.http.routers.free-router.entrypoints: "${TRAEFIK_ENTRYPOINT:-websecure}"
+      traefik.http.routers.free-router.tls: "${TRAEFIK_TLS:-true}"
+      traefik.http.services.free-router.loadbalancer.server.port: "${FREE_ROUTER_CONTAINER_PORT:-1314}"
+
+volumes:
+  free-router-data:
+
+networks:
+  traefik:
+    external: true
