@@ -22,15 +22,16 @@ RUN addgroup -S -g 65532 free-router \
 FROM runtime-base
 COPY --from=backend-build /out/free-router /usr/local/bin/free-router
 ENV FREE_ROUTER_ADDR=0.0.0.0:1314 \
+    FREE_ROUTER_PORT=1314 \
     FREE_ROUTER_CACHE=/data/models.json \
     FREE_ROUTER_CONFIG=/data/config.json \
     FREE_ROUTER_CREDENTIALS=/data/credentials.json \
     FREE_ROUTER_HEALTH=/data/health.json \
     FREE_ROUTER_STATISTICS=/data/statistics.json
-EXPOSE 1314
+EXPOSE ${FREE_ROUTER_PORT}
 VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --quiet --tries=1 --output-document=- http://127.0.0.1:1314/healthz >/dev/null || exit 1
+  CMD port="$${FREE_ROUTER_ADDR##*:}"; wget --quiet --tries=1 --output-document=- "http://127.0.0.1:$${port}/healthz" >/dev/null || exit 1
 USER free-router:free-router
 ENTRYPOINT ["/usr/local/bin/free-router"]
 CMD ["serve"]

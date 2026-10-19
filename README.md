@@ -91,11 +91,12 @@ go run . serve
 ```bash
 docker run --rm --name free-router \
   -p 127.0.0.1:1314:1314 \
+  -v free-router-data:/data \
   -e FREE_ROUTER_API_TOKEN='替换为推理接口随机 Token' \
   -e FREE_ROUTER_ADMIN_ALLOW_REMOTE=true \
   -e FREE_ROUTER_ADMIN_TOKEN='替换为管理界面随机 Token' \
   -e GROQ_API_KEY='可选的上游 Key' \
-  docker.io/${DOCKERHUB_USERNAME}/free-router:latest
+  docker.io/your-dockerhub-user/free-router:latest
 ```
 
 要通过 Traefik labels 部署，可直接复制 `deploy/docker-compose.traefik.yml`。先创建外部网络并设置必需变量：
@@ -116,6 +117,7 @@ Compose 文件将 `FREE_ROUTER_ADDR` 设为 `0.0.0.0:<端口>`，并把 Traefik 
 ```bash
 docker build -t free-router .
 docker run --rm -p 127.0.0.1:1314:1314 \
+  -v free-router-data:/data \
   -e FREE_ROUTER_API_TOKEN='替换为推理接口随机 Token' \
   -e FREE_ROUTER_ADMIN_ALLOW_REMOTE=true \
   -e FREE_ROUTER_ADMIN_TOKEN='替换为管理界面随机 Token' \
