@@ -23,6 +23,7 @@ import (
 	"github.com/sjzsdu/free-router/internal/credentials"
 	"github.com/sjzsdu/free-router/internal/gateway"
 	"github.com/sjzsdu/free-router/internal/health"
+	"github.com/sjzsdu/free-router/internal/landing"
 	"github.com/sjzsdu/free-router/internal/logging"
 	"github.com/sjzsdu/free-router/internal/provider"
 	"github.com/sjzsdu/free-router/internal/routing"
@@ -241,6 +242,7 @@ func runServer(ctx context.Context, opts options) error {
 	}
 	handler.Handle("GET /admin", http.RedirectHandler("/admin/", http.StatusTemporaryRedirect))
 	handler.Handle("/admin/", admin.New(routes, store, vault, tracker, admin.Config{AllowRemote: opts.adminAllowRemote, Token: opts.adminToken, Version: version, FreeModels: opts.freeModels, Statistics: stats, RecentFailures: handler.RecentFailures}, reloadProviders))
+	handler.Handle("/", landing.Handler(landing.Config{Version: version, AdminToken: strings.TrimSpace(opts.adminToken) != ""}))
 	server := &http.Server{
 		Addr:              opts.addr,
 		Handler:           handler,
