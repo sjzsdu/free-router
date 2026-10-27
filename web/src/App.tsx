@@ -23,7 +23,7 @@ import { useConfigDraft } from './useConfigDraft'
 import { SystemPage } from './pages/SystemPage'
 import { StatisticsPage } from './pages/StatisticsPage'
 import type {
-  AppState, EffectiveModel, HealthProbeStatus, HealthState, Model, ModelOverride, ProviderDetails, ProviderStatus, RouteType, RouterConfig, RuntimeStatus,
+  AppState, EffectiveModel, HealthProbeStatus, HeartbeatConfig, HeartbeatStatus, HealthState, Model, ModelOverride, ProviderDetails, ProviderStatus, RouteType, RouterConfig, RuntimeStatus,
 } from './types'
 
 const routeLabels: Record<string, { title: string; description: string }> = {
@@ -224,7 +224,7 @@ function App() {
       <div className="page-content">
         {page === 'overview' && <Overview state={state} runtime={runtime} models={models} healthMap={healthMap} navigate={navigate} />}
         {page === 'routes' && <RoutesPage config={draft} setConfig={setDraft} models={models} healthMap={healthMap} providerHealthMap={providerHealthMap} />}
-        {page === 'models' && <ModelsPage config={draft} setConfig={setDraft} models={models} healthMap={healthMap} probe={state.health_probe} providers={state.providers} />}
+        {page === 'models' && <ModelsPage config={draft} setConfig={setDraft} models={models} healthMap={healthMap} probe={state.health_probe} heartbeat={state.heartbeat} providers={state.providers} />}
         {page === 'providers' && <ProvidersPage state={state} onToast={setToast} />}
         {page === 'statistics' && <StatisticsPage snapshot={statisticsQuery.data} failures={failuresQuery.data?.failures || []} loading={statisticsQuery.isLoading} error={statisticsQuery.error as Error | null} />}
         {page === 'system' && <SystemPage state={state} runtime={runtime} offline={runtimeQuery.isError} />}
@@ -352,7 +352,7 @@ function SortableModel({ id, index, model, health, remove }: { id: string; index
   </div>
 }
 
-function ModelsPage({ config, setConfig, models, healthMap, probe, providers: providerStatuses }: { config: RouterConfig; setConfig: (config: RouterConfig) => void; models: EffectiveModel[]; healthMap: Map<string, HealthState>; probe: HealthProbeStatus; providers: ProviderStatus[] }) {
+function ModelsPage({ config, setConfig, models, healthMap, probe, heartbeat, providers: providerStatuses }: { config: RouterConfig; setConfig: (config: RouterConfig) => void; models: EffectiveModel[]; healthMap: Map<string, HealthState>; probe: HealthProbeStatus; heartbeat: HeartbeatStatus; providers: ProviderStatus[] }) {
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [type, setType] = useState('')
@@ -375,10 +375,39 @@ function ModelsPage({ config, setConfig, models, healthMap, probe, providers: pr
   const progress = probe.total ? Math.round((probe.completed / probe.total) * 100) : 100
   return <div className="stack-lg">
     <section className={cx('probe-panel panel', probe.status === 'running' && 'running')}><div className="probe-icon"><Activity size={19} /></div><div className="probe-copy"><div><strong>{probe.status === 'running' ? '正在检测模型可用性' : '模型可用性检测'}</strong><span>{probe.status === 'running' ? `${probe.completed} / ${probe.total}` : '仅在手动触发后检测，结果会持久保存'}</span></div><p>{probe.status === 'running' ? `健康 ${probe.healthy} · 失败 ${probe.failed} · 8 路并发、同 Provider 串行` : probe.finished_at ? `上次完成：${formatDate(probe.finished_at)} · 健康 ${probe.healthy} · 失败 ${probe.failed} · 跳过 ${probe.skipped}` : '点击按钮检测已配置 Provider 的清单模型；图片和视频生成需逐个确认。'}</p>{probe.status === 'running' && <div className="probe-progress"><span style={{ width: `${progress}%` }} /></div>}</div><button className="button secondary compact" disabled={probe.status === 'running' || probeMutation.isPending || (filtersActive && filtered.length === 0)} onClick={() => { if (filtersActive && filtered.length === 0) return; const scope = filtersActive ? `当前筛选出的 ${filtered.length} 个模型` : '所有已配置 Provider 的清单模型'; if (!window.confirm(`将检测${scope}；图片和视频生成仍需逐个确认。确认继续？`)) return; probeMutation.mutate(probeModelIDs) }}><RefreshCw size={16} className={probe.status === 'running' ? 'spin' : ''} />{probe.status === 'running' ? '检测中' : bulkProbeLabel(filtersActive)}</button></section>
+    <HeartbeatPanel config={config} setConfig={setConfig} status={heartbeat} probing={probe.status === 'running'} />
     <section className="model-toolbar panel"><label className="search-field large"><Search size={17} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索模型 ID、名称或组织" /></label><div className="filter-row"><select value={type} onChange={event => setType(event.target.value)}><option value="">全部类型</option>{Object.keys(routeLabels).map(item => <option key={item}>{item}</option>)}</select><select value={provider} onChange={event => setProvider(event.target.value)}><option value="">全部 Provider</option>{providers.map(item => <option key={item}>{item}</option>)}</select><select value={health} onChange={event => setHealth(event.target.value)}><option value="">全部检测状态</option><option value="healthy">健康</option><option value="degraded">降级</option><option value="half-open">恢复检测中</option><option value="open">故障 · 熔断</option><option value="cooling">限流冷却中</option><option value="missing">Provider 未配置</option><option value="manual">需手动检测</option><option value="unknown">尚未测试</option></select></div><div className="result-count"><strong>{filtered.length}</strong><span>个模型</span></div></section>
     <section className="model-table panel"><div className="model-table-head"><span>模型</span><span>功能路由</span><span>能力</span><span>健康</span><span>Context</span><span /></div><div className="model-table-body">{filtered.map(model => { const health = modelHealth(model, healthMap); const displayStatus = modelDisplayStatus(model, healthMap, configuredProviders); return <button className={cx('model-table-row', model.disabled && 'disabled')} key={model.id} onClick={() => setSelected(model)}><div className="model-identity"><div className="provider-avatar">{model.provider.slice(0, 2).toUpperCase()}</div><div><strong>{model.id}</strong><small>{model.name || model.upstream_id}</small></div></div><div className="pill-row">{model.route_types.map(item => <span key={item} className="route-pill">{item}</span>)}</div><CapabilityPills model={model} /><div className="model-health"><StatusBadge status={displayStatus} />{displayStatus === 'missing' && <small>配置凭据后检测</small>}{displayStatus === 'manual' && <small>打开详情手动检测</small>}{health?.last_check_latency_ms ? <small>{Math.round(health.last_check_latency_ms)}ms</small> : null}</div><span className="context-cell">{model.context_length ? formatNumber(model.context_length) : '—'}</span><ChevronRight size={16} /></button> })}</div></section>
     <ModelDrawer model={selected} health={selected ? modelHealth(selected, healthMap) : undefined} healthStates={selected ? selected.route_types.map(item => healthMap.get(healthKey(selected.id, item))).filter(Boolean) as HealthState[] : []} override={selected ? config.models[selected.id] || {} : {}} close={() => setSelected(null)} update={updateOverride} reset={() => selected && resetMutation.mutate(selected.id)} resetting={resetMutation.isPending} probe={() => { if (!selected) return; const expensive = selected.route_types.some(item => item === 'image-generation' || item === 'video-generation'); if (expensive && !window.confirm('该检测会创建真实的图像或视频任务，可能消耗免费额度。确认继续？')) return; modelProbeMutation.mutate({ model: selected.id, allowExpensive: expensive }) }} probing={probe.status === 'running' || modelProbeMutation.isPending} />
   </div>
+}
+
+function HeartbeatPanel({ config, setConfig, status, probing }: { config: RouterConfig; setConfig: (config: RouterConfig) => void; status: HeartbeatStatus; probing: boolean }) {
+  const saved = config.heartbeat || {}
+  const enabled = saved.enabled ?? status.enabled
+  const recovery = saved.recovery_minutes ?? status.recovery_minutes
+  const interval = saved.interval_minutes ?? status.interval_minutes
+  const budget = saved.max_probes_per_round ?? status.max_probes_per_round
+  const concurrency = saved.concurrency ?? status.concurrency
+  const update = (patch: Partial<HeartbeatConfig>) => {
+    const next = cloneConfig(config); next.heartbeat = { ...(next.heartbeat || {}), ...patch }; setConfig(next)
+  }
+  const numberField = (label: string, hint: string, value: number, min: number, max: number, onChange: (value: number) => void) =>
+    <label className="heartbeat-field" title={hint}><span>{label}</span><input type="number" min={min} max={max} value={value} onChange={event => { const parsed = Number(event.target.value); if (!Number.isFinite(parsed)) return; onChange(Math.max(min, Math.min(max, Math.trunc(parsed)))) }} /><small>{hint}</small></label>
+  const lastRound = status.last_round_started_at ? `${formatDate(status.last_round_started_at)} · 探测 ${status.last_round_probes} · 健康 ${status.last_round_healthy} · 失败 ${status.last_round_failed} · 跳过 ${status.last_round_skipped}` : '尚未运行'
+  return <section className={cx('probe-panel panel heartbeat-panel', enabled && 'running')}>
+    <div className="probe-icon"><Activity size={19} /></div>
+    <div className="probe-copy"><div><strong>模型心跳保活</strong><span>{probing ? '手动检测进行中，心跳会自动让位' : enabled ? `${recovery} 分钟重试故障/冷却模型 · ${interval} 分钟复检健康模型` : '已暂停：模型掉线后需要手动「检测全部」'}</span></div>
+      <p>心跳复用「检测全部」的探测逻辑，固定按 Provider 串行、单轮上限 {budget} 个、{concurrency} 路并发，失败模型按指数退避重试。上一轮：{lastRound}{status.pending_recovery ? ` · 待恢复 ${status.pending_recovery}` : ''}{status.backoff_targets ? ` · 退避中 ${status.backoff_targets}` : ''}{enabled && status.next_round_at ? ` · 下一轮 ${formatDate(status.next_round_at)}` : ''}</p>
+      <div className="heartbeat-fields">
+        {numberField('恢复间隔', '隔离或冷却中的模型每隔多少分钟重试一次，0 表示关闭', recovery, 0, 1440, value => update({ recovery_minutes: value }))}
+        {numberField('复检间隔', '健康模型每隔多少分钟复检一次，0 表示不主动复检', interval, 0, 1440, value => update({ interval_minutes: value }))}
+        {numberField('单轮上限', '每轮最多探测多少个模型能力，限制免费额度消耗', budget, 1, 64, value => update({ max_probes_per_round: value }))}
+        {numberField('并发', '每轮并发探测数，同一 Provider 始终串行', concurrency, 1, 8, value => update({ concurrency: value }))}
+      </div>
+    </div>
+    <button className="button secondary compact" onClick={() => update({ enabled: !enabled })}>{enabled ? <><EyeOff size={16} />暂停心跳</> : <><Activity size={16} />启用心跳</>}</button>
+  </section>
 }
 
 function ModelDrawer({ model, health, healthStates, override, close, update, reset, resetting, probe, probing }: { model: EffectiveModel | null; health?: HealthState; healthStates: HealthState[]; override: ModelOverride; close: () => void; update: (id: string, patch: Partial<ModelOverride>) => void; reset: () => void; resetting: boolean; probe: () => void; probing: boolean }) {

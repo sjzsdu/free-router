@@ -44,6 +44,78 @@ type Config struct {
 	ProviderEnv map[string][]string      `json:"provider_env"`
 	Routes      map[string]Route         `json:"routes"`
 	Models      map[string]ModelOverride `json:"models"`
+	// Heartbeat schedules the same capability probes as the manual "probe all"
+	// action. Every field is optional: an absent value falls back to a
+	// conservative default so an existing configuration file keeps working.
+	Heartbeat *HeartbeatConfig `json:"heartbeat,omitempty"`
+}
+
+// HeartbeatConfig keeps the keep-alive cadence configurable. Interval and
+// Recovery are the two independent clocks: Interval re-checks models that are
+// already healthy, Recovery retries models that are quarantined or cooling
+// down. Zero disables the corresponding clock; absent values use the defaults.
+type HeartbeatConfig struct {
+	Enabled           *bool `json:"enabled,omitempty"`
+	IntervalMinutes   *int  `json:"interval_minutes,omitempty"`
+	RecoveryMinutes   *int  `json:"recovery_minutes,omitempty"`
+	MaxProbesPerRound *int  `json:"max_probes_per_round,omitempty"`
+	Concurrency       *int  `json:"concurrency,omitempty"`
+}
+
+// Heartbeat defaults are deliberately minutes-scale: a heartbeat that fires
+// every few seconds would spend every provider's free quota on keep-alive
+// traffic instead of on user requests.
+const (
+	DefaultHeartbeatEnabled           = true
+	DefaultHeartbeatIntervalMinutes   = 30
+	DefaultHeartbeatRecoveryMinutes   = 10
+	DefaultHeartbeatMaxProbesPerRound = 8
+	DefaultHeartbeatConcurrency       = 2
+
+	MaxHeartbeatIntervalMinutes = 24 * 60
+	MaxHeartbeatProbesPerRound  = 64
+	MaxHeartbeatConcurrency     = 8
+)
+
+// HeartbeatSettings is a HeartbeatConfig with every default applied.
+type HeartbeatSettings struct {
+	Enabled           bool
+	IntervalMinutes   int
+	RecoveryMinutes   int
+	MaxProbesPerRound int
+	Concurrency       int
+}
+
+// Resolve applies the conservative defaults to every field the operator left
+// unset. It never mutates the stored configuration, so an unset field keeps
+// tracking future default changes instead of freezing today's value.
+func (c *HeartbeatConfig) Resolve() HeartbeatSettings {
+	settings := HeartbeatSettings{
+		Enabled:           DefaultHeartbeatEnabled,
+		IntervalMinutes:   DefaultHeartbeatIntervalMinutes,
+		RecoveryMinutes:   DefaultHeartbeatRecoveryMinutes,
+		MaxProbesPerRound: DefaultHeartbeatMaxProbesPerRound,
+		Concurrency:       DefaultHeartbeatConcurrency,
+	}
+	if c == nil {
+		return settings
+	}
+	if c.Enabled != nil {
+		settings.Enabled = *c.Enabled
+	}
+	if c.IntervalMinutes != nil {
+		settings.IntervalMinutes = *c.IntervalMinutes
+	}
+	if c.RecoveryMinutes != nil {
+		settings.RecoveryMinutes = *c.RecoveryMinutes
+	}
+	if c.MaxProbesPerRound != nil && *c.MaxProbesPerRound > 0 {
+		settings.MaxProbesPerRound = *c.MaxProbesPerRound
+	}
+	if c.Concurrency != nil && *c.Concurrency > 0 {
+		settings.Concurrency = *c.Concurrency
+	}
+	return settings
 }
 
 type ModelOverride struct {
@@ -406,6 +478,44 @@ func validate(config *Config) error {
 		}
 	}
 	config.ProviderEnv = cleanedProviderEnv
+	if err := validateHeartbeat(config.Heartbeat); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateHeartbeat rejects values that would turn the keep-alive loop into a
+// quota-burning fan-out over every configured provider.
+func validateHeartbeat(heartbeat *HeartbeatConfig) error {
+	if heartbeat == nil {
+		return nil
+	}
+	minutes := func(field string, value *int, maximum int) error {
+		if value == nil {
+			return nil
+		}
+		if *value < 0 || *value > maximum {
+			return fmt.Errorf("heartbeat %s must be between 0 and %d", field, maximum)
+		}
+		return nil
+	}
+	if err := minutes("interval_minutes", heartbeat.IntervalMinutes, MaxHeartbeatIntervalMinutes); err != nil {
+		return err
+	}
+	if err := minutes("recovery_minutes", heartbeat.RecoveryMinutes, MaxHeartbeatIntervalMinutes); err != nil {
+		return err
+	}
+	if heartbeat.MaxProbesPerRound != nil && (*heartbeat.MaxProbesPerRound < 1 || *heartbeat.MaxProbesPerRound > MaxHeartbeatProbesPerRound) {
+		return fmt.Errorf("heartbeat max_probes_per_round must be between 1 and %d", MaxHeartbeatProbesPerRound)
+	}
+	if heartbeat.Concurrency != nil && (*heartbeat.Concurrency < 1 || *heartbeat.Concurrency > MaxHeartbeatConcurrency) {
+		return fmt.Errorf("heartbeat concurrency must be between 1 and %d", MaxHeartbeatConcurrency)
+	}
+	settings := heartbeat.Resolve()
+	enabled := heartbeat.Enabled == nil || *heartbeat.Enabled
+	if enabled && settings.IntervalMinutes == 0 && settings.RecoveryMinutes == 0 {
+		return errors.New("heartbeat is enabled but both interval_minutes and recovery_minutes are 0")
+	}
 	return nil
 }
 
@@ -454,6 +564,7 @@ func legacyFunctions(modelType string) []string {
 
 func cloneConfig(config Config) Config {
 	clone := Config{Comment: config.Comment, Version: config.Version, Revision: config.Revision, Routes: make(map[string]Route, len(config.Routes)), Models: make(map[string]ModelOverride, len(config.Models)), ProviderEnv: make(map[string][]string, len(config.ProviderEnv))}
+	clone.Heartbeat = cloneHeartbeatConfig(config.Heartbeat)
 	if config.Help != nil {
 		clone.Help = make(map[string]string, len(config.Help))
 		for field, description := range config.Help {
@@ -472,6 +583,35 @@ func cloneConfig(config Config) Config {
 		clone.ProviderEnv[providerID] = append([]string{}, names...)
 	}
 	return clone
+}
+
+func cloneHeartbeatConfig(config *HeartbeatConfig) *HeartbeatConfig {
+	if config == nil {
+		return nil
+	}
+	clone := *config
+	clone.Enabled = cloneBoolPointer(config.Enabled)
+	clone.IntervalMinutes = cloneIntPointer(config.IntervalMinutes)
+	clone.RecoveryMinutes = cloneIntPointer(config.RecoveryMinutes)
+	clone.MaxProbesPerRound = cloneIntPointer(config.MaxProbesPerRound)
+	clone.Concurrency = cloneIntPointer(config.Concurrency)
+	return &clone
+}
+
+func cloneBoolPointer(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func cloneIntPointer(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 func validEnvName(name string) bool {

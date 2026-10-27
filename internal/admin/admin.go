@@ -39,6 +39,7 @@ type Handler struct {
 	reload             func(map[string][]string) (func(), error)
 	health             *health.Tracker
 	probes             *probeManager
+	heartbeat          *heartbeatManager
 	providerProbes     *providerProbeStore
 	static             http.Handler
 	started            time.Time
@@ -83,6 +84,10 @@ func New(routes *routing.Store, models *catalog.Store, vault *credentials.Vault,
 		config.Statistics = statistics.NewMemory()
 	}
 	handler := &Handler{routes: routes, catalog: models, vault: vault, health: tracker, probes: newProbeManager(filepath.Dir(routes.Path())), providerProbes: newProviderProbeStore(), config: config, reload: reload, static: http.FileServer(http.FS(staticFS)), started: time.Now(), oauthFlows: newOAuthFlows(), oauthHTTPClient: client, openRouterAuthURL: authURL, openRouterTokenURL: tokenURL, statistics: config.Statistics}
+	handler.heartbeat = newHeartbeatManager(handler.probes)
+	if routes != nil {
+		handler.heartbeat.publishSettings(heartbeatSettings(routes.Config().Heartbeat))
+	}
 	handler.configService = &ConfigService{mu: &handler.updateMu, routes: routes, catalog: models, health: tracker, reload: handler.reloadProviders, refreshAsync: handler.refreshAllAsync}
 	handler.credentialService = &CredentialService{
 		mu: &handler.updateMu, vault: vault, routes: routes, catalog: models, reload: handler.reloadProviders,
@@ -198,7 +203,7 @@ func (h *Handler) state(w http.ResponseWriter) {
 		Config: h.routes.Config(), ConfigPath: h.routes.Path(), Models: models,
 		Catalog: catalogStatus, Providers: providers, Credentials: entries,
 		Health: h.health.Snapshot(), ProviderHealth: h.health.ProviderSnapshot(), Summary: h.health.Summary(),
-		HealthProbe: h.probes.Snapshot(), Runtime: h.runtimeState(), Eligibility: statuses,
+		HealthProbe: h.probes.Snapshot(), Heartbeat: h.heartbeat.Snapshot(), Runtime: h.runtimeState(), Eligibility: statuses,
 	})
 }
 

@@ -39,6 +39,7 @@ type StateResponse struct {
 	ProviderHealth []health.State      `json:"provider_health"`
 	Summary        health.Summary      `json:"summary"`
 	HealthProbe    ProbeStatus         `json:"health_probe"`
+	Heartbeat      HeartbeatStatus     `json:"heartbeat"`
 	Runtime        RuntimeState        `json:"runtime"`
 	Eligibility    []ModelEligibility  `json:"eligibility"`
 }

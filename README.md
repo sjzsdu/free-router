@@ -296,6 +296,34 @@ OPENAI_API_KEY=任意非空字符串
 
 检测结果缓存 24 小时；点击“重新检测全部”会在确认后忽略缓存强制重检，图片/视频生成任务可能消耗少量免费额度。Video 接口返回任务已受理即视为探测成功，不等待完整成片。任一能力探测失败都会把整个模型从运行缓存删除；诊断记录仍保留在异常列表中。只有内置免费模型清单发生变化时，本地缓存才会重建。
 
+### 模型心跳保活
+
+使用过程中，上游的临时故障或限流会给模型打上隔离标记，过去只能人工点「检测全部」才能恢复。心跳把同一个探测动作变成定时驱动：
+
+- 复用「检测全部」的探测实现（同一套 capability 探针、同一 Provider 串行、同一份验证与健康记录），心跳只负责决定“什么时候测谁”，不另写一套探活代码；
+- 两条独立时钟：`recovery_minutes` 重试已隔离/冷却中的模型，`interval_minutes` 复检已健康的模型，任一项设为 `0` 即关闭该时钟；
+- 每轮最多 `max_probes_per_round` 个探测、`concurrency` 路并发，且同一 Provider 始终串行；候选按 Provider 交错选取，限流不会集中打在同一个免费源上；
+- 连续失败的目标按指数退避重试（默认 10 → 20 → 40 分钟，最长 60 分钟），不会每轮都去打同一个坏模型；
+- 图片/视频生成探测会真实消耗免费额度，心跳永不调度，仍需逐个手动确认；
+- 手动「检测全部」正在进行时心跳自动让位，两者不会叠加请求；
+- 日志里能看到每次心跳的结果：`heartbeat round started/finished` 汇总本轮探测数与健康/失败数，`heartbeat probe ok|failed` 记录模型、能力、Provider、耗时与当前退避目标数。
+
+默认值刻意保守（30 分钟复检、10 分钟恢复、每轮 8 个探测、2 路并发），开箱即用又不会把 13+ 免费源的额度耗在保活流量上。Admin 模型页的「模型心跳保活」面板可以实时改这些值，保存后立即生效；也可以直接写在 `config.json`：
+
+```json
+{
+  "heartbeat": {
+    "enabled": true,
+    "recovery_minutes": 10,
+    "interval_minutes": 30,
+    "max_probes_per_round": 8,
+    "concurrency": 2
+  }
+}
+```
+
+环境变量优先级高于配置文件，便于临时停用：`FREE_ROUTER_HEARTBEAT_ENABLED`、`FREE_ROUTER_HEARTBEAT_RECOVERY_MINUTES`、`FREE_ROUTER_HEARTBEAT_INTERVAL_MINUTES`、`FREE_ROUTER_HEARTBEAT_MAX_PROBES_PER_ROUND`、`FREE_ROUTER_HEARTBEAT_CONCURRENCY`。
+
 ## 直接指定模型
 
 模型 ID 使用 `provider/upstream-model`，避免不同源的同名模型冲突：

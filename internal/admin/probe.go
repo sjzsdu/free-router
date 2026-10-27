@@ -144,7 +144,7 @@ func (manager *probeManager) start(h *Handler, force bool, selected map[string]s
 		manager.status.FinishedAt = now
 		return manager.status, false
 	}
-	go manager.run(h, jobs)
+	go manager.run(h, jobs, healthProbeConcurrency, nil)
 	return manager.status, true
 }
 
@@ -192,7 +192,7 @@ func (manager *probeManager) StartModel(h *Handler, modelID string, allowExpensi
 		return manager.status, false, nil
 	}
 	manager.status = ProbeStatus{Status: "running", Total: len(jobs), StartedAt: time.Now(), ExpensiveBudgetRemaining: remaining}
-	go manager.run(h, jobs)
+	go manager.run(h, jobs, healthProbeConcurrency, nil)
 	return manager.status, true, nil
 }
 
@@ -310,16 +310,25 @@ func probeCandidates(h *Handler, force bool, selected map[string]struct{}) ([]pr
 			jobs = append(jobs, job)
 		}
 	}
-	sort.SliceStable(jobs, func(i, j int) bool {
-		if jobs[i].Model.Provider == jobs[j].Model.Provider {
-			if jobs[i].Model.ID == jobs[j].Model.ID {
-				return jobs[i].Capability < jobs[j].Capability
+	return sortProbeJobs(jobs), skipped
+}
+
+// sortProbeJobs orders probe targets provider-first and then interleaves
+// providers, so any prefix of the result spreads its requests across providers
+// instead of draining one provider's free quota. The heartbeat uses it to make
+// a bounded round fair; probeCandidates uses it for the same reason.
+func sortProbeJobs(jobs []probeJob) []probeJob {
+	sorted := append([]probeJob(nil), jobs...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].Model.Provider == sorted[j].Model.Provider {
+			if sorted[i].Model.ID == sorted[j].Model.ID {
+				return sorted[i].Capability < sorted[j].Capability
 			}
-			return jobs[i].Model.ID < jobs[j].Model.ID
+			return sorted[i].Model.ID < sorted[j].Model.ID
 		}
-		return jobs[i].Model.Provider < jobs[j].Model.Provider
+		return sorted[i].Model.Provider < sorted[j].Model.Provider
 	})
-	return interleaveProviders(jobs), skipped
+	return interleaveProviders(sorted)
 }
 
 func providerProbeCandidates(h *Handler, providerID string) ([]probeJob, int) {
@@ -378,20 +387,32 @@ func (h *Handler) startProviderModelProbe(providerID string) bool {
 }
 
 func (manager *probeManager) StartJobs(h *Handler, jobs []probeJob, skipped int) bool {
+	_, started := manager.beginJobs(h, jobs, skipped, healthProbeConcurrency, nil)
+	return started
+}
+
+// probeOutcomeHook observes every finished probe of a run. The heartbeat uses
+// it to keep a per-target retry schedule; manual runs pass nil.
+type probeOutcomeHook func(job probeJob, healthy bool, latency time.Duration)
+
+// beginJobs reserves the single probe slot and starts the run. It reports
+// false when another run (manual or heartbeat) already owns the slot, so the
+// two drivers can never stack their upstream requests.
+func (manager *probeManager) beginJobs(h *Handler, jobs []probeJob, skipped, concurrency int, hook probeOutcomeHook) (ProbeStatus, bool) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	if manager.status.Status == "running" {
-		return false
+		return manager.status, false
 	}
 	now := time.Now()
 	manager.status = ProbeStatus{Status: "running", Total: len(jobs), Skipped: skipped, StartedAt: now}
 	if len(jobs) == 0 {
 		manager.status.Status = "completed"
 		manager.status.FinishedAt = now
-		return false
+		return manager.status, false
 	}
-	go manager.run(h, jobs)
-	return true
+	go manager.run(h, jobs, concurrency, hook)
+	return manager.status, true
 }
 
 func (h *Handler) markProviderModelsFailed(providerID string, status int, message string, latency time.Duration) {
@@ -447,7 +468,13 @@ func hasExpensiveProbe(jobs []probeJob) bool {
 	return false
 }
 
-func (manager *probeManager) run(h *Handler, models []probeJob) {
+func (manager *probeManager) run(h *Handler, models []probeJob, concurrency int, hook probeOutcomeHook) {
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	if concurrency > healthProbeConcurrency {
+		concurrency = healthProbeConcurrency
+	}
 	jobs := make(chan probeJob)
 	var workers sync.WaitGroup
 	providerLocks := make(map[string]chan struct{})
@@ -456,7 +483,7 @@ func (manager *probeManager) run(h *Handler, models []probeJob) {
 			providerLocks[job.Model.Provider] = make(chan struct{}, 1)
 		}
 	}
-	for range min(healthProbeConcurrency, len(models)) {
+	for range min(concurrency, len(models)) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
@@ -478,6 +505,7 @@ func (manager *probeManager) run(h *Handler, models []probeJob) {
 					if err == nil {
 						h.health.ProbeSuccess(job.Model.ID, job.Capability, latency)
 						manager.record(true)
+						notifyProbeHook(hook, job, true, latency)
 						continue
 					}
 				}
@@ -489,6 +517,7 @@ func (manager *probeManager) run(h *Handler, models []probeJob) {
 				_ = h.catalog.ResetCapabilityVerification(job.Model.ID, job.Capability)
 				h.health.ProbeFailure(job.Model.ID, job.Capability, latency, status, err.Error())
 				manager.record(false)
+				notifyProbeHook(hook, job, false, latency)
 			}
 		}()
 	}
@@ -501,6 +530,13 @@ func (manager *probeManager) run(h *Handler, models []probeJob) {
 	manager.status.Status = "completed"
 	manager.status.FinishedAt = time.Now()
 	manager.mu.Unlock()
+}
+
+func notifyProbeHook(hook probeOutcomeHook, job probeJob, healthy bool, latency time.Duration) {
+	if hook == nil {
+		return
+	}
+	hook(job, healthy, latency)
 }
 
 func (manager *probeManager) record(healthy bool) {

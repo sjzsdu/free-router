@@ -282,6 +282,13 @@ select, .field-label select { min-width: 0; height: 34px; padding: 0 25px 0 9px;
 .probe-copy p { margin: 5px 0 0; color: var(--muted); font-size: 9px; }
 .probe-progress { max-width: 520px; height: 4px; margin-top: 8px; overflow: hidden; border-radius: 999px; background: var(--surface-3); }
 .probe-progress span { height: 100%; display: block; border-radius: inherit; background: var(--blue); transition: width .25s ease; }
+.heartbeat-panel { align-items: start; }
+.heartbeat-panel .probe-icon { margin-top: 2px; }
+.heartbeat-fields { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 10px; }
+.heartbeat-field { display: grid; gap: 3px; min-width: 104px; }
+.heartbeat-field span { color: var(--text); font-size: 9px; font-weight: 600; }
+.heartbeat-field input { height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); color: var(--text); font-size: 10px; }
+.heartbeat-field small { color: var(--subtle); font-size: 8px; line-height: 1.4; }
 .search-field.large { height: 40px; }
 .search-field.large input { font-size: 11px; }
 .filter-row { display: flex; gap: 7px; }
