@@ -56,6 +56,32 @@ export interface Route {
   models: string[]
 }
 
+export interface HeartbeatConfig {
+  enabled?: boolean
+  interval_minutes?: number
+  recovery_minutes?: number
+  max_probes_per_round?: number
+  concurrency?: number
+}
+
+export interface HeartbeatStatus {
+  enabled: boolean
+  interval_minutes: number
+  recovery_minutes: number
+  max_probes_per_round: number
+  concurrency: number
+  rounds: number
+  last_round_started_at?: string
+  last_round_finished_at?: string
+  last_round_probes: number
+  last_round_healthy: number
+  last_round_failed: number
+  last_round_skipped: number
+  pending_recovery: number
+  backoff_targets: number
+  next_round_at?: string
+}
+
 export interface RouterConfig {
   _comment?: string
   _help?: Record<string, string>
@@ -64,6 +90,7 @@ export interface RouterConfig {
   routes: Record<string, Route>
   models: Record<string, ModelOverride>
   provider_env?: Record<string, string[]>
+  heartbeat?: HeartbeatConfig
 }
 
 export interface ProviderStatus {
@@ -182,6 +209,7 @@ export interface AppState {
   provider_health?: HealthState[]
   summary: Summary
   health_probe: HealthProbeStatus
+  heartbeat: HeartbeatStatus
   runtime: RuntimeStatus
   eligibility: Array<{ model: string; capability: RouteType; eligible: boolean; reason?: string }>
 }

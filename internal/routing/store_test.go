@@ -176,3 +176,49 @@ func TestStoreRejectsStaleConcurrentUpdate(t *testing.T) {
 		t.Fatalf("stale update changed config to %q", got)
 	}
 }
+
+func TestHeartbeatConfigurationPersistsAndDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	store, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings := store.Config().Heartbeat.Resolve(); settings.IntervalMinutes != DefaultHeartbeatIntervalMinutes || settings.RecoveryMinutes != DefaultHeartbeatRecoveryMinutes || !settings.Enabled {
+		t.Fatalf("defaults = %#v", settings)
+	}
+	enabled := false
+	interval, recovery, probes, concurrency := 45, 20, 4, 1
+	config := store.Config()
+	config.Heartbeat = &HeartbeatConfig{Enabled: &enabled, IntervalMinutes: &interval, RecoveryMinutes: &recovery, MaxProbesPerRound: &probes, Concurrency: &concurrency}
+	if err := store.Update(config); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := reloaded.Config().Heartbeat.Resolve()
+	if settings.Enabled || settings.IntervalMinutes != 45 || settings.RecoveryMinutes != 20 || settings.MaxProbesPerRound != 4 || settings.Concurrency != 1 {
+		t.Fatalf("reloaded heartbeat = %#v", settings)
+	}
+}
+
+func TestHeartbeatConfigurationRejectsUnsafeValues(t *testing.T) {
+	store, err := New(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tooSmall, tooMany, zero, zeroRecovery := 0, MaxHeartbeatProbesPerRound+1, 0, 0
+	cases := map[string]*HeartbeatConfig{
+		"concurrency zero":     {Concurrency: &tooSmall},
+		"probe budget too big": {MaxProbesPerRound: &tooMany},
+		"both clocks zero":     {IntervalMinutes: &zero, RecoveryMinutes: &zeroRecovery},
+	}
+	for name, heartbeat := range cases {
+		config := store.Config()
+		config.Heartbeat = heartbeat
+		if err := store.Update(config); err == nil {
+			t.Fatalf("%s: unsafe heartbeat configuration was accepted", name)
+		}
+	}
+}

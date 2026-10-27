@@ -241,7 +241,12 @@ func runServer(ctx context.Context, opts options) error {
 		return rollback, nil
 	}
 	handler.Handle("GET /admin", http.RedirectHandler("/admin/", http.StatusTemporaryRedirect))
-	handler.Handle("/admin/", admin.New(routes, store, vault, tracker, admin.Config{AllowRemote: opts.adminAllowRemote, Token: opts.adminToken, Version: version, FreeModels: opts.freeModels, Statistics: stats, RecentFailures: handler.RecentFailures}, reloadProviders))
+	adminHandler := admin.New(routes, store, vault, tracker, admin.Config{AllowRemote: opts.adminAllowRemote, Token: opts.adminToken, Version: version, FreeModels: opts.freeModels, Statistics: stats, RecentFailures: handler.RecentFailures}, reloadProviders)
+	// The heartbeat re-runs the manual capability probes on a conservative
+	// timer so a model that tripped its circuit breaker recovers on its own
+	// instead of waiting for someone to open the admin page and probe all.
+	adminHandler.StartHeartbeat(ctx)
+	handler.Handle("/admin/", adminHandler)
 	handler.Handle("/", landing.Handler(landing.Config{Version: version, AdminToken: strings.TrimSpace(opts.adminToken) != ""}))
 	server := &http.Server{
 		Addr:              opts.addr,
