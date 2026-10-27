@@ -328,14 +328,20 @@ func TestHeartbeatSettingsDefaultsAndEnvironmentOverrides(t *testing.T) {
 	for _, name := range []string{heartbeatEnvEnabled, heartbeatEnvInterval, heartbeatEnvRecovery, heartbeatEnvMaxProbes, heartbeatEnvConcurrency} {
 		t.Setenv(name, "")
 	}
-	settings := heartbeatSettings(nil)
+	settings, problems := heartbeatSettings(nil)
+	if len(problems) != 0 {
+		t.Fatalf("defaults reported problems: %#v", problems)
+	}
 	if !settings.Enabled || settings.IntervalMinutes != 30 || settings.RecoveryMinutes != 10 || settings.MaxProbesPerRound != 8 || settings.Concurrency != 2 {
 		t.Fatalf("defaults = %#v", settings)
 	}
 
 	enabled := false
 	interval, recovery, probes, concurrency := 0, 5, 3, 1
-	configured := heartbeatSettings(&routing.HeartbeatConfig{Enabled: &enabled, IntervalMinutes: &interval, RecoveryMinutes: &recovery, MaxProbesPerRound: &probes, Concurrency: &concurrency})
+	configured, problems := heartbeatSettings(&routing.HeartbeatConfig{Enabled: &enabled, IntervalMinutes: &interval, RecoveryMinutes: &recovery, MaxProbesPerRound: &probes, Concurrency: &concurrency})
+	if len(problems) != 0 {
+		t.Fatalf("configured heartbeat reported problems: %#v", problems)
+	}
 	if configured.Enabled || configured.IntervalMinutes != 0 || configured.RecoveryMinutes != 5 || configured.MaxProbesPerRound != 3 || configured.Concurrency != 1 {
 		t.Fatalf("configured = %#v", configured)
 	}
@@ -345,17 +351,85 @@ func TestHeartbeatSettingsDefaultsAndEnvironmentOverrides(t *testing.T) {
 	t.Setenv(heartbeatEnvRecovery, "20")
 	t.Setenv(heartbeatEnvMaxProbes, "4")
 	t.Setenv(heartbeatEnvConcurrency, "3")
-	fromEnv := heartbeatSettings(nil)
+	fromEnv, _ := heartbeatSettings(nil)
 	if fromEnv.Enabled || fromEnv.IntervalMinutes != 45 || fromEnv.RecoveryMinutes != 20 || fromEnv.MaxProbesPerRound != 4 || fromEnv.Concurrency != 3 {
 		t.Fatalf("environment overrides = %#v", fromEnv)
 	}
 
-	// Values above the documented maximum are clamped instead of trusted.
+	// Values above the documented maximum are clamped instead of trusted, and
+	// the clamp is reported so the operator can see it in the log.
 	t.Setenv(heartbeatEnvConcurrency, "40")
 	t.Setenv(heartbeatEnvMaxProbes, "900")
-	clamped := heartbeatSettings(nil)
+	clamped, clampProblems := heartbeatSettings(nil)
 	if clamped.Concurrency != routing.MaxHeartbeatConcurrency || clamped.MaxProbesPerRound != routing.MaxHeartbeatProbesPerRound {
 		t.Fatalf("clamped = %#v", clamped)
+	}
+	if len(clampProblems) != 2 {
+		t.Fatalf("clamped values were not reported: %#v", clampProblems)
+	}
+}
+
+// The environment must not be able to produce the combination config.json
+// rejects. Otherwise an enabled heartbeat with both clocks at 0 looks alive in
+// the admin UI while every quarantined model silently stays quarantined — the
+// exact symptom keep-alive exists to remove.
+func TestHeartbeatEnvironmentCannotDisableBothClocks(t *testing.T) {
+	t.Setenv(heartbeatEnvEnabled, "1")
+	t.Setenv(heartbeatEnvInterval, "0")
+	t.Setenv(heartbeatEnvRecovery, "0")
+	t.Setenv(heartbeatEnvMaxProbes, "")
+	t.Setenv(heartbeatEnvConcurrency, "")
+
+	settings, problems := heartbeatSettings(nil)
+	if !settings.Enabled {
+		t.Fatalf("enabled override was dropped: %#v", settings)
+	}
+	if settings.IntervalMinutes != routing.DefaultHeartbeatIntervalMinutes || settings.RecoveryMinutes != routing.DefaultHeartbeatRecoveryMinutes {
+		t.Fatalf("both clocks stayed 0: %#v", settings)
+	}
+	if len(problems) == 0 {
+		t.Fatal("the double-zero environment combination was accepted silently")
+	}
+	if err := routing.ValidateHeartbeatSettings(settings); err != nil {
+		t.Fatalf("merged settings still fail validation: %v", err)
+	}
+
+	// One clock at 0 stays legal: disabling a single clock is a real feature.
+	t.Setenv(heartbeatEnvInterval, "")
+	t.Setenv(heartbeatEnvRecovery, "")
+	enabled := true
+	interval, recovery := 0, 15
+	onlyRecovery, singleProblems := heartbeatSettings(&routing.HeartbeatConfig{Enabled: &enabled, IntervalMinutes: &interval, RecoveryMinutes: &recovery})
+	if onlyRecovery.IntervalMinutes != 0 || onlyRecovery.RecoveryMinutes != 15 || len(singleProblems) != 0 {
+		t.Fatalf("a single disabled clock was treated as a problem: %#v %#v", onlyRecovery, singleProblems)
+	}
+}
+
+// A mistyped environment variable must be visible in the log instead of
+// silently falling back to the default.
+func TestHeartbeatInvalidEnvironmentValuesAreReported(t *testing.T) {
+	t.Setenv(heartbeatEnvEnabled, "sure")
+	t.Setenv(heartbeatEnvInterval, "thirty")
+	t.Setenv(heartbeatEnvRecovery, "-5")
+	t.Setenv(heartbeatEnvMaxProbes, "")
+	t.Setenv(heartbeatEnvConcurrency, "")
+
+	settings, problems := heartbeatSettings(nil)
+	if settings.Enabled != routing.DefaultHeartbeatEnabled || settings.IntervalMinutes != routing.DefaultHeartbeatIntervalMinutes || settings.RecoveryMinutes != routing.DefaultHeartbeatRecoveryMinutes {
+		t.Fatalf("invalid values changed the settings: %#v", settings)
+	}
+	if len(problems) != 3 {
+		t.Fatalf("problems = %#v, want one per invalid variable", problems)
+	}
+
+	// warnOnce is what turns those strings into log lines; running it twice must
+	// not duplicate them.
+	manager := newHeartbeatManager(newProbeManager(t.TempDir()))
+	manager.warnOnce(problems)
+	first := len(manager.warned)
+	manager.warnOnce(problems)
+	if first != len(problems) || len(manager.warned) != first {
+		t.Fatalf("warnOnce was not idempotent: %#v", manager.warned)
 	}
 }
 

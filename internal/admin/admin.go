@@ -86,7 +86,12 @@ func New(routes *routing.Store, models *catalog.Store, vault *credentials.Vault,
 	handler := &Handler{routes: routes, catalog: models, vault: vault, health: tracker, probes: newProbeManager(filepath.Dir(routes.Path())), providerProbes: newProviderProbeStore(), config: config, reload: reload, static: http.FileServer(http.FS(staticFS)), started: time.Now(), oauthFlows: newOAuthFlows(), oauthHTTPClient: client, openRouterAuthURL: authURL, openRouterTokenURL: tokenURL, statistics: config.Statistics}
 	handler.heartbeat = newHeartbeatManager(handler.probes)
 	if routes != nil {
-		handler.heartbeat.publishSettings(heartbeatSettings(routes.Config().Heartbeat))
+		// Publish the effective settings immediately so /admin/api/state is
+		// accurate before the first tick, and surface any environment problem
+		// at startup instead of on the first round.
+		settings, problems := heartbeatSettings(routes.Config().Heartbeat)
+		handler.heartbeat.warnOnce(problems)
+		handler.heartbeat.publishSettings(settings)
 	}
 	handler.configService = &ConfigService{mu: &handler.updateMu, routes: routes, catalog: models, health: tracker, reload: handler.reloadProviders, refreshAsync: handler.refreshAllAsync}
 	handler.credentialService = &CredentialService{

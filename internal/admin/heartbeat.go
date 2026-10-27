@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
@@ -75,6 +76,7 @@ type heartbeatManager struct {
 
 	mu      sync.Mutex
 	targets map[string]*heartbeatTarget
+	warned  map[string]bool
 	status  HeartbeatStatus
 
 	now  func() time.Time
@@ -89,6 +91,7 @@ func newHeartbeatManager(probes *probeManager) *heartbeatManager {
 	return &heartbeatManager{
 		probes:  probes,
 		targets: make(map[string]*heartbeatTarget),
+		warned:  make(map[string]bool),
 		now:     time.Now,
 		tick:    heartbeatTickInterval,
 		grace:   heartbeatStartupGrace,
@@ -120,7 +123,8 @@ func (manager *heartbeatManager) loop(ctx context.Context, h *Handler) {
 			return
 		case <-time.After(delay):
 		}
-		settings := heartbeatSettings(h.routes.Config().Heartbeat)
+		settings, problems := heartbeatSettings(h.routes.Config().Heartbeat)
+		manager.warnOnce(problems)
 		manager.publishSettings(settings)
 		if !settings.Enabled {
 			nextRound = manager.now().Add(manager.tick)
@@ -349,57 +353,102 @@ func heartbeatBackoff(settings routing.HeartbeatSettings, failures int) time.Dur
 	return base * time.Duration(factor)
 }
 
-// heartbeatSettings resolves the persisted configuration and applies the
-// environment overrides on top of it.
-func heartbeatSettings(config *routing.HeartbeatConfig) routing.HeartbeatSettings {
+// heartbeatSettings resolves the persisted configuration, applies the
+// environment overrides on top of it and reports anything the operator needs to
+// know about the merged result. Problems are returned instead of logged so the
+// caller can emit each one exactly once: this function runs on every tick.
+func heartbeatSettings(config *routing.HeartbeatConfig) (routing.HeartbeatSettings, []string) {
 	settings := config.Resolve()
-	if value, ok := heartbeatEnvValue(heartbeatEnvEnabled); ok {
+	problems := make([]string, 0, 2)
+	if value, ok, problem := heartbeatEnvBool(heartbeatEnvEnabled); problem != "" {
+		problems = append(problems, problem)
+	} else if ok {
 		settings.Enabled = value
 	}
-	if value, ok := heartbeatEnvInt(heartbeatEnvInterval); ok {
+	if value, ok, problem := heartbeatEnvInt(heartbeatEnvInterval); problem != "" {
+		problems = append(problems, problem)
+	} else if ok {
 		settings.IntervalMinutes = value
 	}
-	if value, ok := heartbeatEnvInt(heartbeatEnvRecovery); ok {
+	if value, ok, problem := heartbeatEnvInt(heartbeatEnvRecovery); problem != "" {
+		problems = append(problems, problem)
+	} else if ok {
 		settings.RecoveryMinutes = value
 	}
-	if value, ok := heartbeatEnvInt(heartbeatEnvMaxProbes); ok && value > 0 {
+	if value, ok, problem := heartbeatEnvInt(heartbeatEnvMaxProbes); problem != "" {
+		problems = append(problems, problem)
+	} else if ok && value > 0 {
 		settings.MaxProbesPerRound = value
 	}
-	if value, ok := heartbeatEnvInt(heartbeatEnvConcurrency); ok && value > 0 {
+	if value, ok, problem := heartbeatEnvInt(heartbeatEnvConcurrency); problem != "" {
+		problems = append(problems, problem)
+	} else if ok && value > 0 {
 		settings.Concurrency = value
 	}
 	if settings.Concurrency > routing.MaxHeartbeatConcurrency {
+		problems = append(problems, fmt.Sprintf("%s=%d exceeds the maximum %d; using %d", heartbeatEnvConcurrency, settings.Concurrency, routing.MaxHeartbeatConcurrency, routing.MaxHeartbeatConcurrency))
 		settings.Concurrency = routing.MaxHeartbeatConcurrency
 	}
 	if settings.MaxProbesPerRound > routing.MaxHeartbeatProbesPerRound {
+		problems = append(problems, fmt.Sprintf("%s=%d exceeds the maximum %d; using %d", heartbeatEnvMaxProbes, settings.MaxProbesPerRound, routing.MaxHeartbeatProbesPerRound, routing.MaxHeartbeatProbesPerRound))
 		settings.MaxProbesPerRound = routing.MaxHeartbeatProbesPerRound
 	}
-	return settings
+	// The environment can produce a combination config.json is not allowed to
+	// contain, so the merged result is validated by the very same rule. Falling
+	// back to the default intervals keeps keep-alive actually running instead of
+	// going silently idle while the admin UI reports an enabled heartbeat.
+	if err := routing.ValidateHeartbeatSettings(settings); err != nil {
+		problems = append(problems, fmt.Sprintf("%v; falling back to the default intervals (%d/%d minutes)", err, routing.DefaultHeartbeatIntervalMinutes, routing.DefaultHeartbeatRecoveryMinutes))
+		settings.IntervalMinutes = routing.DefaultHeartbeatIntervalMinutes
+		settings.RecoveryMinutes = routing.DefaultHeartbeatRecoveryMinutes
+	}
+	return settings, problems
 }
 
-func heartbeatEnvValue(name string) (bool, bool) {
+// warnOnce logs every newly seen configuration problem exactly once, so a
+// mistyped environment variable is visible in the log without repeating on
+// every tick.
+func (manager *heartbeatManager) warnOnce(problems []string) {
+	for _, problem := range problems {
+		manager.mu.Lock()
+		if manager.warned == nil {
+			manager.warned = make(map[string]bool)
+		}
+		seen := manager.warned[problem]
+		manager.warned[problem] = true
+		manager.mu.Unlock()
+		if !seen {
+			slog.Warn("heartbeat configuration problem", "problem", problem)
+		}
+	}
+}
+
+// heartbeatEnvBool parses a boolean override. A non-empty value that is not a
+// boolean is reported as a problem instead of being silently ignored.
+func heartbeatEnvBool(name string) (bool, bool, string) {
 	raw := strings.TrimSpace(strings.ToLower(os.Getenv(name)))
-	if raw == "" {
-		return false, false
-	}
 	switch raw {
+	case "":
+		return false, false, ""
 	case "1", "true", "yes", "on":
-		return true, true
+		return true, true, ""
 	case "0", "false", "no", "off":
-		return false, true
+		return false, true, ""
 	default:
-		return false, false
+		return false, false, fmt.Sprintf("ignoring invalid %s=%q (want true or false)", name, raw)
 	}
 }
 
-func heartbeatEnvInt(name string) (int, bool) {
+// heartbeatEnvInt parses a non-negative integer override. Malformed values are
+// reported as a problem so an operator can see the typo.
+func heartbeatEnvInt(name string) (int, bool, string) {
 	raw := strings.TrimSpace(os.Getenv(name))
 	if raw == "" {
-		return 0, false
+		return 0, false, ""
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil || value < 0 {
-		return 0, false
+		return 0, false, fmt.Sprintf("ignoring invalid %s=%q (want a non-negative integer)", name, raw)
 	}
-	return value, true
+	return value, true, ""
 }

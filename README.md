@@ -324,6 +324,8 @@ OPENAI_API_KEY=任意非空字符串
 
 环境变量优先级高于配置文件，便于临时停用：`FREE_ROUTER_HEARTBEAT_ENABLED`、`FREE_ROUTER_HEARTBEAT_RECOVERY_MINUTES`、`FREE_ROUTER_HEARTBEAT_INTERVAL_MINUTES`、`FREE_ROUTER_HEARTBEAT_MAX_PROBES_PER_ROUND`、`FREE_ROUTER_HEARTBEAT_CONCURRENCY`。
 
+环境变量与环境合并后的结果同样受校验约束，不会出现“界面显示心跳开着、实际永不探测”的情况：无法解析的布尔值、非数字或负数会被忽略，并在日志里以 `heartbeat configuration problem` 警告一次；超出上限的并发/单轮数会被收敛到上限并告警；如果环境变量把两个时钟都设为 `0`，则退回默认的 30/10 分钟并告警。
+
 ## 直接指定模型
 
 模型 ID 使用 `provider/upstream-model`，避免不同源的同名模型冲突：

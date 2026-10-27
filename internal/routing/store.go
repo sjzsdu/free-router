@@ -511,9 +511,17 @@ func validateHeartbeat(heartbeat *HeartbeatConfig) error {
 	if heartbeat.Concurrency != nil && (*heartbeat.Concurrency < 1 || *heartbeat.Concurrency > MaxHeartbeatConcurrency) {
 		return fmt.Errorf("heartbeat concurrency must be between 1 and %d", MaxHeartbeatConcurrency)
 	}
-	settings := heartbeat.Resolve()
-	enabled := heartbeat.Enabled == nil || *heartbeat.Enabled
-	if enabled && settings.IntervalMinutes == 0 && settings.RecoveryMinutes == 0 {
+	return ValidateHeartbeatSettings(heartbeat.Resolve())
+}
+
+// ValidateHeartbeatSettings rejects a resolved heartbeat configuration that
+// would run while never probing. The persisted-configuration guard and the
+// environment-override merge share it, so an env-only combination cannot slip
+// past the check that config.json already enforces: an enabled heartbeat with
+// both clocks at 0 looks alive in the admin UI while every quarantined model
+// stays quarantined.
+func ValidateHeartbeatSettings(settings HeartbeatSettings) error {
+	if settings.Enabled && settings.IntervalMinutes == 0 && settings.RecoveryMinutes == 0 {
 		return errors.New("heartbeat is enabled but both interval_minutes and recovery_minutes are 0")
 	}
 	return nil
