@@ -52,6 +52,35 @@ func (p *CandidatePlanner) routeAvailable(view eligibility.Snapshot, route routi
 	return false
 }
 
+// routeState answers the two questions a caller-facing model list needs: does
+// the catalog still advertise this capability at all, and can the gateway
+// serve it right now?
+//
+// "declared" is deliberately independent of probes and health. A capability
+// with declared models but no verified one is a pool that is waiting to be
+// measured, not a capability that does not exist; collapsing the two made
+// /v1/models hide chat-tools and platforms report "model not found".
+func (p *CandidatePlanner) routeState(view eligibility.Snapshot, route routing.Route) (declared, available bool) {
+	available = p.routeAvailable(view, route)
+	for _, model := range view.Models() {
+		// An unconfigured provider is not part of this deployment: listing a
+		// capability that only it could serve would advertise something the
+		// gateway can never route.
+		if !view.Configured(model.Provider) {
+			continue
+		}
+		effective, enabled := view.Apply(model)
+		if !enabled {
+			continue
+		}
+		if effective.SupportsFunction(route.Capability) {
+			declared = true
+			break
+		}
+	}
+	return declared, available
+}
+
 func (p *CandidatePlanner) Candidates(requested, capability string, needsTools bool) ([]catalog.Model, bool) {
 	return p.CandidatesSeeded(requested, capability, needsTools, 0)
 }
@@ -95,7 +124,7 @@ func (p *CandidatePlanner) CandidatesSeeded(requested, capability string, needsT
 				result = sortByQuality(result)
 			}
 			if remaining, ok := p.pickRemaining(view, effectiveRoute, configured, true); ok {
-				result = append(result, remaining...)
+				result = append(result, p.limitAdditional(remaining)...)
 			}
 			slog.Debug("route candidates", "requested", requested, "route", requested, "priorityCount", len(priority), "finalCount", len(result), "candidates", func() []string {
 				var cands []string
@@ -313,4 +342,19 @@ func (p *CandidatePlanner) limitCandidates(models []catalog.Model) []catalog.Mod
 		return models[:p.maxAttempts]
 	}
 	return models
+}
+
+// limitAdditional bounds the automatically padded fallback models.
+//
+// A configured model list is the operator's explicit order and is never
+// truncated: every entry stays reachable. The padded tail is a convenience and
+// used to be the entire remaining pool, which turned one request into dozens of
+// serial upstream calls — each one waiting out its own connect/header timeout
+// before the caller finally saw an error. Bounding the tail to the attempt
+// budget keeps the fallback depth without letting pool size decide latency.
+func (p *CandidatePlanner) limitAdditional(additional []catalog.Model) []catalog.Model {
+	if len(additional) > p.maxAttempts {
+		return additional[:p.maxAttempts]
+	}
+	return additional
 }

@@ -196,6 +196,15 @@ func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model 
 		e.record(model, capability, false, 0, total, result.Usage, false)
 		return AttemptResult{Terminal: true, Served: served}
 	}
+	if len(result.ToolCallAnomalies) > 0 {
+		// The body was forwarded unchanged; without this line the caller's
+		// parse failure would have no counterpart on the gateway side.
+		e.gateway.metrics.RecordToolCallAnomaly()
+		slog.Warn("upstream tool_calls payload is not OpenAI-shaped",
+			"provider", model.Provider, "model", model.UpstreamID, "capability", capability,
+			"status", resp.StatusCode, "stream", result.Stream, "issues", result.ToolCallAnomalies,
+			"request_id", w.Header().Get("X-Request-Id"))
+	}
 	if result.Complete && resp.StatusCode < http.StatusBadRequest {
 		e.gateway.tracker.Success(model.ID, capability, total, resp.StatusCode)
 		e.gateway.metrics.RecordTransfer(true, total, result.TTFB, result.BytesWritten, resp.StatusCode, false)

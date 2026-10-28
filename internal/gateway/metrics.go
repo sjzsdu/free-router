@@ -26,6 +26,11 @@ type Metrics struct {
 	Cancellations    atomic.Uint64
 	Concurrency      atomic.Int32
 	MaxConcurrency   atomic.Int32
+	// ToolCallAnomalies counts successful upstream responses whose tool_calls
+	// payload was not OpenAI-shaped. The bodies are forwarded unchanged; the
+	// counter exists so an operator can tell a client-side parse failure apart
+	// from a gateway bug without reproducing the request.
+	ToolCallAnomalies atomic.Uint64
 }
 
 func NewMetrics() *Metrics {
@@ -113,23 +118,30 @@ func (m *Metrics) RecordTimeout() {
 	m.Timeouts.Add(1)
 }
 
+// RecordToolCallAnomaly counts one successful response with a non-standard
+// tool_calls payload.
+func (m *Metrics) RecordToolCallAnomaly() {
+	m.ToolCallAnomalies.Add(1)
+}
+
 type MetricsSnapshot struct {
-	Requests         uint64        `json:"requests"`
-	Successes        uint64        `json:"successes"`
-	Failures         uint64        `json:"failures"`
-	FallbackAttempts uint64        `json:"fallback_attempts"`
-	RateLimits       uint64        `json:"rate_limits"`
-	Timeouts         uint64        `json:"timeouts"`
-	ErrorsClient     uint64        `json:"errors_client"`
-	ErrorsServer     uint64        `json:"errors_server"`
-	ErrorsNetwork    uint64        `json:"errors_network"`
-	Concurrency      int32         `json:"concurrency"`
-	MaxConcurrency   int32         `json:"max_concurrency"`
-	AverageLatency   time.Duration `json:"average_latency_ms"`
-	AverageTTFB      time.Duration `json:"average_ttfb_ms"`
-	OutputBytes      uint64        `json:"output_bytes"`
-	Incomplete       uint64        `json:"incomplete"`
-	Cancellations    uint64        `json:"cancellations"`
+	Requests          uint64        `json:"requests"`
+	Successes         uint64        `json:"successes"`
+	Failures          uint64        `json:"failures"`
+	FallbackAttempts  uint64        `json:"fallback_attempts"`
+	RateLimits        uint64        `json:"rate_limits"`
+	Timeouts          uint64        `json:"timeouts"`
+	ErrorsClient      uint64        `json:"errors_client"`
+	ErrorsServer      uint64        `json:"errors_server"`
+	ErrorsNetwork     uint64        `json:"errors_network"`
+	Concurrency       int32         `json:"concurrency"`
+	MaxConcurrency    int32         `json:"max_concurrency"`
+	AverageLatency    time.Duration `json:"average_latency_ms"`
+	AverageTTFB       time.Duration `json:"average_ttfb_ms"`
+	OutputBytes       uint64        `json:"output_bytes"`
+	Incomplete        uint64        `json:"incomplete"`
+	Cancellations     uint64        `json:"cancellations"`
+	ToolCallAnomalies uint64        `json:"tool_call_anomalies"`
 }
 
 func (m *Metrics) Snapshot() MetricsSnapshot {
@@ -145,22 +157,23 @@ func (m *Metrics) Snapshot() MetricsSnapshot {
 	}
 
 	return MetricsSnapshot{
-		Requests:         m.Requests.Load(),
-		Successes:        m.Successes.Load(),
-		Failures:         m.Failures.Load(),
-		FallbackAttempts: m.FallbackAttempts.Load(),
-		RateLimits:       m.RateLimits.Load(),
-		Timeouts:         m.Timeouts.Load(),
-		ErrorsClient:     m.ErrorsClient.Load(),
-		ErrorsServer:     m.ErrorsServer.Load(),
-		ErrorsNetwork:    m.ErrorsNetwork.Load(),
-		Concurrency:      m.Concurrency.Load(),
-		MaxConcurrency:   m.MaxConcurrency.Load(),
-		AverageLatency:   avgLatency / time.Millisecond,
-		AverageTTFB:      avgTTFB / time.Millisecond,
-		OutputBytes:      m.OutputBytes.Load(),
-		Incomplete:       m.Incomplete.Load(),
-		Cancellations:    m.Cancellations.Load(),
+		Requests:          m.Requests.Load(),
+		Successes:         m.Successes.Load(),
+		Failures:          m.Failures.Load(),
+		FallbackAttempts:  m.FallbackAttempts.Load(),
+		RateLimits:        m.RateLimits.Load(),
+		Timeouts:          m.Timeouts.Load(),
+		ErrorsClient:      m.ErrorsClient.Load(),
+		ErrorsServer:      m.ErrorsServer.Load(),
+		ErrorsNetwork:     m.ErrorsNetwork.Load(),
+		Concurrency:       m.Concurrency.Load(),
+		MaxConcurrency:    m.MaxConcurrency.Load(),
+		AverageLatency:    avgLatency / time.Millisecond,
+		AverageTTFB:       avgTTFB / time.Millisecond,
+		OutputBytes:       m.OutputBytes.Load(),
+		Incomplete:        m.Incomplete.Load(),
+		Cancellations:     m.Cancellations.Load(),
+		ToolCallAnomalies: m.ToolCallAnomalies.Load(),
 	}
 }
 

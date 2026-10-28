@@ -80,45 +80,59 @@ func New(store *catalog.Store, registry *provider.Registry, config Config, clien
 	gateway := &Gateway{catalog: store, registry: registry, adapters: config.Adapters, config: config, client: client, tracker: config.Health, mux: http.NewServeMux(), apiToken: config.APIToken, metrics: NewMetrics(), stats: config.Statistics, failures: newFailureLog(config.FailureLogCapacity)}
 	gateway.planner = NewCandidatePlanner(store, registry, config.Routes, config.Health, config.MaxAttempts)
 	gateway.executor = NewAttemptExecutor(gateway)
-	gateway.mux.HandleFunc("GET /healthz", gateway.health)
-	gateway.mux.HandleFunc("GET /livez", gateway.livez)
-	gateway.mux.HandleFunc("GET /readyz", gateway.readyz)
-	gateway.mux.HandleFunc("GET /metrics", gateway.metrics.Handler())
-	gateway.mux.HandleFunc("GET /v1/models", gateway.models)
-	gateway.mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+	gateway.register(http.MethodGet, "/healthz", gateway.health)
+	gateway.register(http.MethodGet, "/livez", gateway.livez)
+	gateway.register(http.MethodGet, "/readyz", gateway.readyz)
+	gateway.register(http.MethodGet, "/metrics", gateway.metrics.Handler())
+	gateway.register(http.MethodGet, "/v1/models", gateway.models)
+	gateway.register(http.MethodPost, "/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
 		gateway.proxyJSON(w, r, "/chat/completions", "chat")
 	})
-	gateway.mux.HandleFunc("POST /v1/embeddings", func(w http.ResponseWriter, r *http.Request) {
+	gateway.register(http.MethodPost, "/v1/embeddings", func(w http.ResponseWriter, r *http.Request) {
 		gateway.proxyJSON(w, r, "/embeddings", "embedding")
 	})
-	gateway.mux.HandleFunc("POST /v1/audio/speech", func(w http.ResponseWriter, r *http.Request) {
+	gateway.register(http.MethodPost, "/v1/audio/speech", func(w http.ResponseWriter, r *http.Request) {
 		gateway.proxyJSON(w, r, "/audio/speech", catalog.FunctionTextToSpeech)
 	})
-	gateway.mux.HandleFunc("POST /v1/audio/transcriptions", func(w http.ResponseWriter, r *http.Request) {
+	gateway.register(http.MethodPost, "/v1/audio/transcriptions", func(w http.ResponseWriter, r *http.Request) {
 		gateway.proxyMultipart(w, r, "/audio/transcriptions", catalog.FunctionSpeechToText)
 	})
-	gateway.mux.HandleFunc("POST /v1/audio/translations", func(w http.ResponseWriter, r *http.Request) {
+	gateway.register(http.MethodPost, "/v1/audio/translations", func(w http.ResponseWriter, r *http.Request) {
 		gateway.proxyMultipart(w, r, "/audio/translations", catalog.FunctionSpeechToText)
 	})
-	gateway.mux.HandleFunc("POST /v1/images/generations", func(w http.ResponseWriter, r *http.Request) {
+	gateway.register(http.MethodPost, "/v1/images/generations", func(w http.ResponseWriter, r *http.Request) {
 		gateway.proxyJSON(w, r, "/images/generations", catalog.FunctionImageGeneration)
 	})
-	gateway.mux.HandleFunc("POST /v1/images/edits", func(w http.ResponseWriter, r *http.Request) {
+	gateway.register(http.MethodPost, "/v1/images/edits", func(w http.ResponseWriter, r *http.Request) {
 		gateway.proxyMultipart(w, r, "/images/edits", catalog.FunctionImageGeneration)
 	})
-	gateway.mux.HandleFunc("POST /v1/images/variations", func(w http.ResponseWriter, r *http.Request) {
+	gateway.register(http.MethodPost, "/v1/images/variations", func(w http.ResponseWriter, r *http.Request) {
 		gateway.proxyMultipart(w, r, "/images/variations", catalog.FunctionImageGeneration)
 	})
-	gateway.mux.HandleFunc("POST /v1/videos/generations", func(w http.ResponseWriter, r *http.Request) {
+	gateway.register(http.MethodPost, "/v1/videos/generations", func(w http.ResponseWriter, r *http.Request) {
 		gateway.proxyJSON(w, r, "/videos/generations", catalog.FunctionVideoGeneration)
 	})
-	gateway.mux.HandleFunc("POST /v1/rerank", func(w http.ResponseWriter, r *http.Request) {
+	gateway.register(http.MethodPost, "/v1/rerank", func(w http.ResponseWriter, r *http.Request) {
 		gateway.proxyJSON(w, r, "/rerank", "rerank")
 	})
-	gateway.mux.HandleFunc("POST /v1/moderations", func(w http.ResponseWriter, r *http.Request) {
+	gateway.register(http.MethodPost, "/v1/moderations", func(w http.ResponseWriter, r *http.Request) {
 		gateway.proxyJSON(w, r, "/moderations", "moderation")
 	})
 	return gateway
+}
+
+// register wires one method-specific endpoint plus a same-path fallback.
+//
+// Without the second pattern the standard mux answers a wrong method with a
+// plain-text "405 Method Not Allowed" body. OpenAI clients try to parse every
+// error body as a JSON envelope, so a plain-text 405 surfaces as a JSON
+// decoding error instead of "this endpoint only accepts POST".
+func (g *Gateway) register(method, path string, handler http.HandlerFunc) {
+	g.mux.Handle(method+" "+path, handler)
+	g.mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Allow", method)
+		writeErrorCode(w, http.StatusMethodNotAllowed, fmt.Sprintf("%s is not allowed for this endpoint; use %s", r.Method, method), "method_not_allowed")
+	})
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -131,7 +145,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 	if g.requiresAPIAuthentication(r) && !g.authorized(r) {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="free-router api"`)
-		http.Error(w, "api authentication required", http.StatusUnauthorized)
+		writeErrorCode(w, http.StatusUnauthorized, "api authentication required", "unauthorized")
 		return
 	}
 	g.mux.ServeHTTP(w, r)
@@ -163,8 +177,28 @@ func (g *Gateway) health(w http.ResponseWriter, _ *http.Request) {
 	status := g.catalog.Status()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "ok", "free_models": len(g.catalog.ConfiguredModels()), "providers": len(g.registry.All()),
-		"catalog_count": status.Count, "requests": g.tracker.Summary(),
+		"catalog_count": status.Count, "requests": g.tracker.Summary(), "routes": g.routeStatus(),
 	})
+}
+
+// routeStatus summarizes per-capability availability for /healthz. An empty
+// pool is otherwise only discoverable by sending a request and reading the
+// 503, or by opening the admin UI.
+func (g *Gateway) routeStatus() map[string]map[string]any {
+	view := g.planner.snapshot()
+	result := make(map[string]map[string]any)
+	for _, alias := range catalog.AllFunctions() {
+		route, ok := view.Route(alias)
+		if !ok {
+			route = routing.Route{Capability: alias}
+		}
+		declared, available := g.planner.routeState(view, route)
+		if !declared && !available {
+			continue
+		}
+		result[alias] = map[string]any{"available": available}
+	}
+	return result
 }
 
 func (g *Gateway) livez(w http.ResponseWriter, _ *http.Request) {
@@ -237,7 +271,14 @@ func (g *Gateway) models(w http.ResponseWriter, _ *http.Request) {
 		aliases := g.config.Routes.Aliases()
 		for _, alias := range aliases {
 			route := config.Routes[alias]
-			if !g.planner.routeAvailable(view, route) {
+			// A capability the catalog still advertises is listed even while it
+			// has no usable model, with "available": false. Client platforms
+			// validate the configured model name against this list before they
+			// ever send a request, so dropping an empty route made chat-tools
+			// look like a model that does not exist instead of a pool that is
+			// waiting for a capability probe.
+			declared, available := g.planner.routeState(view, route)
+			if !declared && !available {
 				continue
 			}
 			fallbackModels := make([]string, 0, len(route.Models))
@@ -252,17 +293,18 @@ func (g *Gateway) models(w http.ResponseWriter, _ *http.Request) {
 			}
 			data = append(data, map[string]any{
 				"id": alias, "object": "model", "owned_by": "free-router", "type": route.Capability,
-				"free": true, "route": true, "strategy": route.Strategy, "fallback_models": fallbackModels,
+				"free": true, "route": true, "available": available, "strategy": route.Strategy, "fallback_models": fallbackModels,
 				"capabilities": catalog.Capabilities{ToolCall: route.RequireTool, ToolCallKnown: route.RequireTool, Streaming: true},
 			})
 		}
 	} else {
 		for _, alias := range catalog.AllFunctions() {
 			route := routing.DefaultConfig().Routes[alias]
-			if !g.planner.routeAvailable(view, route) {
+			declared, available := g.planner.routeState(view, route)
+			if !declared && !available {
 				continue
 			}
-			data = append(data, map[string]any{"id": alias, "object": "model", "owned_by": "free-router", "type": alias, "free": true, "route": true})
+			data = append(data, map[string]any{"id": alias, "object": "model", "owned_by": "free-router", "type": alias, "free": true, "route": true, "available": available})
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
@@ -306,7 +348,11 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 	if requested == "" {
 		requested = defaultAlias
 	}
-	_, needsTools := request["tools"]
+	// Only a request that actually defines tools is treated as a tool request.
+	// Frameworks that always serialise the field send "tools": [] or null for a
+	// plain chat turn; routing that into the much smaller chat-tools pool made
+	// ordinary chat depend on the tool-capable models being probed and healthy.
+	needsTools := requestUsesTools(request)
 	if (requested == "auto" || requested == "free" || requested == catalog.FunctionChat) && defaultAlias == catalog.FunctionChat && needsTools {
 		requested = "chat-tools"
 	} else if requested == "auto" || requested == "free" {
@@ -328,7 +374,13 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 	// 4xx errors multiply and collapse the chat-tools pool.
 	sessionSeed := sessionSeedFromRequest(request)
 	candidates, fallback := g.candidates(requested, capability, needsTools, sessionSeed)
-	slog.Debug("proxyJSON candidates", "requested", requested, "capability", capability, "needsTools", needsTools, "fallback", fallback, "sessionSeed", sessionSeed, "candidates", func() []string {
+	// The loose fallback replays the request without its tools field. That is
+	// only valid while the dialog has no tool calls/results yet: replaying a
+	// conversation that already carries them produces a guaranteed upstream
+	// 400 ("messages with role tool must be a response to a preceding message
+	// with tool_calls") instead of a useful answer.
+	looseFallback := needsTools && fallback && !conversationHasToolHistory(request)
+	slog.Debug("proxyJSON candidates", "requested", requested, "capability", capability, "needsTools", needsTools, "fallback", fallback, "looseFallback", looseFallback, "sessionSeed", sessionSeed, "candidates", func() []string {
 		var cands []string
 		for _, m := range candidates {
 			cands = append(cands, fmt.Sprintf("%s/%s", m.Provider, m.UpstreamID))
@@ -337,6 +389,10 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 	}())
 	g.runBeforeCandidateAcquire()
 
+	// Models that were already attempted and failed in the strict pass must not
+	// be retried by the loose pass: the second attempt cannot succeed either and
+	// it spends the same free quota twice.
+	failed := make(map[string]bool, len(candidates))
 	for index, model := range candidates {
 		if !g.tracker.TryAcquire(model.ID, capability) {
 			diagnostics.skip(model, "no acquirable in-flight slot; the model is cooling down after recent failures")
@@ -353,14 +409,16 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 			return
 		}
 		// Defer the error write on the tool-aliased route so the loose
-		// fallback can run, and on the final candidate so the request-level
-		// diagnostics — not the last provider to answer — decide what the
-		// caller is told.
+		// fallback can run, and so a capability-shaped 4xx from one provider
+		// does not stop the pool from trying the next tool-capable model.
 		result := g.tryCandidate(w, r, model, capability, endpoint, payload, "application/json", index, candidates, deferOnLast(needsTools && fallback, index, candidates))
 		diagnostics.recordAttempt(model, capability, phaseStrict, result)
 		diagnostics.recordServed(result, phaseStrict)
 		if result.Terminal {
 			return
+		}
+		if result.LastError != nil {
+			failed[model.ID] = true
 		}
 	}
 
@@ -369,9 +427,10 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 	// field stripped. Returning a normal chat completion is preferable to
 	// leaking the upstream 4xx ("usage_limit_reached" etc.) to the caller,
 	// which downstream agents misread as their own quota event.
-	if needsTools && fallback {
+	if looseFallback {
 		slog.Debug("entering loose fallback (chat-tools -> plain chat)", "originalCandidates", len(candidates))
 		looseCandidates, _ := g.candidates(catalog.FunctionChat, catalog.FunctionChat, false, sessionSeed)
+		looseCandidates = excludeModels(looseCandidates, failed)
 		slog.Debug("loose fallback candidates", "count", len(looseCandidates), "candidates", func() []string {
 			var cands []string
 			for _, m := range looseCandidates {
@@ -380,6 +439,12 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 			return cands
 		}())
 		if len(looseCandidates) > 0 {
+			// Announce the degradation before the response starts. A successful
+			// loose replay returns 200 without tool_calls, which is
+			// indistinguishable from "the model chose not to use a tool" unless
+			// the response says so.
+			w.Header().Set("X-Free-Router-Phase", phaseLoose)
+			w.Header().Set("X-Free-Router-Tools-Dropped", "true")
 			looseRequest := stripTools(request)
 			looseCapability := catalog.FunctionChat
 			for index, model := range looseCandidates {
@@ -404,6 +469,11 @@ func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, de
 					return
 				}
 			}
+			// No loose candidate produced a response, so nothing was dropped:
+			// remove the headers again or the terminal error would claim a
+			// degradation that never reached the caller.
+			w.Header().Del("X-Free-Router-Phase")
+			w.Header().Del("X-Free-Router-Tools-Dropped")
 		}
 	}
 
@@ -472,6 +542,9 @@ func sessionSeedFromRequest(request map[string]any) uint64 {
 // stripTools returns a shallow copy of request with the tools and tool_choice
 // fields removed. It is used by the loose fallback path so plain chat models
 // can answer when no chat-tools candidate remains.
+//
+// Callers must not use it for a dialog that already carries tool calls or tool
+// results: see conversationHasToolHistory.
 func stripTools(request map[string]any) map[string]any {
 	stripped := make(map[string]any, len(request))
 	for key, value := range request {
@@ -481,6 +554,72 @@ func stripTools(request map[string]any) map[string]any {
 		stripped[key] = value
 	}
 	return stripped
+}
+
+// requestUsesTools reports whether the request actually defines tools.
+//
+// Presence of the key is not enough: client frameworks commonly serialise the
+// field unconditionally, so a plain chat turn arrives as "tools": [] or
+// "tools": null. Treating those as tool requests moved ordinary chat traffic
+// into the smaller chat-tools pool and made it fail (or silently degrade) for
+// reasons the caller could not see in its own request.
+func requestUsesTools(request map[string]any) bool {
+	value, ok := request["tools"]
+	if !ok {
+		return false
+	}
+	switch tools := value.(type) {
+	case nil:
+		return false
+	case []any:
+		return len(tools) > 0
+	default:
+		// A malformed definition is still an explicit attempt to use tools.
+		// Let the upstream reject it instead of silently dropping it here.
+		return true
+	}
+}
+
+// conversationHasToolHistory reports whether the messages already contain a
+// tool call or a tool result.
+//
+// The loose fallback drops the tools field and replays the dialog against a
+// plain chat model. With tool history present that replay is invalid on every
+// OpenAI-compatible upstream, so it would burn quota and return an upstream
+// 400 instead of an answer.
+func conversationHasToolHistory(request map[string]any) bool {
+	messages, _ := request["messages"].([]any)
+	for _, message := range messages {
+		entry, ok := message.(map[string]any)
+		if !ok {
+			continue
+		}
+		if role, _ := entry["role"].(string); role == "tool" || role == "function" {
+			return true
+		}
+		if _, ok := entry["tool_calls"]; ok {
+			return true
+		}
+		if _, ok := entry["function_call"]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// excludeModels drops every model that was already attempted and failed.
+func excludeModels(models []catalog.Model, excluded map[string]bool) []catalog.Model {
+	if len(excluded) == 0 {
+		return models
+	}
+	result := make([]catalog.Model, 0, len(models))
+	for _, model := range models {
+		if excluded[model.ID] {
+			continue
+		}
+		result = append(result, model)
+	}
+	return result
 }
 
 func (g *Gateway) proxyMultipart(w http.ResponseWriter, r *http.Request, endpoint, defaultAlias string) {

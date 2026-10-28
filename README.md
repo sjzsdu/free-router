@@ -230,7 +230,7 @@ OPENAI_API_KEY=任意非空字符串
 | `rerank` | 文本重排序 | `/v1/rerank` |
 | `moderation` | 内容审核 | `/v1/moderations` |
 
-`auto` 和 `free` 保持兼容：聊天请求会映射到 `chat`；请求带有 `tools` 时自动映射到 `chat-tools`。
+`auto` 和 `free` 保持兼容：聊天请求会映射到 `chat`；请求带有**非空**的 `tools` 时自动映射到 `chat-tools`。`"tools": []` 与 `"tools": null` 按“没有工具”处理——很多框架会无条件序列化该字段，若把它们当成工具请求，普通聊天会被塞进更小的 `chat-tools` 池，失败原因还会与请求内容对不上。
 
 每个能力路由都有一个有序模型列表。例如 `chat-tools`：
 
@@ -383,6 +383,32 @@ X-Free-Router-Model: openai/gpt-oss-120b
 
 `phase` 为 `loose` 表示该次尝试来自“工具调用降级为普通对话”的兜底循环。`latency_ms` 用来区分“这家配错了”（例如 100ms 内返回的 401）和“这家很慢或被打爆”（例如 30s 才超时的 504）——两者需要完全不同的处理方式。
 
+### 工具调用降级会明确告知调用方
+
+`chat-tools` 池里一个可用候选都没有时，网关会剥掉 `tools` 字段，用普通 chat 模型重放同一个请求，**这时返回的是 `200` 加一段纯文本，没有 `tool_calls`**。这个降级保留下来是有意的（总比把上游的 `usage_limit_reached` 甩给智能体更好），但它以前对调用方完全不可见，于是“模型不会用工具”和“网关把工具删了”看起来一模一样。
+
+现在降级成功时响应带两个头：
+
+| 响应头 | 值 | 含义 |
+| --- | --- | --- |
+| `X-Free-Router-Phase` | `loose` | 该响应来自工具降级循环，不是正常的 `chat-tools` 应答 |
+| `X-Free-Router-Tools-Dropped` | `true` | 请求里的 `tools` 已被剥离，因此响应里不可能有 `tool_calls` |
+
+请求最终失败时这两个头不会出现：那时没有任何东西被丢弃。客户端（或你的日志）看到 `X-Free-Router-Tools-Dropped: true`，就应当把这次响应当成“工具调用不可用”，而不是“模型选择了不调用工具”。
+
+降级只在**没有工具历史**的会话里发生。一旦对话里已经出现 `role: "tool"` 或 `tool_calls`，重放就必然被上游拒绝（“messages with role tool must be a response to a preceding message with tool_calls”），所以这种请求会直接返回整池失败的归因，不会发出一个注定 400 的请求。降级候选也会排除本轮严格阶段已经失败过的模型，避免同一份免费额度被消耗两次。
+
+### 错误体始终是 JSON
+
+`/v1/` 下的错误响应一律是 OpenAI 风格的 JSON 错误体，包括两类过去会返回纯文本的情况：
+
+| 场景 | 状态码 | `code` |
+| --- | --- | --- |
+| 缺少或错误的 `Authorization` | 401（保留 `WWW-Authenticate`） | `unauthorized` |
+| 对某个端点用了不支持的方法 | 405（带 `Allow`） | `method_not_allowed` |
+
+纯文本响应体会让官方 SDK 抛 JSON 解析异常（例如 `Unexpected token a`），把“认证失败”伪装成别的问题。
+
 ### failover 不会替你等上游
 
 换源通常意味着换到另一个账号、另一份额度，因此失败 provider 的 `Retry-After` 只描述它自己：拿它来阻塞下一次尝试，只会把整整一个提示时长加到调用方身上（曾经可以叠加到 5 分钟）。现在：
@@ -395,6 +421,12 @@ X-Free-Router-Model: openai/gpt-oss-120b
 免费池里最常见的一种“假可用”是密钥被吊销（401）或额度用尽（402）：重试永远不会成功，但只要它还留在候选里，每个请求就会先给它一次机会，白白消耗本来就不多的尝试预算（默认 3 次），并延后真正能服务的源。这两类失败现在按独立的隔离曲线处理：2 分钟起、指数退避、封顶 30 分钟。403 语义模糊（既可能是账号被停用，也可能是某个模型没有授权），因此仍走原来的短冷却，避免因为一个模型未授权而冻结同一个 key 下的其它模型。
 
 隔离期内该 provider 的全部模型都不会被选中，`skipped` 会写明它正在冷却。修好 key 或充值后，无需等它自然恢复：在 Admin 的模型健康页执行 reset，或重新保存一次 provider 配置即可立即解除。`/metrics` 的 `concurrency` 现在按“在途请求”计数，不再随 fallback 次数单调增长。
+
+### 候选数量受尝试预算约束
+
+`--max-attempts`（环境变量 `FREE_ROUTER_MAX_ATTEMPTS`，默认 3）不仅限制“试一试几个源”，也约束自动补进来的候选尾部：某条路由的 `models` 全部失败后，网关会从池里追加其它候选做兜底，但追加的数量不会超过 `max-attempts`。手工配置的 `models` 顺序不受影响，仍严格按你写的顺序全部可达——只有“自动补的尾巴”受预算约束。
+
+这条约束是为了延迟：以前尾部会一直补到整个池子，一个挂死的源要等满自己的连接/首字节超时（默认 20 秒）才轮到下一个，一次请求可能串行等几十秒。
 
 ## 日志
 
@@ -418,6 +450,14 @@ time=2026-10-17T15:20:01.812+08:00 level=INFO msg=request request_id=4da8cab94fa
 | `code` | 请求失败时的归因码（`rate_limited`、`accounts_unavailable`、`upstream_timeout` 等），与错误体一致 |
 
 日志级别按结果自动区分：成功是 `INFO`、4xx 是 `WARN`、5xx 是 `ERROR`。所以 `--log-level warn` 只留下有问题的请求。
+
+上游返回的 `tool_calls` 形态不符合 OpenAI 规范时（`arguments` 是对象而不是字符串、非流式缺 `id`、流式缺 `index`、同一帧里 `index` 重复），网关会在成功路径上补一条 `WARN`：
+
+```text
+level=WARN msg="upstream tool_calls payload is not OpenAI-shaped" provider=groq model=openai/gpt-oss-120b capability=chat-tools status=200 stream=true issues=[missing-index] request_id=4da8cab94fac3f61
+```
+
+**响应字节不会被改写**——免费源的实现差异很大，改写会破坏已经能正常工作的那些。这条日志与 `/metrics` 的 `tool_call_anomalies` 计数器只负责回答一个问题：客户端解析 `tool_calls` 失败时，是上游形态不规范，还是网关的问题。`/metrics` 的 `tool_call_anomalies` 是新增字段，其余字段含义不变。
 
 两个开关：
 
@@ -467,7 +507,11 @@ ok   service log: ~/.free-router/free-router.log, 77.1 KiB, updated 2026-10-17T2
 
 ## 模型元数据
 
-`GET /v1/models` 只返回当前至少有一个健康候选的稳定能力名称，保证 Agent 不依赖具体 Provider 或真实模型；某项能力全部故障时会暂时从列表消失。完整物理模型目录只通过本机 Admin API/UI 展示，其中包括：
+`GET /v1/models` 返回清单里仍有模型声明的稳定能力名称，保证 Agent 不依赖具体 Provider 或真实模型。每项都带 `available` 字段：`true` 表示当前至少有一个可用候选，`false` 表示这条能力暂时没有可用模型（还没探测、全部冷却或全部失败）。
+
+`available: false` 的能力**仍会列出**，这是刻意的：智能体平台通常在保存配置时就拿这份列表校验模型名，若让它整条消失，用户看到的是“模型不存在”，而不是“这条路由的池子暂时是空的”。清单里没有任何模型声明、或对应的 Provider 未配置的能力不会出现，避免制造噪音。当前路由状态也可以从 `GET /healthz` 的 `routes` 字段读到。
+
+完整物理模型目录只通过本机 Admin API/UI 展示，其中包括：
 
 - `type`：上游模型的宽泛媒体分类，仅用于诊断；实际路由以 `functions` 为准；
 - `functions`：模型可参与的固定能力数组；一个模型可以同时支持文本对话、图片理解和工具调用等多个能力；

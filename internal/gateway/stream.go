@@ -23,6 +23,11 @@ type StreamResult struct {
 	// Stream reports whether the response was a server-sent event stream, so
 	// the access log can tell a streaming call from a buffered one.
 	Stream bool
+	// ToolCallAnomalies lists non-standard tool_calls shapes seen in the body.
+	// The body itself is forwarded unchanged; the list exists so the gateway
+	// can explain a client-side parse failure that it would otherwise report
+	// as a clean 200.
+	ToolCallAnomalies []string
 }
 
 // stallTimeout bounds how long a body read may sit without producing data.
@@ -108,6 +113,14 @@ func copyBody(w http.ResponseWriter, body io.Reader, started time.Time, flush bo
 	var ttfb time.Duration
 	collector := &usageCollector{}
 	headerTTFB := time.Since(started)
+	// finish attaches the inspected tool_calls shape to whatever the copy
+	// produced. The body is never modified: this is diagnosis only.
+	finish := func(result StreamResult) StreamResult {
+		if !collector.truncated {
+			result.ToolCallAnomalies = inspectToolCalls(collector.data, flush)
+		}
+		return result
+	}
 	for {
 		read, err := body.Read(buffer)
 		if read > 0 {
@@ -118,14 +131,14 @@ func copyBody(w http.ResponseWriter, body io.Reader, started time.Time, flush bo
 			n, writeErr := w.Write(buffer[:read])
 			totalWritten += int64(n)
 			if writeErr != nil {
-				return StreamResult{
+				return finish(StreamResult{
 					Complete:        false,
 					BytesWritten:    totalWritten,
 					Error:           writeErr,
 					DownstreamError: true,
 					TTFB:            ttfb,
 					Usage:           collector.Usage(flush),
-				}
+				})
 			}
 			if flush && canFlush {
 				flusher.Flush()
@@ -135,13 +148,13 @@ func copyBody(w http.ResponseWriter, body io.Reader, started time.Time, flush bo
 			if ttfb == 0 {
 				ttfb = headerTTFB
 			}
-			return StreamResult{
+			return finish(StreamResult{
 				Complete:     err == io.EOF,
 				BytesWritten: totalWritten,
 				Error:        err,
 				TTFB:         ttfb,
 				Usage:        collector.Usage(flush),
-			}
+			})
 		}
 	}
 }
