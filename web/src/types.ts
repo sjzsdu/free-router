@@ -62,6 +62,7 @@ export interface HeartbeatConfig {
   recovery_minutes?: number
   max_probes_per_round?: number
   concurrency?: number
+  prioritize_chat_tools?: boolean
 }
 
 export interface HeartbeatStatus {
@@ -70,6 +71,7 @@ export interface HeartbeatStatus {
   recovery_minutes: number
   max_probes_per_round: number
   concurrency: number
+  prioritize_chat_tools: boolean
   rounds: number
   last_round_started_at?: string
   last_round_finished_at?: string

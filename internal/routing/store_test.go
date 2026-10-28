@@ -203,6 +203,40 @@ func TestHeartbeatConfigurationPersistsAndDefaults(t *testing.T) {
 	}
 }
 
+// The cold-start chat-tools priority defaults to on and can be turned off
+// explicitly, including across a reload.
+func TestHeartbeatPriorityDefaultsOnAndPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	store, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings := store.Config().Heartbeat.Resolve(); !settings.PrioritizeChatTools {
+		t.Fatal("prioritize_chat_tools must default to true")
+	}
+
+	disabled := false
+	config := store.Config()
+	config.Heartbeat = &HeartbeatConfig{PrioritizeChatTools: &disabled}
+	if err := store.Update(config); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings := reloaded.Config().Heartbeat.Resolve(); settings.PrioritizeChatTools {
+		t.Fatal("prioritize_chat_tools=false was not persisted")
+	}
+
+	// An untouched configuration keeps tracking future default changes instead
+	// of freezing today's value.
+	untouched := DefaultConfig()
+	if settings := untouched.Heartbeat.Resolve(); !settings.PrioritizeChatTools {
+		t.Fatal("unset heartbeat lost the default priority")
+	}
+}
+
 func TestHeartbeatConfigurationRejectsUnsafeValues(t *testing.T) {
 	store, err := New(filepath.Join(t.TempDir(), "config.json"))
 	if err != nil {

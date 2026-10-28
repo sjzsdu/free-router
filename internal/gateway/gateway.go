@@ -36,6 +36,10 @@ type Config struct {
 	// FailureLogCapacity bounds how many pool-wide failures are retained for
 	// the admin UI. Zero uses the default.
 	FailureLogCapacity int
+	// StreamStallTimeout bounds how long an upstream body may stay silent
+	// before the stream is cut. Zero uses DefaultStreamStallTimeout (5 minutes),
+	// which is the historical behaviour.
+	StreamStallTimeout time.Duration
 }
 
 type Gateway struct {
@@ -76,6 +80,9 @@ func New(store *catalog.Store, registry *provider.Registry, config Config, clien
 	}
 	if config.Statistics == nil {
 		config.Statistics = statistics.NewMemory()
+	}
+	if config.StreamStallTimeout <= 0 {
+		config.StreamStallTimeout = DefaultStreamStallTimeout
 	}
 	gateway := &Gateway{catalog: store, registry: registry, adapters: config.Adapters, config: config, client: client, tracker: config.Health, mux: http.NewServeMux(), apiToken: config.APIToken, metrics: NewMetrics(), stats: config.Statistics, failures: newFailureLog(config.FailureLogCapacity)}
 	gateway.planner = NewCandidatePlanner(store, registry, config.Routes, config.Health, config.MaxAttempts)
@@ -308,10 +315,6 @@ func (g *Gateway) models(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
-}
-
-func (g *Gateway) routeAvailable(route routing.Route) bool {
-	return g.planner.RouteAvailable(route)
 }
 
 func (g *Gateway) proxyJSON(w http.ResponseWriter, r *http.Request, endpoint, defaultAlias string) {

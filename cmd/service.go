@@ -52,6 +52,12 @@ func daemonEnvironment(opts options) (map[string]string, error) {
 	// "I raised the level" silently does nothing in daemon mode.
 	environment["FREE_ROUTER_LOG_LEVEL"] = opts.logLevel
 	environment["FREE_ROUTER_LOG_FORMAT"] = opts.logFormat
+	// The configurable timeouts have the same problem: without carrying them
+	// over, "I raised the stall timeout" would silently apply to the foreground
+	// command only.
+	environment["FREE_ROUTER_UPSTREAM_HEADER_TIMEOUT"] = opts.upstreamHeaderTimeout.String()
+	environment["FREE_ROUTER_STREAM_STALL_TIMEOUT"] = opts.streamStallTimeout.String()
+	environment["FREE_ROUTER_WRITE_TIMEOUT"] = opts.writeTimeout.String()
 	if opts.providers != "" {
 		environment["FREE_ROUTER_PROVIDERS"] = opts.providers
 	}

@@ -479,6 +479,12 @@ func TestInspectToolCallsDetectsNonStandardShapes(t *testing.T) {
 
 // The padded fallback tail is bounded by the attempt budget instead of growing
 // to the whole pool.
+//
+// This test relies on a premise worth restating: CandidatesSeeded has exactly
+// one place that pads the candidate list (the `pickRemaining` append in
+// planner.go). If a second append point is ever added, these assertions stop
+// covering it — the tail is measured here through the public candidate list, so
+// a new unbounded append would have to be exercised on its own.
 func TestCandidateTailIsBoundedByAttemptBudget(t *testing.T) {
 	clearBuiltinKeys(t)
 	models := `{"data":[
@@ -558,5 +564,176 @@ func TestToolHistoryStillFallsBackWithinChatToolsPool(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), "tool_calls") {
 		t.Fatalf("response lost the tool call: %s", recorder.Body.String())
+	}
+}
+
+// The stream stall guard is a configuration surface: the default stays at five
+// minutes, and an explicit value must actually bound the wait.
+func TestStreamStallTimeoutIsConfigurable(t *testing.T) {
+	clearBuiltinKeys(t)
+	release := make(chan struct{})
+	defer close(release)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/models" {
+			_, _ = w.Write([]byte(`{"data":[{"id":"tool-chat","supported_parameters":["tools"]}]}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+		flusher.Flush()
+		// Stall until the gateway gives up on this body.
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer upstream.Close()
+
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"` + upstream.URL + `","api_key":"test"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), &http.Client{})
+	discoverModelsForTest(t, store)
+	handler := New(store, registry, Config{Health: health.New(), StreamStallTimeout: 100 * time.Millisecond}, http.DefaultClient)
+	if got := handler.config.StreamStallTimeout; got != 100*time.Millisecond {
+		t.Fatalf("StreamStallTimeout = %v, want 100ms", got)
+	}
+
+	started := time.Now()
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"chat","stream":true,"messages":[{"role":"user","content":"hi"}]}`)))
+	elapsed := time.Since(started)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	// The guard must cut the wait near the configured value, not at 5 minutes.
+	if elapsed > 5*time.Second {
+		t.Fatalf("stalled body was not cut at the configured timeout: %v", elapsed)
+	}
+}
+
+// A zero value must restore the historical default instead of disabling the
+// guard.
+func TestStreamStallTimeoutDefaultsWhenUnset(t *testing.T) {
+	clearBuiltinKeys(t)
+	handler, _, _ := newGatewayForTest(t, gatewayFixture{
+		models: `{"data":[{"id":"tool-chat","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]},"supported_parameters":["tools"]}]}`,
+	})
+	if got := handler.config.StreamStallTimeout; got != DefaultStreamStallTimeout {
+		t.Fatalf("StreamStallTimeout = %v, want %v", got, DefaultStreamStallTimeout)
+	}
+}
+
+// routeState must answer both questions from independent rules: a declared but
+// unusable capability is not the same as an absent one.
+func TestRouteStateReportsDeclaredAndAvailableIndependently(t *testing.T) {
+	handler, _, tracker := newGatewayForTest(t, gatewayFixture{
+		models: `{"data":[{"id":"tool-chat","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]},"supported_parameters":["tools"]}]}`,
+	})
+	view := handler.planner.snapshot()
+
+	chatRoute, ok := view.Route(catalog.FunctionChat)
+	if !ok {
+		t.Fatal("chat route is missing")
+	}
+	if declared, available := handler.planner.routeState(view, chatRoute); !declared || !available {
+		t.Fatalf("chat: declared=%v available=%v", declared, available)
+	}
+
+	// Wipe the chat-tools pool by breaking the model's health for that
+	// capability only.
+	for i := 0; i < health.DefaultFailureThreshold; i++ {
+		tracker.Failure("test/tool-chat", catalog.FunctionChatTools, 0, http.StatusBadGateway, "broken", 0)
+	}
+	view = handler.planner.snapshot()
+	toolsRoute, ok := view.Route(catalog.FunctionChatTools)
+	if !ok {
+		t.Fatal("chat-tools route is missing")
+	}
+	if declared, available := handler.planner.routeState(view, toolsRoute); !declared || available {
+		t.Fatalf("chat-tools after failures: declared=%v available=%v, want true/false", declared, available)
+	}
+
+	// A capability nobody declares is neither listed nor available.
+	embeddingRoute, ok := view.Route(catalog.FunctionEmbedding)
+	if !ok {
+		t.Fatal("embedding route is missing")
+	}
+	if declared, available := handler.planner.routeState(view, embeddingRoute); declared || available {
+		t.Fatalf("embedding: declared=%v available=%v, want false/false", declared, available)
+	}
+}
+
+// The same bound must hold on the chat-tools route, which is the one that
+// actually carried the dozens-of-serial-attempts problem: its configured list
+// is short but the tool-capable pool behind it is large.
+func TestChatToolsCandidateTailIsBoundedByAttemptBudget(t *testing.T) {
+	clearBuiltinKeys(t)
+	models := `{"data":[
+		{"id":"t1","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]},"supported_parameters":["tools"]},
+		{"id":"t2","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]},"supported_parameters":["tools"]},
+		{"id":"t3","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]},"supported_parameters":["tools"]},
+		{"id":"t4","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]},"supported_parameters":["tools"]},
+		{"id":"t5","pricing":{"prompt":"0","completion":"0"},"architecture":{"output_modalities":["text"]},"supported_parameters":["tools"]}
+	]}`
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return testResponse(http.StatusOK, models), nil
+	})}
+	registry, err := provider.NewRegistry(`[{"id":"test","base_url":"https://test.invalid","api_key":"test"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := catalog.New(registry, filepath.Join(t.TempDir(), "models.json"), client)
+	discoverModelsForTest(t, store)
+	routes, err := routing.New(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := routes.Config()
+	toolsRoute := config.Routes[catalog.FunctionChatTools]
+	toolsRoute.Models = []string{"test/t1"}
+	config.Routes[catalog.FunctionChatTools] = toolsRoute
+	if err := routes.Update(config); err != nil {
+		t.Fatal(err)
+	}
+	tracker := health.New()
+	for _, model := range store.Models() {
+		tracker.RestoreProbeSuccess(model.ID, catalog.FunctionChatTools, time.Now(), 1)
+	}
+	planner := NewCandidatePlanner(store, registry, routes, tracker, 2)
+
+	candidates, fallback := planner.CandidatesSeeded(catalog.FunctionChatTools, catalog.FunctionChatTools, true, 0)
+	if !fallback {
+		t.Fatal("a route request must remain fallback-eligible")
+	}
+	if len(candidates) != 3 {
+		t.Fatalf("candidates = %d, want 1 configured + 2 padded: %#v", len(candidates), candidates)
+	}
+	if candidates[0].ID != "test/t1" {
+		t.Fatalf("configured order was not preserved: %#v", candidates)
+	}
+
+	// A configured list longer than the budget stays fully reachable: the bound
+	// only applies to the padded tail.
+	config = routes.Config()
+	toolsRoute = config.Routes[catalog.FunctionChatTools]
+	toolsRoute.Models = []string{"test/t1", "test/t2", "test/t3", "test/t4"}
+	config.Routes[catalog.FunctionChatTools] = toolsRoute
+	if err := routes.Update(config); err != nil {
+		t.Fatal(err)
+	}
+	planner = NewCandidatePlanner(store, registry, routes, tracker, 2)
+	candidates, _ = planner.CandidatesSeeded(catalog.FunctionChatTools, catalog.FunctionChatTools, true, 0)
+	if len(candidates) < 4 {
+		t.Fatalf("configured models were truncated: %#v", candidates)
+	}
+	for index, want := range []string{"test/t1", "test/t2", "test/t3", "test/t4"} {
+		if candidates[index].ID != want {
+			t.Fatalf("configured order changed at %d: %#v", index, candidates)
+		}
 	}
 }

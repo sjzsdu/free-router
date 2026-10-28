@@ -187,7 +187,7 @@ func (e *AttemptExecutor) Execute(w http.ResponseWriter, r *http.Request, model 
 		writeError(w, normalizedResp.Error.StatusCode, normalizedResp.Error.Message)
 		return AttemptResult{Terminal: true}
 	}
-	result := copyResponse(w, resp, model, started)
+	result := copyResponse(w, resp, model, started, e.gateway.config.StreamStallTimeout)
 	total := time.Since(started)
 	served := newServedRecord(model, capability, resp.StatusCode, total, result)
 	canceled := r.Context().Err() != nil || result.DownstreamError

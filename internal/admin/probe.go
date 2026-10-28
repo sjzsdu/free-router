@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sjzsdu/free-router/internal/catalog"
+	"github.com/sjzsdu/free-router/internal/routing"
 )
 
 const (
@@ -310,14 +311,19 @@ func probeCandidates(h *Handler, force bool, selected map[string]struct{}) ([]pr
 			jobs = append(jobs, job)
 		}
 	}
-	return sortProbeJobs(jobs), skipped
+	settings, _ := heartbeatSettings(h.routes.Config().Heartbeat)
+	return sortProbeJobs(jobs, prioritizeColdStartTools(h, settings)), skipped
 }
 
 // sortProbeJobs orders probe targets provider-first and then interleaves
 // providers, so any prefix of the result spreads its requests across providers
 // instead of draining one provider's free quota. The heartbeat uses it to make
 // a bounded round fair; probeCandidates uses it for the same reason.
-func sortProbeJobs(jobs []probeJob) []probeJob {
+//
+// prioritizeChatTools moves chat-tools targets to the front while keeping the
+// interleaved order, so a cold start still spreads the promoted probes across
+// providers instead of concentrating them on the first one.
+func sortProbeJobs(jobs []probeJob, prioritizeChatTools bool) []probeJob {
 	sorted := append([]probeJob(nil), jobs...)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		if sorted[i].Model.Provider == sorted[j].Model.Provider {
@@ -328,7 +334,45 @@ func sortProbeJobs(jobs []probeJob) []probeJob {
 		}
 		return sorted[i].Model.Provider < sorted[j].Model.Provider
 	})
-	return interleaveProviders(sorted)
+	interleaved := interleaveProviders(sorted)
+	if !prioritizeChatTools {
+		return interleaved
+	}
+	return promoteCapability(interleaved, catalog.FunctionChatTools)
+}
+
+// promoteCapability moves every job for one capability to the front, preserving
+// the relative order of both groups. Applied after interleaveProviders, the
+// promoted jobs keep their cross-provider spread.
+func promoteCapability(jobs []probeJob, capability string) []probeJob {
+	promoted := make([]probeJob, 0, len(jobs))
+	rest := make([]probeJob, 0, len(jobs))
+	for _, job := range jobs {
+		if job.Capability == capability {
+			promoted = append(promoted, job)
+			continue
+		}
+		rest = append(rest, job)
+	}
+	if len(promoted) == 0 {
+		return jobs
+	}
+	return append(promoted, rest...)
+}
+
+// prioritizeColdStartTools reports whether this probe round should measure
+// chat-tools first.
+//
+// The priority only applies while the capability has no verified model at all:
+// once anything passed a tool probe, the pool exists and the ordinary
+// recovery/refresh clocks are the right ones. The switch defaults to on and can
+// be turned off through the heartbeat configuration or its environment
+// override.
+func prioritizeColdStartTools(h *Handler, settings routing.HeartbeatSettings) bool {
+	if !settings.PrioritizeChatTools {
+		return false
+	}
+	return !h.catalog.AnyCapabilityVerified(catalog.FunctionChatTools)
 }
 
 func providerProbeCandidates(h *Handler, providerID string) ([]probeJob, int) {

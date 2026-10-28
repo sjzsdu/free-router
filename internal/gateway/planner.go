@@ -38,20 +38,6 @@ func (p *CandidatePlanner) snapshot() eligibility.Snapshot {
 	return eligibility.New(p.catalog, p.routes, p.tracker)
 }
 
-func (p *CandidatePlanner) RouteAvailable(route routing.Route) bool {
-	view := p.snapshot()
-	return p.routeAvailable(view, route)
-}
-
-func (p *CandidatePlanner) routeAvailable(view eligibility.Snapshot, route routing.Route) bool {
-	for _, model := range view.Models() {
-		if _, reason := view.Eligible(model, route, true, true); reason == "" {
-			return true
-		}
-	}
-	return false
-}
-
 // routeState answers the two questions a caller-facing model list needs: does
 // the catalog still advertise this capability at all, and can the gateway
 // serve it right now?
@@ -60,8 +46,10 @@ func (p *CandidatePlanner) routeAvailable(view eligibility.Snapshot, route routi
 // with declared models but no verified one is a pool that is waiting to be
 // measured, not a capability that does not exist; collapsing the two made
 // /v1/models hide chat-tools and platforms report "model not found".
+//
+// Both answers come from one pass: /v1/models and /healthz call this once per
+// capability, so a second scan would double the work on every model-list fetch.
 func (p *CandidatePlanner) routeState(view eligibility.Snapshot, route routing.Route) (declared, available bool) {
-	available = p.routeAvailable(view, route)
 	for _, model := range view.Models() {
 		// An unconfigured provider is not part of this deployment: listing a
 		// capability that only it could serve would advertise something the
@@ -70,12 +58,17 @@ func (p *CandidatePlanner) routeState(view eligibility.Snapshot, route routing.R
 			continue
 		}
 		effective, enabled := view.Apply(model)
-		if !enabled {
+		if !enabled || !effective.SupportsFunction(route.Capability) {
 			continue
 		}
-		if effective.SupportsFunction(route.Capability) {
-			declared = true
-			break
+		declared = true
+		if !available {
+			if _, reason := view.Eligible(model, route, true, true); reason == "" {
+				available = true
+			}
+		}
+		if declared && available {
+			return declared, available
 		}
 	}
 	return declared, available

@@ -232,6 +232,8 @@ OPENAI_API_KEY=任意非空字符串
 
 `auto` 和 `free` 保持兼容：聊天请求会映射到 `chat`；请求带有**非空**的 `tools` 时自动映射到 `chat-tools`。`"tools": []` 与 `"tools": null` 按“没有工具”处理——很多框架会无条件序列化该字段，若把它们当成工具请求，普通聊天会被塞进更小的 `chat-tools` 池，失败原因还会与请求内容对不上。
 
+只有这两种情况被视为“没有工具”。其它**畸形态**（例如 `"tools": {}`、`"tools": "..."`、`"tools": 1`）一律按“这个请求确实要用工具”转发给上游，由上游按自己的校验返回 400——网关不做猜测、也不悄悄删掉一个它看不懂的字段。所以如果你的框架发的是非数组的 `tools`，看到的是上游的 400 而不是聊天回复，这是刻意行为，不是把普通聊天错误地塞进了 `chat-tools`。
+
 每个能力路由都有一个有序模型列表。例如 `chat-tools`：
 
 ```text
@@ -317,12 +319,15 @@ OPENAI_API_KEY=任意非空字符串
     "recovery_minutes": 10,
     "interval_minutes": 30,
     "max_probes_per_round": 8,
-    "concurrency": 2
+    "concurrency": 2,
+    "prioritize_chat_tools": true
   }
 }
 ```
 
-环境变量优先级高于配置文件，便于临时停用：`FREE_ROUTER_HEARTBEAT_ENABLED`、`FREE_ROUTER_HEARTBEAT_RECOVERY_MINUTES`、`FREE_ROUTER_HEARTBEAT_INTERVAL_MINUTES`、`FREE_ROUTER_HEARTBEAT_MAX_PROBES_PER_ROUND`、`FREE_ROUTER_HEARTBEAT_CONCURRENCY`。
+`prioritize_chat_tools`（默认 `true`）只在**冷启动**阶段生效：`chat-tools` 还没有任何通过验证的模型时，探测预算优先投给它——工具调用既是免费源上最难建立的能力，也是智能体框架最先撞上的失败点，冷启动把整个预算花在普通聊天上会让 `chat-tools` 空上好几个小时。一旦有任意一个模型通过工具探测，这条优先就自动失效，回到正常的 recovery/refresh 时钟。优先**不等于集中**：入选目标仍然按 Provider 交错排列，所以被提前的探测依旧分散在多个免费源上，不会把额度全打在一个源。
+
+环境变量优先级高于配置文件，便于临时停用：`FREE_ROUTER_HEARTBEAT_ENABLED`、`FREE_ROUTER_HEARTBEAT_RECOVERY_MINUTES`、`FREE_ROUTER_HEARTBEAT_INTERVAL_MINUTES`、`FREE_ROUTER_HEARTBEAT_MAX_PROBES_PER_ROUND`、`FREE_ROUTER_HEARTBEAT_CONCURRENCY`、`FREE_ROUTER_HEARTBEAT_PRIORITIZE_CHAT_TOOLS`。
 
 环境变量与环境合并后的结果同样受校验约束，不会出现“界面显示心跳开着、实际永不探测”的情况：无法解析的布尔值、非数字或负数会被忽略，并在日志里以 `heartbeat configuration problem` 警告一次；超出上限的并发/单轮数会被收敛到上限并告警；如果环境变量把两个时钟都设为 `0`，则退回默认的 30/10 分钟并告警。
 
@@ -424,9 +429,30 @@ X-Free-Router-Model: openai/gpt-oss-120b
 
 ### 候选数量受尝试预算约束
 
-`--max-attempts`（环境变量 `FREE_ROUTER_MAX_ATTEMPTS`，默认 3）不仅限制“试一试几个源”，也约束自动补进来的候选尾部：某条路由的 `models` 全部失败后，网关会从池里追加其它候选做兜底，但追加的数量不会超过 `max-attempts`。手工配置的 `models` 顺序不受影响，仍严格按你写的顺序全部可达——只有“自动补的尾巴”受预算约束。
+`--max-attempts`（默认 6）不仅限制“试一试几个源”，也约束自动补进来的候选尾部：某条路由的 `models` 全部失败后，网关会从池里追加其它候选做兜底，但追加的数量不会超过 `max-attempts`。手工配置的 `models` 顺序不受影响，仍严格按你写的顺序全部可达——只有“自动补的尾巴”受预算约束。
 
 这条约束是为了延迟：以前尾部会一直补到整个池子，一个挂死的源要等满自己的连接/首字节超时（默认 20 秒）才轮到下一个，一次请求可能串行等几十秒。
+
+### 三个超时参数
+
+三个等待上限现在可以调，**默认值保持原样、一个都没改**：
+
+| 参数 | 环境变量 | 默认值 | 约束的是什么 |
+| --- | --- | --- | --- |
+| `--upstream-header-timeout` | `FREE_ROUTER_UPSTREAM_HEADER_TIMEOUT` | `20s` | 上游从收到请求到开始回响应头的等待上限 |
+| `--stream-stall-timeout` | `FREE_ROUTER_STREAM_STALL_TIMEOUT` | `5m` | 响应体连续多久没有新数据就断开（防止一个中途卡死的流把连接、goroutine 和并发槽一起占住） |
+| `--write-timeout` | `FREE_ROUTER_WRITE_TIMEOUT` | `15m` | 写回调用方时的空闲截止时间；要远高于典型模型延迟，否则长推理的流式回答会被硬切 |
+
+```bash
+free-router serve --upstream-header-timeout 45s --stream-stall-timeout 10m --write-timeout 30m
+FREE_ROUTER_STREAM_STALL_TIMEOUT=10m free-router serve
+```
+
+值用 Go duration 语法（`30s`、`10m`、`1h30m`）。**非法值或非正数一律回落到默认值**并记一条 warn，不会把超时变成“无限制”——`0` 在 `net/http` 与 stall 检查里都等于永不超时，这是最危险的误配，所以启动时直接拒绝非正数（`serve` 报错退出），环境变量则回落到默认值。
+
+不在这个配置面里的：`ReadHeaderTimeout`（10s）、`ReadTimeout`（60s）、`IdleTimeout`（90s）、连接与 TLS 握手超时（10s）保持原有硬编码值。
+
+守护进程模式下这三个值会随 `free-router daemon install` 一起写进 daemon 环境快照（`FREE_ROUTER_UPSTREAM_HEADER_TIMEOUT` / `FREE_ROUTER_STREAM_STALL_TIMEOUT` / `FREE_ROUTER_WRITE_TIMEOUT`），改完需要重新执行 `daemon install` 并重启才生效——和 `--log-level` 的处理方式一致。
 
 ## 日志
 

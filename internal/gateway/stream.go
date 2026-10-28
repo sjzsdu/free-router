@@ -30,11 +30,17 @@ type StreamResult struct {
 	ToolCallAnomalies []string
 }
 
-// stallTimeout bounds how long a body read may sit without producing data.
-// The gateway client only sets ResponseHeaderTimeout, so an upstream that
-// sends headers and then stalls would otherwise pin the connection, the
-// handler goroutine and the metrics concurrency slot forever.
-const stallTimeout = 5 * time.Minute
+// DefaultStreamStallTimeout bounds how long a body read may sit without
+// producing data. The gateway client only sets ResponseHeaderTimeout, so an
+// upstream that sends headers and then stalls would otherwise pin the
+// connection, the handler goroutine and the metrics concurrency slot forever.
+// The value is configurable through --stream-stall-timeout; this default is the
+// historical behaviour and is never changed by configuration code.
+const DefaultStreamStallTimeout = 5 * time.Minute
+
+// stallTimeout is the package default, kept for the tests and callers that use
+// the built-in value directly.
+const stallTimeout = DefaultStreamStallTimeout
 
 // stallTimeoutReader closes the underlying body when no data has been read
 // for the configured interval. Closing from another goroutine unblocks a
@@ -84,8 +90,11 @@ func (s *stallTimeoutReader) Close() error {
 	return s.r.Close()
 }
 
-func copyResponse(w http.ResponseWriter, resp *http.Response, model catalog.Model, started time.Time) StreamResult {
-	body := newStallTimeoutReader(resp.Body, stallTimeout)
+func copyResponse(w http.ResponseWriter, resp *http.Response, model catalog.Model, started time.Time, stall time.Duration) StreamResult {
+	if stall <= 0 {
+		stall = DefaultStreamStallTimeout
+	}
+	body := newStallTimeoutReader(resp.Body, stall)
 	defer body.Close()
 	for key, values := range resp.Header {
 		if isHopByHop(key) {
