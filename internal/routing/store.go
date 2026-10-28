@@ -60,6 +60,13 @@ type HeartbeatConfig struct {
 	RecoveryMinutes   *int  `json:"recovery_minutes,omitempty"`
 	MaxProbesPerRound *int  `json:"max_probes_per_round,omitempty"`
 	Concurrency       *int  `json:"concurrency,omitempty"`
+	// PrioritizeChatTools measures chat-tools first while the capability has no
+	// verified model at all. tool call support is both the hardest capability to
+	// establish on a free tier and the one an agent framework fails on first, so
+	// a cold start that spends its whole probe budget on plain chat leaves
+	// chat-tools empty for hours. Provider interleaving is preserved, so the
+	// promoted probes still spread across providers instead of draining one.
+	PrioritizeChatTools *bool `json:"prioritize_chat_tools,omitempty"`
 }
 
 // Heartbeat defaults are deliberately minutes-scale: a heartbeat that fires
@@ -71,6 +78,7 @@ const (
 	DefaultHeartbeatRecoveryMinutes   = 10
 	DefaultHeartbeatMaxProbesPerRound = 8
 	DefaultHeartbeatConcurrency       = 2
+	DefaultHeartbeatPrioritizeTools   = true
 
 	MaxHeartbeatIntervalMinutes = 24 * 60
 	MaxHeartbeatProbesPerRound  = 64
@@ -79,11 +87,12 @@ const (
 
 // HeartbeatSettings is a HeartbeatConfig with every default applied.
 type HeartbeatSettings struct {
-	Enabled           bool
-	IntervalMinutes   int
-	RecoveryMinutes   int
-	MaxProbesPerRound int
-	Concurrency       int
+	Enabled             bool
+	IntervalMinutes     int
+	RecoveryMinutes     int
+	MaxProbesPerRound   int
+	Concurrency         int
+	PrioritizeChatTools bool
 }
 
 // Resolve applies the conservative defaults to every field the operator left
@@ -91,11 +100,12 @@ type HeartbeatSettings struct {
 // tracking future default changes instead of freezing today's value.
 func (c *HeartbeatConfig) Resolve() HeartbeatSettings {
 	settings := HeartbeatSettings{
-		Enabled:           DefaultHeartbeatEnabled,
-		IntervalMinutes:   DefaultHeartbeatIntervalMinutes,
-		RecoveryMinutes:   DefaultHeartbeatRecoveryMinutes,
-		MaxProbesPerRound: DefaultHeartbeatMaxProbesPerRound,
-		Concurrency:       DefaultHeartbeatConcurrency,
+		Enabled:             DefaultHeartbeatEnabled,
+		IntervalMinutes:     DefaultHeartbeatIntervalMinutes,
+		RecoveryMinutes:     DefaultHeartbeatRecoveryMinutes,
+		MaxProbesPerRound:   DefaultHeartbeatMaxProbesPerRound,
+		Concurrency:         DefaultHeartbeatConcurrency,
+		PrioritizeChatTools: DefaultHeartbeatPrioritizeTools,
 	}
 	if c == nil {
 		return settings
@@ -114,6 +124,9 @@ func (c *HeartbeatConfig) Resolve() HeartbeatSettings {
 	}
 	if c.Concurrency != nil && *c.Concurrency > 0 {
 		settings.Concurrency = *c.Concurrency
+	}
+	if c.PrioritizeChatTools != nil {
+		settings.PrioritizeChatTools = *c.PrioritizeChatTools
 	}
 	return settings
 }
@@ -603,6 +616,7 @@ func cloneHeartbeatConfig(config *HeartbeatConfig) *HeartbeatConfig {
 	clone.RecoveryMinutes = cloneIntPointer(config.RecoveryMinutes)
 	clone.MaxProbesPerRound = cloneIntPointer(config.MaxProbesPerRound)
 	clone.Concurrency = cloneIntPointer(config.Concurrency)
+	clone.PrioritizeChatTools = cloneBoolPointer(config.PrioritizeChatTools)
 	return &clone
 }
 

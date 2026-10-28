@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sjzsdu/free-router/internal/catalog"
 	"github.com/sjzsdu/free-router/internal/health"
 	"github.com/sjzsdu/free-router/internal/routing"
 )
@@ -40,17 +41,23 @@ const (
 	heartbeatEnvRecovery    = "FREE_ROUTER_HEARTBEAT_RECOVERY_MINUTES"
 	heartbeatEnvMaxProbes   = "FREE_ROUTER_HEARTBEAT_MAX_PROBES_PER_ROUND"
 	heartbeatEnvConcurrency = "FREE_ROUTER_HEARTBEAT_CONCURRENCY"
+	// heartbeatEnvPrioritizeTools turns the cold-start chat-tools priority off
+	// without rewriting config.json.
+	heartbeatEnvPrioritizeTools = "FREE_ROUTER_HEARTBEAT_PRIORITIZE_CHAT_TOOLS"
 )
 
 // HeartbeatStatus is the observable state of the keep-alive loop. It is
 // additive to the admin state response so an operator can tell whether the
 // heartbeat is running, what it just probed and why anything was deferred.
 type HeartbeatStatus struct {
-	Enabled             bool      `json:"enabled"`
-	IntervalMinutes     int       `json:"interval_minutes"`
-	RecoveryMinutes     int       `json:"recovery_minutes"`
-	MaxProbesPerRound   int       `json:"max_probes_per_round"`
-	Concurrency         int       `json:"concurrency"`
+	Enabled           bool `json:"enabled"`
+	IntervalMinutes   int  `json:"interval_minutes"`
+	RecoveryMinutes   int  `json:"recovery_minutes"`
+	MaxProbesPerRound int  `json:"max_probes_per_round"`
+	Concurrency       int  `json:"concurrency"`
+	// PrioritizeChatTools mirrors the resolved setting so the admin UI can show
+	// the effective cold-start priority without re-deriving it.
+	PrioritizeChatTools bool      `json:"prioritize_chat_tools"`
 	Rounds              uint64    `json:"rounds"`
 	LastRoundStartedAt  time.Time `json:"last_round_started_at,omitempty"`
 	LastRoundFinishedAt time.Time `json:"last_round_finished_at,omitempty"`
@@ -92,6 +99,7 @@ func newHeartbeatManager(probes *probeManager) *heartbeatManager {
 		probes:  probes,
 		targets: make(map[string]*heartbeatTarget),
 		warned:  make(map[string]bool),
+		status:  HeartbeatStatus{PrioritizeChatTools: routing.DefaultHeartbeatPrioritizeTools},
 		now:     time.Now,
 		tick:    heartbeatTickInterval,
 		grace:   heartbeatStartupGrace,
@@ -185,6 +193,7 @@ func (manager *heartbeatManager) runRound(h *Handler, settings routing.Heartbeat
 	manager.status.LastRoundFailed = 0
 	manager.status.LastRoundSkipped = skipped
 	manager.status.PendingRecovery = pending
+	manager.status.PrioritizeChatTools = settings.PrioritizeChatTools
 	manager.status.LastRoundFinishedAt = time.Time{}
 	manager.mu.Unlock()
 	if len(jobs) == 0 {
@@ -232,6 +241,18 @@ func (manager *heartbeatManager) selectJobs(h *Handler, settings routing.Heartbe
 	refresh := make([]probeJob, 0)
 	skipped := 0
 	pending := 0
+	// toolsVerified reuses the verification lookup this loop already performs
+	// for every target, so the cold-start decision does not have to walk the
+	// verification records again.
+	//
+	// Same scoping as probeCandidates: only targets this round can actually
+	// probe contribute. Unconfigured providers, disabled models and expensive
+	// capabilities are filtered out above, so a stale verification record left
+	// on one of them does not end the cold start. That is intended — the
+	// question is "does this round have a measurable chat-tools target?", not
+	// "was chat-tools ever verified on this deployment".
+	// TestProbePriorityEndsAfterFirstVerifiedToolModel guards the main path.
+	toolsVerified := false
 	manager.mu.Lock()
 	targets := make(map[string]heartbeatTarget, len(manager.targets))
 	for key, target := range manager.targets {
@@ -257,6 +278,9 @@ func (manager *heartbeatManager) selectJobs(h *Handler, settings routing.Heartbe
 			key := model.ID + "\x00" + capability
 			state, known := states[key]
 			verified := h.catalog.ModelCapabilityVerified(effective, capability)
+			if capability == catalog.FunctionChatTools && verified {
+				toolsVerified = true
+			}
 			recovering := !verified || !known || !state.Verified || state.Status != health.StatusHealthy
 			if recovering {
 				if settings.RecoveryMinutes <= 0 {
@@ -282,8 +306,11 @@ func (manager *heartbeatManager) selectJobs(h *Handler, settings routing.Heartbe
 		}
 	}
 	jobs := make([]probeJob, 0, min(settings.MaxProbesPerRound, len(recovery)+len(refresh)))
-	jobs = append(jobs, sortProbeJobs(recovery)...)
-	jobs = append(jobs, sortProbeJobs(refresh)...)
+	// Only the recovery set is promoted: it is what a cold start consists of.
+	// Already-healthy models are re-checked on the slow interval and gain
+	// nothing from jumping the queue.
+	jobs = append(jobs, sortProbeJobs(recovery, prioritizeColdStartTools(settings, toolsVerified))...)
+	jobs = append(jobs, sortProbeJobs(refresh, false)...)
 	if len(jobs) > settings.MaxProbesPerRound {
 		jobs = jobs[:settings.MaxProbesPerRound]
 	}
@@ -384,6 +411,11 @@ func heartbeatSettings(config *routing.HeartbeatConfig) (routing.HeartbeatSettin
 		problems = append(problems, problem)
 	} else if ok && value > 0 {
 		settings.Concurrency = value
+	}
+	if value, ok, problem := heartbeatEnvBool(heartbeatEnvPrioritizeTools); problem != "" {
+		problems = append(problems, problem)
+	} else if ok {
+		settings.PrioritizeChatTools = value
 	}
 	if settings.Concurrency > routing.MaxHeartbeatConcurrency {
 		problems = append(problems, fmt.Sprintf("%s=%d exceeds the maximum %d; using %d", heartbeatEnvConcurrency, settings.Concurrency, routing.MaxHeartbeatConcurrency, routing.MaxHeartbeatConcurrency))

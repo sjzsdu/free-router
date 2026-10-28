@@ -389,6 +389,7 @@ function HeartbeatPanel({ config, setConfig, status, probing }: { config: Router
   const interval = saved.interval_minutes ?? status.interval_minutes
   const budget = saved.max_probes_per_round ?? status.max_probes_per_round
   const concurrency = saved.concurrency ?? status.concurrency
+  const prioritizeTools = saved.prioritize_chat_tools ?? status.prioritize_chat_tools
   const update = (patch: Partial<HeartbeatConfig>) => {
     const next = cloneConfig(config); next.heartbeat = { ...(next.heartbeat || {}), ...patch }; setConfig(next)
   }
@@ -404,6 +405,9 @@ function HeartbeatPanel({ config, setConfig, status, probing }: { config: Router
         {numberField('复检间隔', '健康模型每隔多少分钟复检一次，0 表示不主动复检', interval, 0, 1440, value => update({ interval_minutes: value }))}
         {numberField('单轮上限', '每轮最多探测多少个模型能力，限制免费额度消耗', budget, 1, 64, value => update({ max_probes_per_round: value }))}
         {numberField('并发', '每轮并发探测数，同一 Provider 始终串行', concurrency, 1, 8, value => update({ concurrency: value }))}
+      </div>
+      <div className="heartbeat-fields">
+        <button className={cx('button secondary compact', prioritizeTools && 'active')} title="chat-tools 还没有任何通过验证的模型时，优先把探测预算投给它；入选目标仍按 Provider 交错，不会集中打一个源" onClick={() => update({ prioritize_chat_tools: !prioritizeTools })}>{prioritizeTools ? <><Check size={16} />冷启动优先探测 chat-tools：开</> : <><EyeOff size={16} />冷启动优先探测 chat-tools：关</>}</button>
       </div>
     </div>
     <button className="button secondary compact" onClick={() => update({ enabled: !enabled })}>{enabled ? <><EyeOff size={16} />暂停心跳</> : <><Activity size={16} />启用心跳</>}</button>

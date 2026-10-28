@@ -134,6 +134,17 @@ func (s Snapshot) Eligible(model catalog.Model, route routing.Route, requireVeri
 	if !enabled {
 		return effective, ReasonDisabled
 	}
+	return s.EligibleEffective(effective, route, requireVerified, requireHealthy)
+}
+
+// EligibleEffective is Eligible for a model the caller has already projected
+// through Apply. It exists so a caller that walks the catalog once (routeState)
+// does not pay for a second projection per model, and it shares the decision
+// rules with Eligible so the two entry points cannot drift apart.
+func (s Snapshot) EligibleEffective(effective catalog.Model, route routing.Route, requireVerified, requireHealthy bool) (catalog.Model, string) {
+	if !s.Configured(effective.Provider) {
+		return effective, ReasonProviderNotConfigured
+	}
 	if !routing.Accepts(route, effective) {
 		return effective, ReasonCapabilityMismatch
 	}

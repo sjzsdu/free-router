@@ -55,6 +55,11 @@ type options struct {
 	maxAttempts      int
 	logLevel         string
 	logFormat        string
+	// The three timeouts below are configurable surfaces only: their defaults
+	// are the historical constants and no code path changes them.
+	upstreamHeaderTimeout time.Duration
+	streamStallTimeout    time.Duration
+	writeTimeout          time.Duration
 }
 
 func Execute() error {
@@ -177,6 +182,10 @@ func defaultOptions() options {
 		maxAttempts:      6,
 		logLevel:         envOr("FREE_ROUTER_LOG_LEVEL", "info"),
 		logFormat:        envOr("FREE_ROUTER_LOG_FORMAT", "text"),
+
+		upstreamHeaderTimeout: envDuration("FREE_ROUTER_UPSTREAM_HEADER_TIMEOUT", transport.DefaultResponseHeaderTimeout),
+		streamStallTimeout:    envDuration("FREE_ROUTER_STREAM_STALL_TIMEOUT", gateway.DefaultStreamStallTimeout),
+		writeTimeout:          envDuration("FREE_ROUTER_WRITE_TIMEOUT", defaultWriteTimeout),
 	}
 }
 
@@ -194,11 +203,74 @@ func bindFlags(command *cobra.Command, opts *options) {
 	command.PersistentFlags().IntVar(&opts.maxAttempts, "max-attempts", opts.maxAttempts, "maximum upstream attempts for model=auto")
 	command.PersistentFlags().StringVar(&opts.logLevel, "log-level", opts.logLevel, "log level: debug, info, warn or error")
 	command.PersistentFlags().StringVar(&opts.logFormat, "log-format", opts.logFormat, "log format: text or json")
+	command.PersistentFlags().DurationVar(&opts.upstreamHeaderTimeout, "upstream-header-timeout", opts.upstreamHeaderTimeout, "how long an upstream may take to send response headers")
+	command.PersistentFlags().DurationVar(&opts.streamStallTimeout, "stream-stall-timeout", opts.streamStallTimeout, "how long an upstream body may stay silent before the stream is cut")
+	command.PersistentFlags().DurationVar(&opts.writeTimeout, "write-timeout", opts.writeTimeout, "idle deadline per write to the downstream client")
+}
+
+// validateTimeouts rejects a non-positive timeout. Zero would mean "no limit" to
+// net/http and to the stall guard, which is exactly the failure mode the
+// configurable surfaces must not introduce.
+func validateTimeouts(opts options) error {
+	values := []struct {
+		name  string
+		value time.Duration
+	}{
+		{"upstream-header-timeout", opts.upstreamHeaderTimeout},
+		{"stream-stall-timeout", opts.streamStallTimeout},
+		{"write-timeout", opts.writeTimeout},
+	}
+	for _, entry := range values {
+		if entry.value <= 0 {
+			return fmt.Errorf("%s must be greater than zero", entry.name)
+		}
+	}
+	return nil
+}
+
+// newTransportConfig applies the configured upstream header timeout to the
+// transport defaults. Every other transport setting keeps its historical value.
+func newTransportConfig(opts options) transport.Config {
+	config := transport.NewConfig()
+	config.ResponseHeaderTimeout = opts.upstreamHeaderTimeout
+	return config
+}
+
+// defaultWriteTimeout is the historical idle deadline per downstream write.
+// It is deliberately far above typical model latency so a long reasoning pause
+// in a streaming SSE response is not hard-cut.
+const defaultWriteTimeout = 15 * time.Minute
+
+// newHTTPServer assembles the server with the configured downstream timeouts.
+// It is a function so the timeout wiring can be asserted without starting a
+// listener.
+func newHTTPServer(opts options, handler http.Handler) *http.Server {
+	// net/http treats a zero WriteTimeout as "no limit", so an unset value must
+	// fall back to the historical default rather than disabling the deadline.
+	writeTimeout := opts.writeTimeout
+	if writeTimeout <= 0 {
+		writeTimeout = defaultWriteTimeout
+	}
+	return &http.Server{
+		Addr:              opts.addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       90 * time.Second,
+		MaxHeaderBytes:    10 * 1024 * 1024,
+		// Route net/http's own connection errors through the configured logger
+		// so they obey --log-level/--log-format like everything else.
+		ErrorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelWarn),
+	}
 }
 
 func runServer(ctx context.Context, opts options) error {
 	if opts.maxAttempts < 1 {
 		return errors.New("max-attempts must be at least 1")
+	}
+	if err := validateTimeouts(opts); err != nil {
+		return err
 	}
 	if opts.adminAllowRemote && strings.TrimSpace(opts.adminToken) == "" {
 		return errors.New("FREE_ROUTER_ADMIN_TOKEN is required when admin-allow-remote is enabled")
@@ -230,8 +302,16 @@ func runServer(ctx context.Context, opts options) error {
 	if err != nil {
 		return fmt.Errorf("load model statistics: %w", err)
 	}
-	httpClient := transport.NewClient(transport.NewConfig())
-	handler := gateway.New(store, registry, gateway.Config{MaxAttempts: opts.maxAttempts, Routes: routes, Health: tracker, APIToken: opts.apiToken, Statistics: stats, Adapters: adapters}, httpClient)
+	httpClient := transport.NewClient(newTransportConfig(opts))
+	handler := gateway.New(store, registry, gateway.Config{
+		MaxAttempts:        opts.maxAttempts,
+		Routes:             routes,
+		Health:             tracker,
+		APIToken:           opts.apiToken,
+		Statistics:         stats,
+		Adapters:           adapters,
+		StreamStallTimeout: opts.streamStallTimeout,
+	}, httpClient)
 	reloadProviders := func(providerEnv map[string][]string) (func(), error) {
 		rollback := registry.Backup()
 		if err := registry.ReloadWithManifest(opts.providers, provider.EnvMap(providerEnv), opts.freeModels, vault.Get); err != nil {
@@ -248,22 +328,7 @@ func runServer(ctx context.Context, opts options) error {
 	adminHandler.StartHeartbeat(ctx)
 	handler.Handle("/admin/", adminHandler)
 	handler.Handle("/", landing.Handler(landing.Config{Version: version, AdminToken: strings.TrimSpace(opts.adminToken) != ""}))
-	server := &http.Server{
-		Addr:              opts.addr,
-		Handler:           handler,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       60 * time.Second,
-		// WriteTimeout acts as an idle deadline for each write: a long
-		// reasoning pause in a streaming SSE response must not hard-cut
-		// the stream, so it is kept well above typical model latency.
-		// Stalled upstream bodies are guarded separately in copyResponse.
-		WriteTimeout:   15 * time.Minute,
-		IdleTimeout:    90 * time.Second,
-		MaxHeaderBytes: 10 * 1024 * 1024,
-		// Route net/http's own connection errors through the configured logger
-		// so they obey --log-level/--log-format like everything else.
-		ErrorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelWarn),
-	}
+	server := newHTTPServer(opts, handler)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -311,6 +376,22 @@ func envOr(key, fallback string) string {
 func envBool(key string) bool {
 	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
 	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+// envDuration reads a Go duration ("30s", "10m"). An unparsable or non-positive
+// value falls back to the default instead of disabling the timeout: a typo must
+// not turn a bounded wait into an unbounded one.
+func envDuration(key string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil || value <= 0 {
+		slog.Warn("ignoring invalid duration setting", "env", key, "value", raw, "using", fallback.String())
+		return fallback
+	}
+	return value
 }
 
 func catalogHTTPClient() *http.Client {

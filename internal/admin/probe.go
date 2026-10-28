@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sjzsdu/free-router/internal/catalog"
+	"github.com/sjzsdu/free-router/internal/routing"
 )
 
 const (
@@ -281,6 +282,21 @@ func (manager *probeManager) audit(model string, expensive int, action string) {
 func probeCandidates(h *Handler, force bool, selected map[string]struct{}) ([]probeJob, int) {
 	jobs := make([]probeJob, 0)
 	skipped := 0
+	// toolsVerified accumulates the verification state this pass already reads,
+	// so the cold-start decision below never has to walk the verification
+	// records a second time.
+	//
+	// It is deliberately scoped to the targets this pass can actually probe: a
+	// provider that is not configured, a model the operator disabled, and an
+	// expensive capability all skip the accumulation above. A leftover
+	// verification record on such a model therefore does not end the cold start.
+	// That is the intended reading of "is there a chat-tools target to measure
+	// this round?" — stricter than the removed AnyCapabilityVerified, which also
+	// counted records for models that could no longer be probed and so could
+	// keep the priority off for a pool that had nothing measurable left.
+	// TestProbePriorityEndsAfterFirstVerifiedToolModel guards the main path: a
+	// probeable target that passed a tool probe ends the priority.
+	toolsVerified := false
 	for _, model := range h.catalog.Models() {
 		if selected != nil {
 			if _, ok := selected[model.ID]; !ok {
@@ -303,21 +319,33 @@ func probeCandidates(h *Handler, force bool, selected map[string]struct{}) ([]pr
 				skipped++
 				continue
 			}
-			if !force && h.catalog.ModelCapabilityVerified(model, capability) {
+			// The verification lookup happens even with force: it is the same
+			// read-only call this loop already made in the common path, and it
+			// is what the cold-start decision is derived from.
+			verified := h.catalog.ModelCapabilityVerified(model, capability)
+			if capability == catalog.FunctionChatTools && verified {
+				toolsVerified = true
+			}
+			if !force && verified {
 				skipped++
 				continue
 			}
 			jobs = append(jobs, job)
 		}
 	}
-	return sortProbeJobs(jobs), skipped
+	settings, _ := heartbeatSettings(h.routes.Config().Heartbeat)
+	return sortProbeJobs(jobs, prioritizeColdStartTools(settings, toolsVerified)), skipped
 }
 
 // sortProbeJobs orders probe targets provider-first and then interleaves
 // providers, so any prefix of the result spreads its requests across providers
 // instead of draining one provider's free quota. The heartbeat uses it to make
 // a bounded round fair; probeCandidates uses it for the same reason.
-func sortProbeJobs(jobs []probeJob) []probeJob {
+//
+// prioritizeChatTools moves chat-tools targets to the front while keeping the
+// interleaved order, so a cold start still spreads the promoted probes across
+// providers instead of concentrating them on the first one.
+func sortProbeJobs(jobs []probeJob, prioritizeChatTools bool) []probeJob {
 	sorted := append([]probeJob(nil), jobs...)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		if sorted[i].Model.Provider == sorted[j].Model.Provider {
@@ -328,7 +356,50 @@ func sortProbeJobs(jobs []probeJob) []probeJob {
 		}
 		return sorted[i].Model.Provider < sorted[j].Model.Provider
 	})
-	return interleaveProviders(sorted)
+	interleaved := interleaveProviders(sorted)
+	if !prioritizeChatTools {
+		return interleaved
+	}
+	return promoteCapability(interleaved, catalog.FunctionChatTools)
+}
+
+// promoteCapability moves every job for one capability to the front, preserving
+// the relative order of both groups. Applied after interleaveProviders, the
+// promoted jobs keep their cross-provider spread.
+func promoteCapability(jobs []probeJob, capability string) []probeJob {
+	promoted := make([]probeJob, 0, len(jobs))
+	rest := make([]probeJob, 0, len(jobs))
+	for _, job := range jobs {
+		if job.Capability == capability {
+			promoted = append(promoted, job)
+			continue
+		}
+		rest = append(rest, job)
+	}
+	if len(promoted) == 0 {
+		return jobs
+	}
+	return append(promoted, rest...)
+}
+
+// prioritizeColdStartTools reports whether this probe round should measure
+// chat-tools first.
+//
+// The priority only applies while the capability has no verified target: once
+// anything passed a tool probe, the pool exists and the ordinary
+// recovery/refresh clocks are the right ones. The switch defaults to on and can
+// be turned off through the heartbeat configuration or its environment
+// override.
+//
+// anyToolsVerified is the answer the caller already computed while walking the
+// same models for this round. Passing it in keeps the decision derived from
+// state that cannot be staler than the round itself: there is no cache and no
+// cross-round state to expire.
+func prioritizeColdStartTools(settings routing.HeartbeatSettings, anyToolsVerified bool) bool {
+	if !settings.PrioritizeChatTools {
+		return false
+	}
+	return !anyToolsVerified
 }
 
 func providerProbeCandidates(h *Handler, providerID string) ([]probeJob, int) {

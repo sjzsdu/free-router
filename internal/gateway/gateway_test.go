@@ -513,7 +513,7 @@ func TestModelsEndpointHidesFailedModels(t *testing.T) {
 	}
 }
 
-func TestModelsEndpointOmitsCapabilityWithoutHealthyCandidates(t *testing.T) {
+func TestModelsEndpointMarksCapabilityWithoutHealthyCandidatesUnavailable(t *testing.T) {
 	clearBuiltinKeys(t)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/models" {
@@ -534,13 +534,32 @@ func TestModelsEndpointOmitsCapabilityWithoutHealthyCandidates(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
 	var list struct {
-		Data []any `json:"data"`
+		Data []struct {
+			ID        string `json:"id"`
+			Available *bool  `json:"available"`
+		} `json:"data"`
 	}
 	if err := json.NewDecoder(recorder.Body).Decode(&list); err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Data) != 0 {
-		t.Fatalf("failed capability remained discoverable: %#v", list.Data)
+	// The capability stays listed so a client platform can still validate the
+	// configured model name; "available": false is what tells it the pool is
+	// empty right now. Physical model IDs must never leak either way.
+	var seen bool
+	for _, model := range list.Data {
+		if strings.HasPrefix(model.ID, "test/") {
+			t.Fatalf("physical model leaked through public catalog: %#v", list.Data)
+		}
+		if model.ID != catalog.FunctionChat {
+			continue
+		}
+		seen = true
+		if model.Available == nil || *model.Available {
+			t.Fatalf("capability without healthy candidates must report available=false: %#v", list.Data)
+		}
+	}
+	if !seen {
+		t.Fatalf("capability with declared models disappeared from the list: %#v", list.Data)
 	}
 }
 

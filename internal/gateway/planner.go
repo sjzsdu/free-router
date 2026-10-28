@@ -38,18 +38,48 @@ func (p *CandidatePlanner) snapshot() eligibility.Snapshot {
 	return eligibility.New(p.catalog, p.routes, p.tracker)
 }
 
-func (p *CandidatePlanner) RouteAvailable(route routing.Route) bool {
-	view := p.snapshot()
-	return p.routeAvailable(view, route)
-}
-
-func (p *CandidatePlanner) routeAvailable(view eligibility.Snapshot, route routing.Route) bool {
+// routeState answers the two questions a caller-facing model list needs: does
+// the catalog still advertise this capability at all, and can the gateway
+// serve it right now?
+//
+// "declared" is deliberately independent of probes and health. A capability
+// with declared models but no verified one is a pool that is waiting to be
+// measured, not a capability that does not exist; collapsing the two made
+// /v1/models hide chat-tools and platforms report "model not found".
+//
+// Both answers come from one pass over the catalog: /v1/models and /healthz
+// call this once per capability, so a second scan would double the work on every
+// model-list fetch. The model is projected exactly once and the eligibility
+// rules are then applied to that projection (EligibleEffective), instead of
+// letting Eligible project the same model again.
+//
+// declared and available cannot share an early exit: a capability that is
+// declared but currently unusable has to be walked to the end to prove
+// available=false. The saving here is one projection per model instead of two,
+// not fewer models visited.
+func (p *CandidatePlanner) routeState(view eligibility.Snapshot, route routing.Route) (declared, available bool) {
 	for _, model := range view.Models() {
-		if _, reason := view.Eligible(model, route, true, true); reason == "" {
-			return true
+		// An unconfigured provider is not part of this deployment: listing a
+		// capability that only it could serve would advertise something the
+		// gateway can never route.
+		if !view.Configured(model.Provider) {
+			continue
+		}
+		effective, enabled := view.Apply(model)
+		if !enabled || !effective.SupportsFunction(route.Capability) {
+			continue
+		}
+		declared = true
+		if !available {
+			if _, reason := view.EligibleEffective(effective, route, true, true); reason == "" {
+				available = true
+			}
+		}
+		if declared && available {
+			return declared, available
 		}
 	}
-	return false
+	return declared, available
 }
 
 func (p *CandidatePlanner) Candidates(requested, capability string, needsTools bool) ([]catalog.Model, bool) {
@@ -95,7 +125,7 @@ func (p *CandidatePlanner) CandidatesSeeded(requested, capability string, needsT
 				result = sortByQuality(result)
 			}
 			if remaining, ok := p.pickRemaining(view, effectiveRoute, configured, true); ok {
-				result = append(result, remaining...)
+				result = append(result, p.limitAdditional(remaining)...)
 			}
 			slog.Debug("route candidates", "requested", requested, "route", requested, "priorityCount", len(priority), "finalCount", len(result), "candidates", func() []string {
 				var cands []string
@@ -313,4 +343,19 @@ func (p *CandidatePlanner) limitCandidates(models []catalog.Model) []catalog.Mod
 		return models[:p.maxAttempts]
 	}
 	return models
+}
+
+// limitAdditional bounds the automatically padded fallback models.
+//
+// A configured model list is the operator's explicit order and is never
+// truncated: every entry stays reachable. The padded tail is a convenience and
+// used to be the entire remaining pool, which turned one request into dozens of
+// serial upstream calls — each one waiting out its own connect/header timeout
+// before the caller finally saw an error. Bounding the tail to the attempt
+// budget keeps the fallback depth without letting pool size decide latency.
+func (p *CandidatePlanner) limitAdditional(additional []catalog.Model) []catalog.Model {
+	if len(additional) > p.maxAttempts {
+		return additional[:p.maxAttempts]
+	}
+	return additional
 }

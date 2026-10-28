@@ -3,6 +3,7 @@ package cmd
 import (
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // The daemon snapshot is the only channel through which foreground settings
@@ -23,19 +24,25 @@ func TestDaemonEnvironmentCarriesRuntimeSettings(t *testing.T) {
 	opts.maxAttempts = 9
 	opts.logLevel = "debug"
 	opts.logFormat = "json"
+	opts.upstreamHeaderTimeout = 45 * time.Second
+	opts.streamStallTimeout = 10 * time.Minute
+	opts.writeTimeout = 25 * time.Minute
 
 	environment, err := daemonEnvironment(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"FREE_ROUTER_STATISTICS":         opts.statistics,
-		"FREE_ROUTER_MAX_ATTEMPTS":       "9",
-		"FREE_ROUTER_API_TOKEN":          "inference-token",
-		"FREE_ROUTER_ADMIN_TOKEN":        "admin-token",
-		"FREE_ROUTER_ADMIN_ALLOW_REMOTE": "true",
-		"FREE_ROUTER_LOG_LEVEL":          "debug",
-		"FREE_ROUTER_LOG_FORMAT":         "json",
+		"FREE_ROUTER_STATISTICS":              opts.statistics,
+		"FREE_ROUTER_MAX_ATTEMPTS":            "9",
+		"FREE_ROUTER_API_TOKEN":               "inference-token",
+		"FREE_ROUTER_ADMIN_TOKEN":             "admin-token",
+		"FREE_ROUTER_ADMIN_ALLOW_REMOTE":      "true",
+		"FREE_ROUTER_LOG_LEVEL":               "debug",
+		"FREE_ROUTER_LOG_FORMAT":              "json",
+		"FREE_ROUTER_UPSTREAM_HEADER_TIMEOUT": "45s",
+		"FREE_ROUTER_STREAM_STALL_TIMEOUT":    "10m0s",
+		"FREE_ROUTER_WRITE_TIMEOUT":           "25m0s",
 	}
 	for key, value := range want {
 		if got := environment[key]; got != value {

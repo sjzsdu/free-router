@@ -16,7 +16,19 @@ func beginRequest(w http.ResponseWriter) string {
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]any{"error": map[string]any{"message": message, "type": "free_router_error"}})
+	writeErrorCode(w, status, message, "")
+}
+
+// writeErrorCode writes the OpenAI error envelope every client SDK knows how to
+// parse. The optional code is additive: without it a plain-text body (for
+// example from http.Error) makes clients report a JSON decoding failure instead
+// of the real reason.
+func writeErrorCode(w http.ResponseWriter, status int, message, code string) {
+	body := map[string]any{"message": message, "type": "free_router_error"}
+	if code != "" {
+		body["code"] = code
+	}
+	writeJSON(w, status, map[string]any{"error": body})
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
