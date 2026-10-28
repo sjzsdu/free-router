@@ -282,6 +282,10 @@ func (manager *probeManager) audit(model string, expensive int, action string) {
 func probeCandidates(h *Handler, force bool, selected map[string]struct{}) ([]probeJob, int) {
 	jobs := make([]probeJob, 0)
 	skipped := 0
+	// toolsVerified accumulates the verification state this pass already reads,
+	// so the cold-start decision below never has to walk the verification
+	// records a second time.
+	toolsVerified := false
 	for _, model := range h.catalog.Models() {
 		if selected != nil {
 			if _, ok := selected[model.ID]; !ok {
@@ -304,7 +308,14 @@ func probeCandidates(h *Handler, force bool, selected map[string]struct{}) ([]pr
 				skipped++
 				continue
 			}
-			if !force && h.catalog.ModelCapabilityVerified(model, capability) {
+			// The verification lookup happens even with force: it is the same
+			// read-only call this loop already made in the common path, and it
+			// is what the cold-start decision is derived from.
+			verified := h.catalog.ModelCapabilityVerified(model, capability)
+			if capability == catalog.FunctionChatTools && verified {
+				toolsVerified = true
+			}
+			if !force && verified {
 				skipped++
 				continue
 			}
@@ -312,7 +323,7 @@ func probeCandidates(h *Handler, force bool, selected map[string]struct{}) ([]pr
 		}
 	}
 	settings, _ := heartbeatSettings(h.routes.Config().Heartbeat)
-	return sortProbeJobs(jobs, prioritizeColdStartTools(h, settings)), skipped
+	return sortProbeJobs(jobs, prioritizeColdStartTools(settings, toolsVerified)), skipped
 }
 
 // sortProbeJobs orders probe targets provider-first and then interleaves
@@ -363,16 +374,21 @@ func promoteCapability(jobs []probeJob, capability string) []probeJob {
 // prioritizeColdStartTools reports whether this probe round should measure
 // chat-tools first.
 //
-// The priority only applies while the capability has no verified model at all:
-// once anything passed a tool probe, the pool exists and the ordinary
+// The priority only applies while the capability has no verified target: once
+// anything passed a tool probe, the pool exists and the ordinary
 // recovery/refresh clocks are the right ones. The switch defaults to on and can
 // be turned off through the heartbeat configuration or its environment
 // override.
-func prioritizeColdStartTools(h *Handler, settings routing.HeartbeatSettings) bool {
+//
+// anyToolsVerified is the answer the caller already computed while walking the
+// same models for this round. Passing it in keeps the decision derived from
+// state that cannot be staler than the round itself: there is no cache and no
+// cross-round state to expire.
+func prioritizeColdStartTools(settings routing.HeartbeatSettings, anyToolsVerified bool) bool {
 	if !settings.PrioritizeChatTools {
 		return false
 	}
-	return !h.catalog.AnyCapabilityVerified(catalog.FunctionChatTools)
+	return !anyToolsVerified
 }
 
 func providerProbeCandidates(h *Handler, providerID string) ([]probeJob, int) {

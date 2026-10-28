@@ -107,29 +107,43 @@ func newToolAwareHandler(t *testing.T, providers int) *Handler {
 	return New(routes, models, credentials.NewFileOnly(filepath.Join(t.TempDir(), "credentials.json")), health.New(), Config{}, nil)
 }
 
-func TestPrioritizeColdStartToolsRequiresNoVerification(t *testing.T) {
-	handler := newToolAwareHandler(t, 1)
-	settings := routing.HeartbeatSettings{PrioritizeChatTools: true}
-
-	if handler.catalog.AnyCapabilityVerified(catalog.FunctionChatTools) {
-		t.Fatal("test setup unexpectedly starts with a verified tool model")
-	}
-	if !prioritizeColdStartTools(handler, settings) {
+// The decision is now taken from the answer the probe pass already computed;
+// it must not look at anything else.
+func TestPrioritizeColdStartToolsUsesRoundResult(t *testing.T) {
+	enabled := routing.HeartbeatSettings{PrioritizeChatTools: true}
+	if !prioritizeColdStartTools(enabled, false) {
 		t.Fatal("cold start did not prioritise chat-tools")
 	}
+	if prioritizeColdStartTools(enabled, true) {
+		t.Fatal("a verified tool target still prioritised the cold-start order")
+	}
 
-	// One verified tool model ends the cold start.
+	disabled := routing.HeartbeatSettings{PrioritizeChatTools: false}
+	if prioritizeColdStartTools(disabled, false) {
+		t.Fatal("disabled switch did not turn the priority off")
+	}
+}
+
+// The behaviour behind that decision: once one tool target is verified the probe
+// order returns to the historical one, without any cache to expire.
+func TestProbePriorityEndsAfterFirstVerifiedToolModel(t *testing.T) {
+	t.Setenv(heartbeatEnvPrioritizeTools, "")
+	handler := newToolAwareHandler(t, 2)
+
+	jobs, _ := probeCandidates(handler, false, nil)
+	if len(jobs) == 0 || jobs[0].Capability != catalog.FunctionChatTools {
+		t.Fatalf("cold start did not lead with chat-tools: %#v", jobs)
+	}
+
 	if err := handler.catalog.RecordCapabilityVerification("pa/tool-a", catalog.FunctionChatTools, time.Now(), time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
-	if prioritizeColdStartTools(handler, settings) {
-		t.Fatal("a warm chat-tools pool still prioritised the cold-start order")
+	jobs, _ = probeCandidates(handler, false, nil)
+	if len(jobs) == 0 {
+		t.Fatal("no probe candidates after verification")
 	}
-
-	// The switch itself must win over the cold-start condition.
-	disabled := routing.HeartbeatSettings{PrioritizeChatTools: false}
-	if prioritizeColdStartTools(newToolAwareHandler(t, 1), disabled) {
-		t.Fatal("disabled switch did not turn the priority off")
+	if jobs[0].Capability != catalog.FunctionChat {
+		t.Fatalf("verification did not end the cold-start priority: %#v", jobs)
 	}
 }
 
@@ -138,9 +152,6 @@ func TestPrioritizeColdStartToolsRequiresNoVerification(t *testing.T) {
 func TestHeartbeatColdStartPromotesChatToolsAcrossProviders(t *testing.T) {
 	handler := newToolAwareHandler(t, 2)
 	settings := routing.HeartbeatSettings{Enabled: true, IntervalMinutes: 30, RecoveryMinutes: 10, MaxProbesPerRound: 8, Concurrency: 2, PrioritizeChatTools: true}
-	if !prioritizeColdStartTools(handler, settings) {
-		t.Fatal("test setup is not a cold start")
-	}
 	jobs, _, _ := handler.heartbeat.selectJobs(handler, settings, time.Now())
 	if len(jobs) < 4 {
 		t.Fatalf("cold start produced %d probe jobs, want 4: %#v", len(jobs), jobs)

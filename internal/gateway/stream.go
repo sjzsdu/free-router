@@ -38,10 +38,6 @@ type StreamResult struct {
 // historical behaviour and is never changed by configuration code.
 const DefaultStreamStallTimeout = 5 * time.Minute
 
-// stallTimeout is the package default, kept for the tests and callers that use
-// the built-in value directly.
-const stallTimeout = DefaultStreamStallTimeout
-
 // stallTimeoutReader closes the underlying body when no data has been read
 // for the configured interval. Closing from another goroutine unblocks a
 // pending Read, so copyStream terminates instead of hanging.

@@ -168,50 +168,6 @@ func TestCapabilityVerificationPersistsAndInvalidatesWithModelFingerprint(t *tes
 	}
 }
 
-// AnyCapabilityVerified is the cold-start signal: it must only report true for
-// a capability that some model actually passed a probe for.
-func TestAnyCapabilityVerifiedTracksProbes(t *testing.T) {
-	clearBuiltinKeys(t)
-	dir := t.TempDir()
-	manifestPath := filepath.Join(dir, "free-models.json")
-	content := `{"schema_version":2,"generated_at":"test","providers":{"test":{"source_urls":["https://example.com/models"],"models":[{"id":"chat-a","functions":["chat","chat-tools"]}]}}}`
-	if err := os.WriteFile(manifestPath, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	registry, err := provider.NewRegistryWithManifest(
-		`[{"id":"test","base_url":"https://example.invalid","no_auth":true}]`,
-		provider.DefaultEnvMap(), manifestPath,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	store := New(registry, filepath.Join(dir, "models.json"), http.DefaultClient)
-	if err := store.Bootstrap(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-
-	if store.AnyCapabilityVerified(FunctionChatTools) {
-		t.Fatal("a freshly bootstrapped catalog reported a verified capability")
-	}
-	if err := store.RecordCapabilityVerification("test/chat-a", FunctionChatTools, time.Now(), time.Millisecond); err != nil {
-		t.Fatal(err)
-	}
-	if !store.AnyCapabilityVerified(FunctionChatTools) {
-		t.Fatal("recorded chat-tools verification was not reported")
-	}
-	// Verification is per capability: chat success must not end the cold start
-	// for chat-tools.
-	if store.AnyCapabilityVerified(FunctionChat) {
-		t.Fatal("chat verification leaked into the chat-tools answer")
-	}
-	if err := store.ResetCapabilityVerification("test/chat-a", FunctionChatTools); err != nil {
-		t.Fatal(err)
-	}
-	if store.AnyCapabilityVerified(FunctionChatTools) {
-		t.Fatal("a reset verification still counted as verified")
-	}
-}
-
 func TestResetCapabilityVerificationRequiresAProbeAgain(t *testing.T) {
 	clearBuiltinKeys(t)
 	dir := t.TempDir()

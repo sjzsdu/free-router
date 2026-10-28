@@ -1269,30 +1269,6 @@ func (s *Store) ModelCapabilityVerified(model Model, capability string) bool {
 		verification.ModelFingerprint == modelFingerprint(model)
 }
 
-// AnyCapabilityVerified reports whether at least one model still carries a
-// probe success for the capability.
-//
-// Callers use it to tell a cold start (nothing measured yet, so the pool is
-// empty by definition) from a pool that was measured and lost its candidates to
-// failures. The two need different probe priorities: on a cold start the
-// capability that is hardest to establish should be measured first.
-func (s *Store) AnyCapabilityVerified(capability string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	for _, verification := range s.verifiedCapabilities {
-		if verification.Capability != capability {
-			continue
-		}
-		model, ok := findModel(s.models, verification.Model)
-		if !ok || verification.CatalogModelFingerprint != modelFingerprint(model) {
-			continue
-		}
-		return true
-	}
-	return false
-}
-
 func (s *Store) CapabilityVerifications() []CapabilityVerification {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sjzsdu/free-router/internal/catalog"
 	"github.com/sjzsdu/free-router/internal/health"
 	"github.com/sjzsdu/free-router/internal/routing"
 )
@@ -240,6 +241,10 @@ func (manager *heartbeatManager) selectJobs(h *Handler, settings routing.Heartbe
 	refresh := make([]probeJob, 0)
 	skipped := 0
 	pending := 0
+	// toolsVerified reuses the verification lookup this loop already performs
+	// for every target, so the cold-start decision does not have to walk the
+	// verification records again.
+	toolsVerified := false
 	manager.mu.Lock()
 	targets := make(map[string]heartbeatTarget, len(manager.targets))
 	for key, target := range manager.targets {
@@ -265,6 +270,9 @@ func (manager *heartbeatManager) selectJobs(h *Handler, settings routing.Heartbe
 			key := model.ID + "\x00" + capability
 			state, known := states[key]
 			verified := h.catalog.ModelCapabilityVerified(effective, capability)
+			if capability == catalog.FunctionChatTools && verified {
+				toolsVerified = true
+			}
 			recovering := !verified || !known || !state.Verified || state.Status != health.StatusHealthy
 			if recovering {
 				if settings.RecoveryMinutes <= 0 {
@@ -293,7 +301,7 @@ func (manager *heartbeatManager) selectJobs(h *Handler, settings routing.Heartbe
 	// Only the recovery set is promoted: it is what a cold start consists of.
 	// Already-healthy models are re-checked on the slow interval and gain
 	// nothing from jumping the queue.
-	jobs = append(jobs, sortProbeJobs(recovery, prioritizeColdStartTools(h, settings))...)
+	jobs = append(jobs, sortProbeJobs(recovery, prioritizeColdStartTools(settings, toolsVerified))...)
 	jobs = append(jobs, sortProbeJobs(refresh, false)...)
 	if len(jobs) > settings.MaxProbesPerRound {
 		jobs = jobs[:settings.MaxProbesPerRound]
