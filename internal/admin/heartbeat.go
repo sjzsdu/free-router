@@ -244,6 +244,14 @@ func (manager *heartbeatManager) selectJobs(h *Handler, settings routing.Heartbe
 	// toolsVerified reuses the verification lookup this loop already performs
 	// for every target, so the cold-start decision does not have to walk the
 	// verification records again.
+	//
+	// Same scoping as probeCandidates: only targets this round can actually
+	// probe contribute. Unconfigured providers, disabled models and expensive
+	// capabilities are filtered out above, so a stale verification record left
+	// on one of them does not end the cold start. That is intended — the
+	// question is "does this round have a measurable chat-tools target?", not
+	// "was chat-tools ever verified on this deployment".
+	// TestProbePriorityEndsAfterFirstVerifiedToolModel guards the main path.
 	toolsVerified := false
 	manager.mu.Lock()
 	targets := make(map[string]heartbeatTarget, len(manager.targets))

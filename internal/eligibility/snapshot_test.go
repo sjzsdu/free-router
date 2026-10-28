@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -99,8 +100,12 @@ func TestEligibleEffectiveMatchesEligible(t *testing.T) {
 			if eligibleReason != effectiveReason {
 				t.Fatalf("%s/%s: reason %q vs %q", alias, model.ID, eligibleReason, effectiveReason)
 			}
-			if viaEligible.ID != viaEffective.ID || viaEligible.Capabilities != viaEffective.Capabilities {
-				t.Fatalf("%s/%s: projections differ", alias, model.ID)
+			// Compare the whole projection, not a hand-picked subset: if Eligible
+			// ever starts returning a deeper copy (or a different field is
+			// populated on one path only) this has to fail. Model carries slices,
+			// so the comparison goes through reflect rather than ==.
+			if !reflect.DeepEqual(viaEligible, viaEffective) {
+				t.Fatalf("%s/%s: projections differ\n eligible  = %+v\n effective = %+v", alias, model.ID, viaEligible, viaEffective)
 			}
 			checked++
 		}

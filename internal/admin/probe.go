@@ -285,6 +285,17 @@ func probeCandidates(h *Handler, force bool, selected map[string]struct{}) ([]pr
 	// toolsVerified accumulates the verification state this pass already reads,
 	// so the cold-start decision below never has to walk the verification
 	// records a second time.
+	//
+	// It is deliberately scoped to the targets this pass can actually probe: a
+	// provider that is not configured, a model the operator disabled, and an
+	// expensive capability all skip the accumulation above. A leftover
+	// verification record on such a model therefore does not end the cold start.
+	// That is the intended reading of "is there a chat-tools target to measure
+	// this round?" — stricter than the removed AnyCapabilityVerified, which also
+	// counted records for models that could no longer be probed and so could
+	// keep the priority off for a pool that had nothing measurable left.
+	// TestProbePriorityEndsAfterFirstVerifiedToolModel guards the main path: a
+	// probeable target that passed a tool probe ends the priority.
 	toolsVerified := false
 	for _, model := range h.catalog.Models() {
 		if selected != nil {
