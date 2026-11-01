@@ -2,7 +2,8 @@ BINARY := free-router
 GO ?= go
 NPM ?= npm
 WEB_DIR := web
-VERSION := $(strip $(shell cat VERSION))
+GIT_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//')
+VERSION ?= $(if $(strip $(GIT_VERSION)),$(strip $(GIT_VERSION)),dev)
 BUILD_DIR ?= bin
 GOBIN ?= $(shell $(GO) env GOBIN)
 
@@ -10,10 +11,10 @@ ifeq ($(strip $(GOBIN)),)
 GOBIN := $(shell $(GO) env GOPATH)/bin
 endif
 
-LDFLAGS := -s -w
+LDFLAGS := -s -w -X main.buildVersion=$(VERSION)
 
 .DEFAULT_GOAL := help
-.PHONY: help build web-install web-build web-check web-test install uninstall daemon-install daemon-start daemon-stop daemon-restart daemon-status daemon-logs daemon-uninstall run validate-free-models verify-free-models test test-race test-cover vet fmt fmt-check version-check check tidy clean
+.PHONY: help build web-install web-build web-check web-test install uninstall daemon-install daemon-start daemon-stop daemon-restart daemon-status daemon-logs daemon-uninstall run validate-free-models verify-free-models test test-race test-cover vet fmt fmt-check version-check check tag tidy clean
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -95,9 +96,20 @@ fmt-check: ## Fail if Go source files are not formatted
 	@files="$$(gofmt -l $$(find . -name '*.go' -not -path './vendor/*'))"; \
 	if [ -n "$$files" ]; then echo "files need gofmt:"; echo "$$files"; exit 1; fi
 
-version-check: ## Verify the binary reports the VERSION file value
-	@actual="$$($(GO) run . version)"; \
-	if [ "$$actual" != "$(VERSION)" ]; then echo "version mismatch: VERSION=$(VERSION), binary=$$actual"; exit 1; fi
+version-check: ## Verify the binary reports the git-derived version
+	@actual="$$($(GO) run -ldflags="$(LDFLAGS)" . version)"; \
+	if [ "$$actual" != "$(VERSION)" ]; then echo "version mismatch: expected=$(VERSION), binary=$$actual"; exit 1; fi
+
+tag: ## Create and push a release tag (RELEASE_VERSION=x.y.z, defaults to next patch)
+	@version="$(RELEASE_VERSION)"; \
+	if [ -z "$$version" ]; then \
+		base="$$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)"; \
+		version="$$(printf '%s' "$$base" | sed 's/^v//' | awk -F. '{printf "%d.%d.%d", $$1, $$2, $$3 + 1}')"; \
+	fi; \
+	if git rev-parse "v$$version" >/dev/null 2>&1; then echo "tag v$$version already exists" >&2; exit 1; fi; \
+	git tag -a "v$$version" -m "free-router $$version"; \
+	git push origin "v$$version"; \
+	echo "pushed v$$version, the Release workflow will build and publish it"
 
 check: web-build fmt-check version-check vet test web-check web-test ## Run all required checks
 

@@ -10,11 +10,15 @@ RUN npm run build --prefix web
 
 FROM golang:1.24-alpine AS backend-build
 WORKDIR /src
-COPY go.mod go.sum VERSION ./
+COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=frontend-build /src/internal/admin/dist ./internal/admin/dist
-RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/free-router .
+# VERSION comes from the git tag (or commit sha for branch builds).
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -trimpath \
+    -ldflags="-s -w -X main.buildVersion=${VERSION#v}" \
+    -o /out/free-router .
 
 FROM alpine:3.22 AS runtime-base
 RUN addgroup -S -g 65532 free-router \

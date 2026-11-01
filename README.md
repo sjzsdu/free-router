@@ -744,20 +744,30 @@ GitHub Actions 会在 push 到 `main` 和 Pull Request 时自动执行 `make che
 
 ## 自动发布
 
-项目版本只有一个来源：[VERSION](./VERSION)，当前稳定版为 `0.1.0`。发布新版本时只需修改这个文件并推送到 `main`：
+版本号只有一个来源：Git tag。`v0.2.1` 这样的 tag 就是发布版本，不再需要维护 `VERSION` 文件。本地构建通过 `git describe` 自动注入版本号：正好在 tag 上时显示 `0.2.1`，未打 tag 时显示 `0.1.7-8-g2c4ff3a` 这样的开发版本。
+
+发布新版本时创建并推送 tag 即可：
 
 ```bash
-echo 0.2.1 > VERSION
-git add VERSION
-git commit -m 'chore: release 0.2.1'
-git push
+make tag                          # 在最新 tag 上递增 patch 版本
+make tag RELEASE_VERSION=0.2.0    # 或指定版本
 ```
 
-Release 工作流会检查 `v0.2.1` 是否已经存在：
+`make tag` 等价于手动执行：
 
-- 已存在：跳过，不重复构建；
-- 不存在：先运行完整检查和竞态测试，再跨平台构建、生成 SHA-256 校验文件、创建 Git tag 和 GitHub Release；
-- 构建失败：不会创建不完整的 Release，下一次推送 `main` 时会自动重试。
+```bash
+git tag -a v0.2.0 -m 'free-router 0.2.0'
+git push origin v0.2.0
+```
+
+推送 `vX.Y.Z` tag 后，Release 工作流会自动：
+
+- 校验 tag 为语义化版本；
+- 运行完整检查和竞态测试；
+- 跨平台构建并用该 tag 注入二进制版本号；
+- 生成 SHA-256 校验文件并创建 GitHub Release；
+- 已存在同名 Release 时跳过，不重复构建；
+- 构建失败时不会创建不完整的 Release，重新推送或手动运行工作流会重试。
 
 Release 提供以下下载产物：
 
@@ -768,7 +778,7 @@ Windows amd64 / arm64
 checksums.txt
 ```
 
-也可以在 GitHub Actions 页面手动运行 `Release` 工作流，补建当前 `VERSION` 对应的 Release。
+也可以在 GitHub Actions 页面手动运行 `Release` 工作流，输入已有 tag 补建对应的 Release。
 
 项目借鉴 [OmniRoute](https://github.com/diegosouzapw/OmniRoute) 的动态目录和 fallback 思路，但保持单二进制、本地配置，不引入数据库、账号池和付费路由。
 
