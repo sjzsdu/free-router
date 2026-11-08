@@ -299,7 +299,10 @@ func (g *Gateway) models(w http.ResponseWriter, _ *http.Request) {
 				}
 			}
 			data = append(data, map[string]any{
-				"id": alias, "object": "model", "owned_by": "free-router", "type": route.Capability,
+				// Keep the stable capability aliases OpenAI-model shaped. The
+				// aliases are virtual models, so there is no meaningful creation
+				// timestamp; zero is the conventional value for an unknown time.
+				"id": alias, "object": "model", "created": int64(0), "owned_by": "free-router", "type": route.Capability,
 				"free": true, "route": true, "available": available, "strategy": route.Strategy, "fallback_models": fallbackModels,
 				"capabilities": catalog.Capabilities{ToolCall: route.RequireTool, ToolCallKnown: route.RequireTool, Streaming: true},
 			})
@@ -311,7 +314,7 @@ func (g *Gateway) models(w http.ResponseWriter, _ *http.Request) {
 			if !declared && !available {
 				continue
 			}
-			data = append(data, map[string]any{"id": alias, "object": "model", "owned_by": "free-router", "type": alias, "free": true, "route": true, "available": available})
+			data = append(data, map[string]any{"id": alias, "object": "model", "created": int64(0), "owned_by": "free-router", "type": alias, "free": true, "route": true, "available": available})
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
