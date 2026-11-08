@@ -87,8 +87,11 @@ func TestAutoRetriesNextFreeModel(t *testing.T) {
 	if err := json.NewDecoder(modelsRecorder.Body).Decode(&list); err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Data) != 1 || list.Data[0]["id"] != catalog.FunctionChat || list.Data[0]["owned_by"] != "free-router" {
+	if len(list.Data) != 1 || list.Data[0]["id"] != catalog.FunctionChat || list.Data[0]["object"] != "model" || list.Data[0]["owned_by"] != "free-router" {
 		t.Fatalf("stable capability models are missing: %#v", list.Data)
+	}
+	if created, ok := list.Data[0]["created"].(float64); !ok || created != 0 {
+		t.Fatalf("model entry must include OpenAI-compatible created timestamp: %#v", list.Data[0])
 	}
 }
 
